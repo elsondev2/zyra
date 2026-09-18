@@ -2,30 +2,39 @@ import { readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+import { deflateRawSync } from 'node:zlib'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-execFileSync(process.execPath, [path.join(root, 'scripts', 'build.mjs')], { stdio: 'inherit' })
+if (!process.argv.includes('--no-build')) execFileSync(process.execPath, [path.join(root, 'scripts', 'build.mjs')], { stdio: 'inherit' })
 const source = path.join(root, 'dist', 'unpacked')
-const files = (await readdir(source)).sort()
+const files = (await readdir(source, { recursive:true, withFileTypes:true })).filter(entry => entry.isFile()).map(entry => path.relative(source, path.join(entry.parentPath, entry.name))).sort()
+const manifest = JSON.parse(await readFile(path.join(source, 'manifest.json'), 'utf8'))
+await readFile(path.join(source, manifest.side_panel.default_path))
+// Chrome Web Store assigns the signing identity and rejects an uploaded key.
+// Keep the key in the unpacked build so local installs have a stable identity.
+delete manifest.key
 const entries = []
 let offset = 0
 for (const name of files) {
-  const data = await readFile(path.join(source, name))
+  const data = name === 'manifest.json'
+    ? Buffer.from(JSON.stringify(manifest, null, 2) + '\n')
+    : await readFile(path.join(source, name))
   const fileName = Buffer.from(name.replace(/\\/g, '/'))
   const crc = crc32(data)
+  const compressed = deflateRawSync(data, { level: 6 })
   const local = Buffer.alloc(30)
   local.writeUInt32LE(0x04034b50, 0)
   local.writeUInt16LE(20, 4)
   local.writeUInt16LE(0, 6)
-  local.writeUInt16LE(0, 8)
+  local.writeUInt16LE(8, 8)
   local.writeUInt16LE(0, 10)
   local.writeUInt16LE(0x0021, 12)
   local.writeUInt32LE(crc, 14)
-  local.writeUInt32LE(data.length, 18)
+  local.writeUInt32LE(compressed.length, 18)
   local.writeUInt32LE(data.length, 22)
   local.writeUInt16LE(fileName.length, 26)
-  const record = Buffer.concat([local, fileName, data])
-  entries.push({ name: fileName, crc, size: data.length, offset, record })
+  const record = Buffer.concat([local, fileName, compressed])
+  entries.push({ name: fileName, crc, size: data.length, compressedSize: compressed.length, offset, record })
   offset += record.length
 }
 const centralParts = []
@@ -35,11 +44,11 @@ for (const entry of entries) {
   central.writeUInt16LE(20, 4)
   central.writeUInt16LE(20, 6)
   central.writeUInt16LE(0, 8)
-  central.writeUInt16LE(0, 10)
+  central.writeUInt16LE(8, 10)
   central.writeUInt16LE(0, 12)
   central.writeUInt16LE(0x0021, 14)
   central.writeUInt32LE(entry.crc, 16)
-  central.writeUInt32LE(entry.size, 20)
+  central.writeUInt32LE(entry.compressedSize, 20)
   central.writeUInt32LE(entry.size, 24)
   central.writeUInt16LE(entry.name.length, 28)
   central.writeUInt32LE(entry.offset, 42)

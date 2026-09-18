@@ -353,6 +353,8 @@ export function createProjectsAdapter() {
             ipcRenderer.invoke('devscope:browserPreview:cancelAnnotation', input),
         startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) =>
             ipcRenderer.invoke('devscope:browserPreview:startRecording', input),
+        prepareBrowserPreviewRecordingAudio: (input: DevScopeBrowserGuestTargetInput & { source: 'tab' | 'system' }) =>
+            ipcRenderer.invoke('devscope:browserPreview:prepareRecordingAudio', input),
         stopBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) =>
             ipcRenderer.invoke('devscope:browserPreview:stopRecording', input),
         saveBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput & { mimeType: string; data: Uint8Array }) =>

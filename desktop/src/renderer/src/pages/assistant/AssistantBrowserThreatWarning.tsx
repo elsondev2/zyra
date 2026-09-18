@@ -1,3 +1,4 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { ArrowLeft, LoaderCircle, ShieldAlert } from 'lucide-react'
 import type { DevScopeBrowserThreatWarning } from '@shared/contracts/devscope-api'
 
@@ -16,7 +17,7 @@ export function AssistantBrowserThreatWarning({
 }) {
     const isTest = warning.source === 'test'
     return (
-        <section
+        <AnchoredNativeOverlay><section
             className="relative z-[20] flex h-full w-full items-center justify-center bg-[#941923] px-6 py-10 text-white"
             role="alertdialog"
             aria-modal="true"
@@ -57,6 +58,6 @@ export function AssistantBrowserThreatWarning({
                     </button>
                 </div>
             </div>
-        </section>
+        </section></AnchoredNativeOverlay>
     )
 }

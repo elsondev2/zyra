@@ -35,6 +35,10 @@ export type ControlTarget =
     }
     | {
         kind: 'chrome-tab'
+        browserName?: string
+        accessMode?: 'read' | 'control'
+        title?: string | null
+        url?: string | null
         targetId: string
         pairId: string
         tabToken: string
@@ -159,8 +163,11 @@ export type ControlSemanticActionTarget = {
 
 export type ControlSemanticActionStep =
     | ({ type: 'click'; sideEffect: 'none' } & ControlSemanticActionTarget)
+    | { type: 'click_point'; x: number; y: number; sideEffect: 'none' }
     | ({ type: 'type'; text: string; replace: boolean; sideEffect: 'none' } & ControlSemanticActionTarget)
     | { type: 'key'; key: string; modifiers?: string[]; sideEffect: 'none' }
+    | { type: 'drag'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number; sideEffect: 'none' }
+    | { type: 'stroke'; points: Array<{ x: number; y: number }>; durationMs?: number; sideEffect: 'none' }
     | { type: 'wait'; durationMs: number; sideEffect: 'none' }
 
 export interface ControlSemanticActionSequenceRequest {
@@ -323,6 +330,7 @@ export type ControlPendingActionApproval = {
 }
 
 export type ControlPairingState = {
+    automaticConnectionPaused?: boolean
     state: 'stopped' | 'waiting' | 'paired' | 'error'
     pairId?: string
     code?: string

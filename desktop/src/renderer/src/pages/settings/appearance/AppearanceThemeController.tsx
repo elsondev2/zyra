@@ -1,18 +1,13 @@
 import { Check, Copy } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent } from 'react'
-import {
-    ACCENT_COLORS,
-    APPEARANCE_CODE_FONTS,
-    APPEARANCE_UI_FONTS,
-    getAppearanceCodeFontStack,
-    getAppearanceUiFontStack,
-    type AccentColor,
-    type AppearanceCodeFont,
-    type AppearanceThemeMode,
-    type AppearanceUiFont
+import type {
+    AccentColor,
+    AppearanceCodeFont,
+    AppearanceThemeMode,
+    AppearanceUiFont
 } from '@/lib/settings'
 import type { ThemeDefinition, ThemeTokens } from '@/lib/settings-theme-catalog'
-import { SettingsButton, SettingsSelect } from '../settings-layout'
+import { SettingsButton, SettingsNotice, SettingsRow, SettingsSection } from '../settings-layout'
 import { createSettingsRowTargetId } from '../settings-search'
 
 const TOKEN_LABELS: ReadonlyArray<{ key: keyof ThemeTokens; label: string }> = [
@@ -95,47 +90,36 @@ export function AppearanceThemeController({
     accent,
     uiFont,
     codeFont,
-    uiFontLabel,
-    codeFontLabel,
     customActive,
     customAvailable,
     onUseCustom,
     onTokensChange,
-    onAccentChange,
-    onUiFontChange,
-    onCodeFontChange,
-    onOpenFontManager
+    onAccentChange
 }: {
     mode: AppearanceThemeMode
     theme: ThemeDefinition
     accent: AccentColor
     uiFont: AppearanceUiFont
     codeFont: AppearanceCodeFont
-    uiFontLabel: string
-    codeFontLabel: string
     customActive: boolean
     customAvailable: boolean
     onUseCustom: () => void
     onTokensChange: (tokens: ThemeTokens) => void
     onAccentChange: (accent: AccentColor) => void
-    onUiFontChange: (font: AppearanceUiFont) => void
-    onCodeFontChange: (font: AppearanceCodeFont) => void
-    onOpenFontManager: (target: 'ui' | 'code') => void
 }) {
     const [copied, setCopied] = useState(false)
+    const [copyError, setCopyError] = useState<string | null>(null)
     const modeTitle = customActive
-        ? `Custom ${theme.name} theme`
-        : mode === 'system' ? 'System default' : `${theme.name} theme`
+        ? `Custom ${theme.name}`
+        : mode === 'system' ? 'System default' : theme.name
     const modeDescription = customActive
-        ? `Saved custom values based on ${theme.name}`
+        ? `These saved values are based on ${theme.name}.`
         : mode === 'system'
-            ? `Following Windows · currently using ${theme.name}`
-            : theme.description
-    const matchedAccent = ACCENT_COLORS.find((entry) => (
-        entry.primary.toLowerCase() === accent.primary.toLowerCase()
-        && entry.secondary.toLowerCase() === accent.secondary.toLowerCase()
-    ))
+            ? `Zyra is following the system appearance with ${theme.name}.`
+            : `${theme.description}.`
+
     const copyTheme = async () => {
+        setCopyError(null)
         try {
             await navigator.clipboard.writeText(JSON.stringify({
                 mode: customActive ? 'custom' : mode,
@@ -149,166 +133,70 @@ export function AppearanceThemeController({
             window.setTimeout(() => setCopied(false), 1600)
         } catch {
             setCopied(false)
+            setCopyError('Could not copy theme values to the clipboard.')
         }
     }
 
     return (
-        <div className="overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]">
-            <div
-                className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
-                data-settings-search-target={createSettingsRowTargetId('Theme', 'Custom theme')}
-                tabIndex={-1}
-            >
-                <div className="min-w-0">
-                    <h3 className="truncate text-[13px] font-semibold text-[var(--settings-text)]">{modeTitle}</h3>
-                    <p className="mt-0.5 truncate text-[11px] text-[var(--settings-text-muted)]">{modeDescription}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                    {customAvailable && !customActive ? (
-                        <SettingsButton variant="ghost" onClick={onUseCustom}>Use saved custom</SettingsButton>
-                    ) : null}
-                    <SettingsButton variant="ghost" onClick={() => void copyTheme()}>
-                        {copied ? <Check size={12} /> : <Copy size={12} />}
-                        {copied ? 'Copied' : 'Copy values'}
-                    </SettingsButton>
-                </div>
+        <>
+            <div data-settings-search-target={createSettingsRowTargetId('Theme', 'Custom theme')} tabIndex={-1}>
+                <SettingsSection
+                    title="Custom theme"
+                    searchSection="Theme"
+                    headerAction={(
+                        <div className="flex items-center gap-1.5">
+                            {customAvailable && !customActive ? (
+                                <SettingsButton variant="ghost" onClick={onUseCustom}>Use saved custom</SettingsButton>
+                            ) : null}
+                            <SettingsButton variant="ghost" onClick={() => void copyTheme()}>
+                                {copied ? <Check size={12} /> : <Copy size={12} />}
+                                {copied ? 'Copied' : 'Copy values'}
+                            </SettingsButton>
+                        </div>
+                    )}
+                >
+                    <div className="px-4 py-3.5">
+                        <div className="text-[13px] font-medium text-[var(--settings-text)]">{modeTitle}</div>
+                        <p className="mt-1 text-[12px] leading-5 text-[var(--settings-text-secondary)]">{modeDescription}</p>
+                    </div>
+                    {copyError ? <SettingsNotice tone="error">{copyError}</SettingsNotice> : null}
+                </SettingsSection>
             </div>
 
-            <div className="overflow-hidden border-t border-[var(--settings-border)]">
-                <table
-                    className="w-full table-fixed border-collapse"
-                    aria-label="Editable theme values"
-                    data-settings-search-target={createSettingsRowTargetId('Theme', 'Theme colors')}
-                    tabIndex={-1}
-                >
-                    <colgroup>
-                        <col className="w-[42%]" />
-                        <col />
-                    </colgroup>
-                    <thead>
-                        <tr className="bg-[var(--settings-control)] text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--settings-text-muted)]">
-                            <th scope="col" className="px-4 py-2 text-left">Property</th>
-                            <th scope="col" className="px-4 py-2 text-right">Value</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr
-                            className="border-t border-[var(--settings-border)]"
-                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Accent preset')}
-                            tabIndex={-1}
-                        >
-                            <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Accent preset</th>
-                            <td className="px-4 py-2.5 text-right">
-                                <SettingsSelect
-                                    value={matchedAccent?.name || 'Custom'}
-                                    onChange={(event) => {
-                                        const nextAccent = ACCENT_COLORS.find((entry) => entry.name === event.target.value)
-                                        if (nextAccent) onAccentChange(nextAccent)
-                                    }}
-                                    aria-label="Accent preset"
-                                    className="!w-[150px]"
-                                >
-                                    {!matchedAccent ? <option value="Custom">Custom</option> : null}
-                                    {ACCENT_COLORS.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}
-                                </SettingsSelect>
-                            </td>
-                        </tr>
-                        <tr
-                            className="border-t border-[var(--settings-border)]"
-                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Accent primary')}
-                            tabIndex={-1}
-                        >
-                            <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Accent primary</th>
-                            <td className="px-4 py-2.5">
+            <SettingsSection title="Accent values" searchSection="Theme">
+                <SettingsRow
+                    title="Accent primary"
+                    description="Set the main action and focus color."
+                    control={<EditableHexValue label="Accent primary" value={accent.primary} onCommit={(primary) => onAccentChange({ name: 'Custom', primary, secondary: accent.secondary })} />}
+                    searchTargetId={createSettingsRowTargetId('Theme', 'Accent primary')}
+                />
+                <SettingsRow
+                    title="Accent secondary"
+                    description="Set the companion color used in supporting states."
+                    control={<EditableHexValue label="Accent secondary" value={accent.secondary} onCommit={(secondary) => onAccentChange({ name: 'Custom', primary: accent.primary, secondary })} />}
+                    searchTargetId={createSettingsRowTargetId('Theme', 'Accent secondary')}
+                />
+            </SettingsSection>
+
+            <div data-settings-search-target={createSettingsRowTargetId('Theme', 'Theme colors')} tabIndex={-1}>
+                <SettingsSection title="Theme colors" searchSection="Theme">
+                    {TOKEN_LABELS.map(({ key, label }) => (
+                        <SettingsRow
+                            key={key}
+                            title={label}
+                            description={`Set the ${label.toLowerCase()} color.`}
+                            control={(
                                 <EditableHexValue
-                                    label="Accent primary"
-                                    value={accent.primary}
-                                    onCommit={(primary) => onAccentChange({ name: 'Custom', primary, secondary: accent.secondary })}
+                                    label={label}
+                                    value={theme.tokens[key]}
+                                    onCommit={(value) => onTokensChange({ ...theme.tokens, [key]: value })}
                                 />
-                            </td>
-                        </tr>
-                        <tr
-                            className="border-t border-[var(--settings-border)]"
-                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Accent secondary')}
-                            tabIndex={-1}
-                        >
-                            <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Accent secondary</th>
-                            <td className="px-4 py-2.5">
-                                <EditableHexValue
-                                    label="Accent secondary"
-                                    value={accent.secondary}
-                                    onCommit={(secondary) => onAccentChange({ name: 'Custom', primary: accent.primary, secondary })}
-                                />
-                            </td>
-                        </tr>
-                        <tr
-                            className="border-t border-[var(--settings-border)]"
-                            data-settings-search-target={createSettingsRowTargetId('Theme', 'UI font')}
-                            tabIndex={-1}
-                        >
-                            <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">UI font</th>
-                            <td className="px-4 py-2.5 text-right">
-                                <SettingsSelect
-                                    value={uiFont}
-                                    onChange={(event) => {
-                                        if (event.target.value === '__more_fonts__') onOpenFontManager('ui')
-                                        else onUiFontChange(event.target.value as AppearanceUiFont)
-                                    }}
-                                    aria-label="UI font"
-                                    className="!w-[190px] !min-w-[190px]"
-                                    style={{ fontFamily: getAppearanceUiFontStack(uiFont) }}
-                                >
-                                    {!APPEARANCE_UI_FONTS.some((entry) => entry.id === uiFont) ? <option value={uiFont}>{uiFontLabel}</option> : null}
-                                    {APPEARANCE_UI_FONTS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-                                    <option disabled>──────────</option>
-                                    <option value="__more_fonts__">More fonts…</option>
-                                </SettingsSelect>
-                            </td>
-                        </tr>
-                        <tr
-                            className="border-t border-[var(--settings-border)]"
-                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Code font')}
-                            tabIndex={-1}
-                        >
-                            <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Code font</th>
-                            <td className="px-4 py-2.5 text-right">
-                                <SettingsSelect
-                                    value={codeFont}
-                                    onChange={(event) => {
-                                        if (event.target.value === '__more_fonts__') onOpenFontManager('code')
-                                        else onCodeFontChange(event.target.value as AppearanceCodeFont)
-                                    }}
-                                    aria-label="Code font"
-                                    className="!w-[190px] !min-w-[190px]"
-                                    style={{ fontFamily: getAppearanceCodeFontStack(codeFont) }}
-                                >
-                                    {!APPEARANCE_CODE_FONTS.some((entry) => entry.id === codeFont) ? <option value={codeFont}>{codeFontLabel}</option> : null}
-                                    {APPEARANCE_CODE_FONTS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-                                    <option disabled>──────────</option>
-                                    <option value="__more_fonts__">More fonts…</option>
-                                </SettingsSelect>
-                            </td>
-                        </tr>
-                        {TOKEN_LABELS.map(({ key, label }) => (
-                            <tr
-                                key={key}
-                                className="border-t border-[var(--settings-border)]"
-                                data-settings-search-target={createSettingsRowTargetId('Theme', label)}
-                                tabIndex={-1}
-                            >
-                                <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">{label}</th>
-                                <td className="px-4 py-2.5">
-                                    <EditableHexValue
-                                        label={label}
-                                        value={theme.tokens[key]}
-                                        onCommit={(value) => onTokensChange({ ...theme.tokens, [key]: value })}
-                                    />
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                            )}
+                            searchTargetId={createSettingsRowTargetId('Theme', label)}
+                        />
+                    ))}
+                </SettingsSection>
             </div>
-        </div>
+        </>
     )
 }

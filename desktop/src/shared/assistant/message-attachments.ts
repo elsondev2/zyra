@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from './browser-context'
 export type SerializedAssistantAttachment = {
     name: string
     type: string
@@ -15,7 +16,7 @@ export type SerializedAssistantMessage = {
     attachments: SerializedAssistantAttachment[]
 }
 
-const ATTACHMENT_BLOCK_MARKER = /\n\nAttached files \((\d+)\):\n/
+const ATTACHMENT_BLOCK_MARKER = /(?:^|\n\n)Attached files \((\d+)\):\n/
 const ATTACHMENT_HEADER_PATTERN = /^\d+\.\s+(.+?)\s+\[([A-Z]+)\]$/
 const ATTACHMENT_DETAIL_KEYS = new Set(['path', 'ref', 'mime', 'size', 'preview', 'note', 'origin'])
 
@@ -103,7 +104,7 @@ export function parseSerializedAssistantMessage(text: string): SerializedAssista
 }
 
 export function stripSerializedAssistantAttachments(text: string): string {
-    return parseSerializedAssistantMessage(text).body
+    return stripSidebarBrowserContext(parseSerializedAssistantMessage(text).body)
 }
 
 function isSerializedImageAttachment(attachment: SerializedAssistantAttachment): boolean {

@@ -8,6 +8,7 @@ import { homedir } from 'os'
 import log from 'electron-log'
 import type { TerminalSession as ITerminalSession } from './types'
 import { getAugmentedEnv } from '../safe-exec'
+import { desktopTerminalEnvironment } from '../../assistant/agent-server-namespace'
 
 export class TerminalSession {
     public readonly id: string
@@ -75,6 +76,7 @@ export class TerminalSession {
             const augmentedEnv = getAugmentedEnv()
             const shellEnv = {
                 ...augmentedEnv,
+                ...desktopTerminalEnvironment(),
                 // Ensure these are always set
                 TERM: 'xterm-256color',
                 COLORTERM: 'truecolor',

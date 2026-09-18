@@ -1,3 +1,4 @@
+import { providerForAppFeature } from '../../shared/assistant/provider-features'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type {
@@ -9,9 +10,10 @@ import type {
     AssistantRateLimitWindow,
     AssistantRedeemAccountResetInput
 } from '../../shared/assistant/contracts'
+import { getSharedProviderWorkerClient } from '../setup/provider-worker-client'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 
-const CHATGPT_ACCOUNT_PROVIDER = 'openai-codex'
+const CHATGPT_ACCOUNT_PROVIDER = providerForAppFeature('subscriptionUsage')
 const MAX_RESET_CREDIT_ID_LENGTH = 512
 
 type JsonRecord = Record<string, unknown>
@@ -38,22 +40,35 @@ type NormalizedUsageWindow = {
     window: AssistantRateLimitWindow
 }
 
-let accountModulePromise: Promise<ChatGptAccountModule> | null = null
+let redemptionModulePromise: Promise<ChatGptAccountModule> | null = null
 
-async function loadChatGptAccountModule(): Promise<ChatGptAccountModule> {
-    if (!accountModulePromise) {
+async function redeemResetOnMain(creditId: string): Promise<unknown> {
+    // Preserve ownership of the existing external mutation. A worker exit after
+    // the POST must not introduce a new ambiguous-redemption failure path.
+    if (!redemptionModulePromise) {
         const moduleUrl = pathToFileURL(join(resolveZyraRoot(), 'src', 'chatgpt-account.mjs')).href
-        accountModulePromise = (import(/* @vite-ignore */ moduleUrl) as Promise<ChatGptAccountModule>).catch((error) => {
-            accountModulePromise = null
+        redemptionModulePromise = (import(/* @vite-ignore */ moduleUrl) as Promise<ChatGptAccountModule>).catch(error => {
+            redemptionModulePromise = null
             throw error
         })
     }
-    return accountModulePromise
+    return (await redemptionModulePromise).redeemCodexResetCredit(creditId)
+}
+
+async function loadChatGptAccountModule(): Promise<ChatGptAccountModule> {
+    // Opening/polling Account must not import or create Pi runtimes in main.
+    const { account } = getSharedProviderWorkerClient()
+    return {
+        buildChatGptAccountStatus: account.buildChatGptAccountStatus,
+        fetchCodexResetCredits: account.fetchCodexResetCredits,
+        redeemCodexResetCredit: redeemResetOnMain
+    }
 }
 
 export class ZyraAccountService {
     private overviewPromise: Promise<AssistantAccountOverview> | null = null
     private redemptionInFlight = false
+    private limitsPromise: Promise<AssistantAccountOverview> | null = null
 
     constructor(private readonly loadAccountModule: ChatGptAccountModuleLoader = loadChatGptAccountModule) {}
 
@@ -70,6 +85,16 @@ export class ZyraAccountService {
             if (this.overviewPromise === request) this.overviewPromise = null
         }
         void request.then(clearRequest, clearRequest)
+        return request
+    }
+
+    /** Mobile limits never wait for unrelated banked-reset inventory. */
+    async getLimitsOverview(): Promise<AssistantAccountOverview> {
+        if (this.limitsPromise) return this.limitsPromise
+        const request = this.loadOverview(false)
+        this.limitsPromise = request
+        const clear = () => { if (this.limitsPromise === request) this.limitsPromise = null }
+        void request.then(clear, clear)
         return request
     }
 
@@ -124,14 +149,14 @@ export class ZyraAccountService {
         }
     }
 
-    private async loadOverview(): Promise<AssistantAccountOverview> {
+    private async loadOverview(includeResetCredits = true): Promise<AssistantAccountOverview> {
         const accountModule = await this.loadAccountModule()
         const accountStatus = await accountModule.buildChatGptAccountStatus(CHATGPT_ACCOUNT_PROVIDER)
         const configured = asRecord(asRecord(accountStatus)?.['status'])?.['configured'] === true
         let resetCredits: unknown = null
         let resetCreditsError: string | null = null
 
-        if (configured) {
+        if (configured && includeResetCredits) {
             try {
                 resetCredits = await accountModule.fetchCodexResetCredits()
             } catch (error) {

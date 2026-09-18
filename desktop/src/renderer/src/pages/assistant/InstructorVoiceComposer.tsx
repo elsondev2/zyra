@@ -1,3 +1,4 @@
+import { getContrastRatio } from '@/lib/settings-theme-semantics'
 import { ImagePlus, Mic, MicOff, Plus, X } from 'lucide-react'
 import {
     useCallback,
@@ -260,9 +261,9 @@ export function InstructorVoiceComposer({
                     disabled={stopping || (!active && !connecting && !instructionsAvailable)}
                     className={cn(
                         'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-[transform,opacity,background-color] hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-35',
-                        active || connecting ? 'bg-sparkle-text text-sparkle-bg' : 'text-[#0c121f]'
+                        active || connecting ? 'bg-sparkle-text text-sparkle-bg' : ''
                     )}
-                    style={!active && !connecting ? { backgroundColor: accentColor } : undefined}
+                    style={!active && !connecting ? { backgroundColor: accentColor, color: getContrastRatio('#ffffff', accentColor) >= getContrastRatio('#000000', accentColor) ? '#ffffff' : '#000000' } : undefined}
                     aria-label={active || connecting ? 'Stop voice session' : 'Start voice session'}
                     title={active || connecting ? 'Stop voice session' : 'Start voice session'}
                 >

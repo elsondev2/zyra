@@ -1,3 +1,4 @@
+import { isNativeOverlayMethod } from '@shared/contracts/native-overlay'
 import { createDefaultAssistantSnapshot } from '@shared/assistant/projector'
 import type {
     AssistantAccountOverviewPayload,
@@ -813,6 +814,10 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             onMaximizedChange: () => noopUnsubscribe,
             onAppMenuCommand: () => noopUnsubscribe
         },
+        runtimeActivation: {
+            getState: () => Promise.resolve({ phase: 'idle' as const }),
+            onStateChange: () => noopUnsubscribe
+        },
         updates: {
             getState: () => Promise.resolve(browserUpdateState),
             checkForUpdates: updateAction,
@@ -869,6 +874,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                 }
             }),
             redeemAccountReset: () => unavailable('Banked resets require the Zyra desktop bridge.'),
+            getUsageSummary: () => unavailable('Usage history requires a connected Zyra desktop.'),
             getSessionTurnUsage: (): Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>> => ok({
                 usage: {
                     sessionId: BROWSER_PREVIEW_SESSION_ID,
@@ -1031,8 +1037,13 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         listBranches: () => ok({ branches: [] }),
         getGitStatusDetailed: () => ok({ status: null }),
         copyToClipboard: async (value: string) => {
-            await navigator.clipboard?.writeText?.(value).catch(() => undefined)
-            return { success: true as const }
+            if (!navigator.clipboard?.writeText) return { success: false as const, error: 'Clipboard is unavailable in this browser.' }
+            try {
+                await navigator.clipboard.writeText(value)
+                return { success: true as const }
+            } catch {
+                return { success: false as const, error: 'Could not copy to the clipboard.' }
+            }
         },
         onGitCloneProgress: () => noopUnsubscribe,
         onPreviewTerminalEvent: () => noopUnsubscribe,
@@ -1041,7 +1052,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
 
     const fallbackAdapter = new Proxy(base, {
         get(target, property) {
-            if (property === 'then') return undefined
+            if (property === 'then' || isNativeOverlayMethod(property)) return undefined
             if (property in target) return target[property as keyof typeof target]
             if (typeof property === 'string' && property.startsWith('on')) return () => noopUnsubscribe
             return () => unavailable(`${String(property)} requires the Zyra desktop bridge.`)

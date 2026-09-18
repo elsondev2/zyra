@@ -1,3 +1,5 @@
+import { isNativeOverlayMethod } from './contracts/native-overlay'
+
 export const BROWSER_ASSISTANT_BRIDGE_HOST = '127.0.0.1'
 export const BROWSER_ASSISTANT_BRIDGE_PORT = 47_831
 export const BROWSER_ASSISTANT_BRIDGE_PORT_CANDIDATES = Array.from(
@@ -10,7 +12,14 @@ export const BROWSER_ASSISTANT_BRIDGE_HEADER = 'x-zyra-browser-client'
 export const BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE = 'assistant-v1'
 export const BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER = 'x-zyra-browser-capability'
 export const BROWSER_ASSISTANT_CLIENT_ID_HEADER = 'x-zyra-browser-client-id'
-export const BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX = '/__zyra_browser_assistant'
+export let BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX =
+    (typeof location !== 'undefined' && location.protocol === 'chrome-extension:' ? BROWSER_CLIENT_HOST_ORIGIN : '')
+    + '/__zyra_browser_assistant'
+export function configureExtensionBrowserHost(origin: string): void {
+    if (typeof location === 'undefined' || location.protocol !== 'chrome-extension:') return
+    if (!['http://127.0.0.1:47821', 'http://127.0.0.1:47822'].includes(origin)) throw new Error('Unrecognized Zyra Desktop address.')
+    BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX = `${origin}/__zyra_browser_assistant`
+}
 export const BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME = 'browser-assistant-bridge.json'
 export const BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH = '/v1/assistant/invoke'
 export const BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH = '/v1/assistant/events'
@@ -33,6 +42,7 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'getStatus',
     'getAccountOverview',
     'redeemAccountReset',
+    'getUsageSummary',
     'getSessionTurnUsage',
     'listModels',
     'listProjects',
@@ -66,6 +76,7 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'deleteSession',
     'deleteMessage',
     'clearLogs',
+    'updateSessionConfiguration',
     'setSessionProject',
     'setSessionProjectPath',
     'setPlaygroundRoot',
@@ -122,7 +133,8 @@ export const BROWSER_DEVSCOPE_EVENT_NAMES = [
     'previewTerminal',
     'pythonPreview',
     'preferencesChanged',
-    'onboardingChanged'
+    'onboardingChanged',
+    'runtimeActivationChanged'
 ] as const
 
 export type BrowserDevscopeEventName = typeof BROWSER_DEVSCOPE_EVENT_NAMES[number]
@@ -216,6 +228,7 @@ const FORBIDDEN_BROWSER_DEVSCOPE_METHODS = new Set([
     'startBrowserPreviewAnnotation',
     'cancelBrowserPreviewAnnotation',
     'startBrowserPreviewRecording',
+    'prepareBrowserPreviewRecordingAudio',
     'stopBrowserPreviewRecording',
     'saveBrowserPreviewRecording'
 ])
@@ -247,9 +260,9 @@ export function isBrowserDevscopeBridgePath(value: unknown): value is string[] {
     ))) return false
     if (value[0] === 'window' || value[0] === 'assistant' || value[0] === 'assistantUtility' || value[0] === 'browserView' || value[0] === 'secrets' || value[0] === 'analytics') return false
     const method = value[value.length - 1]
-    if (FORBIDDEN_BROWSER_DEVSCOPE_METHODS.has(method)) return false
+    if (isNativeOverlayMethod(method) || FORBIDDEN_BROWSER_DEVSCOPE_METHODS.has(method)) return false
     if (value[0] === 'agentControl' && FORBIDDEN_BROWSER_AGENT_CONTROL_METHODS.has(method)) return false
-    if (value[0] === 'onboarding') return value.length === 2 && method === 'getState'
+    if (value[0] === 'onboarding' || value[0] === 'runtimeActivation') return value.length === 2 && method === 'getState'
     return method !== 'getPathForFile' && !method.startsWith('on')
 }
 

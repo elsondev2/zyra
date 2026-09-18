@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
+import { useSettings } from '@/lib/settings'
+import { SettingsActionsMenu } from './SettingsActionsMenu'
+import { SettingsListPagination } from './SettingsListPagination'
+import { paginateSettingsItems } from './settings-list-page'
+import { SettingsProviderIcon } from './SettingsProviderIcon'
+import { createSettingsRowTargetId } from './settings-search'
 import {
     SettingsButton,
+    SettingsDialog,
     SettingsNotice,
     SettingsPageContainer,
     SettingsRow,
     SettingsSection,
-    SettingsSegmented
+    SettingsSelect,
+    SettingsSwitch
 } from './settings-layout'
 
 type ProviderFilter = 'all' | 'groq' | 'gemini' | 'codex'
@@ -49,7 +57,8 @@ registerSettingsCacheClearer('settings-diagnostics', () => {
     cachedLogsAt = 0
 })
 
-export default function LogsSettings() {
+export default function LogsSettings({ context }: { context?: 'writing' }) {
+    const { settings, updateSettings } = useSettings()
     const [logs, setLogs] = useState<AiDebugLogEntry[]>(() => cachedLogs || [])
     const [loading, setLoading] = useState(false)
     const [clearing, setClearing] = useState(false)
@@ -57,6 +66,7 @@ export default function LogsSettings() {
     const [filter, setFilter] = useState<ProviderFilter>('all')
     const [copiedKey, setCopiedKey] = useState<string | null>(null)
     const [expandedId, setExpandedId] = useState<string | null>(null)
+    const [requestedPage, setPage] = useState(0)
 
     const loadLogs = async (forceRefresh = false) => {
         if (!forceRefresh && cachedLogs && Date.now() - cachedLogsAt < LOGS_CACHE_TTL_MS) {
@@ -67,12 +77,12 @@ export default function LogsSettings() {
         setError(null)
         try {
             const result = await window.devscope.getAiDebugLogs(200)
-            if (!result?.success) throw new Error(result?.error || 'Could not load AI debug logs.')
+            if (!result?.success) throw new Error(result?.error || 'Could not load Git-writing debug logs.')
             const nextLogs = Array.isArray(result.logs) ? result.logs : []
             rememberLogs(nextLogs)
             setLogs(nextLogs)
         } catch (loadError) {
-            setError(loadError instanceof Error ? loadError.message : 'Could not load AI debug logs.')
+            setError(loadError instanceof Error ? loadError.message : 'Could not load Git-writing debug logs.')
             setLogs([])
         } finally {
             setLoading(false)
@@ -82,63 +92,80 @@ export default function LogsSettings() {
     useEffect(() => { void loadLogs() }, [])
 
     const filteredLogs = useMemo(() => filter === 'all' ? logs : logs.filter((entry) => entry.provider === filter), [filter, logs])
+    const page = paginateSettingsItems(filteredLogs, requestedPage)
+    const selectedEntry = logs.find(entry => entry.id === expandedId) || null
 
     const copyText = async (key: string, value: string) => {
         if (!value.trim()) return
         try {
             const result = await window.devscope.copyToClipboard?.(value)
-            if (result && result.success === false) throw new Error(result.error || 'Could not copy logs.')
-            if (!result && navigator.clipboard?.writeText) await navigator.clipboard.writeText(value)
+            if (result && result.success === false) throw new Error(result.error || 'Could not copy Git-writing records.')
+            if (!result) {
+                if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.')
+                await navigator.clipboard.writeText(value)
+            }
             setCopiedKey(key)
             window.setTimeout(() => setCopiedKey((current) => current === key ? null : current), 1500)
         } catch (copyError) {
-            setError(copyError instanceof Error ? copyError.message : 'Could not copy logs.')
+            setError(copyError instanceof Error ? copyError.message : 'Could not copy Git-writing records.')
         }
     }
 
     const clearLogs = async () => {
-        if (logs.length > 0 && !window.confirm('Clear all local AI debug logs?')) return
+        if (logs.length > 0 && !window.confirm('Clear all local Git-writing debug logs?')) return
         setClearing(true)
         setError(null)
         try {
             const result = await window.devscope.clearAiDebugLogs()
-            if (!result?.success) throw new Error(result?.error || 'Could not clear AI debug logs.')
+            if (!result?.success) throw new Error(result?.error || 'Could not clear Git-writing debug logs.')
             rememberLogs([])
             setLogs([])
         } catch (clearError) {
-            setError(clearError instanceof Error ? clearError.message : 'Could not clear AI debug logs.')
+            setError(clearError instanceof Error ? clearError.message : 'Could not clear Git-writing debug logs.')
         } finally {
             setClearing(false)
         }
     }
 
     return (
-        <SettingsPageContainer title="Diagnostics" backTo="/settings/data" backLabel="Data & privacy">
-            <SettingsSection title="Diagnostics" headerAction={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => void loadLogs(true)} disabled={loading}><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />Refresh</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText('visible', filteredLogs.map(formatLogEntry).join('\n\n====================\n\n'))} disabled={filteredLogs.length === 0}>{copiedKey === 'visible' ? <Check size={12} /> : <Copy size={12} />}Copy visible</SettingsButton></div>}>
+        <SettingsPageContainer title={context === 'writing' ? 'Writing logs' : 'Diagnostics'} backTo="/settings/workspace/source-control/writing" backLabel="AI writing" showSettingsBack={context === 'writing'}>
+            {context !== 'writing' ? (<SettingsSection title="Chat troubleshooting" searchSection="Output and history">
+                <SettingsRow title="Canonical diagnostics" description="Show canonical worker presence and replay sequence in the chat header." control={<SettingsSwitch checked={settings.assistantShowDiagnostics} onCheckedChange={(assistantShowDiagnostics) => updateSettings({ assistantShowDiagnostics })} label="Show canonical diagnostics" />} />
+            </SettingsSection>) : null}
+
+            <SettingsSection title="Git-writing logs" searchSection="Diagnostics" headerAction={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => void loadLogs(true)} disabled={loading}><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />Refresh</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText('visible', filteredLogs.map(formatLogEntry).join('\n\n====================\n\n'))} disabled={filteredLogs.length === 0}>{copiedKey === 'visible' ? <Check size={12} /> : <Copy size={12} />}Copy matching</SettingsButton></div>}>
                 {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
-                <SettingsRow title="AI debug logs" description="Local provider requests and responses retained for Git AI troubleshooting." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{logs.length}</span>} />
-                <SettingsRow title="Provider filter" description="Limit the visible log records by provider." control={<SettingsSegmented value={filter} options={[{ value: 'all', label: 'All' }, { value: 'groq', label: 'Groq' }, { value: 'gemini', label: 'Gemini' }, { value: 'codex', label: 'ChatGPT' }]} onChange={setFilter} label="AI log provider filter" />} />
-                <SettingsRow title="Clear logs" description="Remove all local AI provider debug records." control={<SettingsButton variant="danger" onClick={() => void clearLogs()} disabled={clearing || logs.length === 0}><Trash2 size={12} />{clearing ? 'Clearing…' : 'Clear'}</SettingsButton>} />
+                <SettingsRow searchTargetId={createSettingsRowTargetId('Diagnostics', 'AI debug logs')} title="Git-writing records" description="Review model requests and responses from Git message generation and provider tests." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{logs.length}</span>} />
+                <SettingsRow title="Provider filter" description="Limit the visible Git-writing records by provider." control={<SettingsSelect value={filter} onChange={event => { setFilter(event.target.value as ProviderFilter); setPage(0) }} aria-label="Git-writing log provider filter"><option value="all">All providers</option><option value="groq">Groq</option><option value="gemini">Gemini</option><option value="codex">ChatGPT</option></SettingsSelect>} />
+                <SettingsRow searchTargetId={createSettingsRowTargetId('Diagnostics', 'Clear logs')} title="Clear Git-writing logs" description="Remove all local Git-writing debug records." control={<SettingsButton variant="danger" onClick={() => void clearLogs()} disabled={clearing || logs.length === 0}><Trash2 size={12} />{clearing ? 'Clearing…' : 'Clear'}</SettingsButton>} />
             </SettingsSection>
 
-            <SettingsSection title="AI provider records">
-                {filteredLogs.length === 0 ? <SettingsNotice>{loading ? 'Loading logs…' : 'No matching debug records.'}</SettingsNotice> : filteredLogs.map((entry) => {
-                    const expanded = expandedId === entry.id
-                    const payload = expanded ? formatLogEntry(entry) : ''
+            <SettingsSection title="Git-writing records">
+                <div className="max-h-[520px] overflow-y-auto [scrollbar-gutter:stable]">
+                {page.total === 0 ? <SettingsNotice>{loading ? 'Loading Git-writing records…' : error ? 'Git-writing records could not be loaded.' : 'No matching Git-writing records.'}</SettingsNotice> : page.items.map((entry) => {
                     return (
                         <SettingsRow
                             key={entry.id}
                             title={`${entry.provider === 'codex' ? 'ChatGPT' : entry.provider.toUpperCase()} · ${entry.action === 'testConnection' ? 'Connection test' : 'Commit message'}`}
-                            description={entry.error || entry.finalMessage || entry.candidateMessage || entry.promptPreview || 'No summary available.'}
-                            status={`${entry.status} · ${new Date(entry.timestamp).toLocaleString()}${entry.model ? ` · ${entry.model}` : ''}`}
+                            description={<span className="block truncate">{entry.error || entry.finalMessage || entry.candidateMessage || entry.promptPreview || 'No summary available.'}</span>}
+                            icon={entry.provider === 'codex' || entry.provider === 'gemini' ? <SettingsProviderIcon provider={entry.provider} /> : undefined}
+                            status={entry.status === 'success' ? 'Success' : 'Error'}
                             statusTone={entry.status === 'success' ? 'ready' : 'danger'}
-                            control={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => setExpandedId(expanded ? null : entry.id)}>{expanded ? 'Hide' : 'Details'}</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText(entry.id, formatLogEntry(entry))}>{copiedKey === entry.id ? <Check size={12} /> : <Copy size={12} />}</SettingsButton></div>}
-                        >
-                            {expanded ? <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-[var(--settings-border)] py-4 font-mono text-[11px] leading-relaxed text-sparkle-text-secondary">{payload}</pre> : null}
-                        </SettingsRow>
+                            info={<span>{new Date(entry.timestamp).toLocaleString()}{entry.model ? ` · ${entry.model}` : ''}</span>}
+                            control={<SettingsActionsMenu label="View" ariaLabel={`Actions for ${entry.provider} record`} items={[
+                                { id: 'details', label: 'View details', onSelect: () => setExpandedId(entry.id) },
+                                { id: 'copy', label: copiedKey === entry.id ? 'Copied' : 'Copy record', icon: copiedKey === entry.id ? <Check size={13} /> : <Copy size={13} />, onSelect: () => copyText(entry.id, formatLogEntry(entry)) }
+                            ]} />}
+                        />
                     )
                 })}
+                </div>
+                <SettingsListPagination {...page} onPageChange={setPage} />
             </SettingsSection>
+            <SettingsDialog open={selectedEntry !== null} title="Git-writing record" onClose={() => setExpandedId(null)} className="max-w-[720px]"
+                footer={<><SettingsButton variant="ghost" onClick={() => setExpandedId(null)}>Close</SettingsButton>{selectedEntry ? <SettingsButton onClick={() => void copyText(selectedEntry.id, formatLogEntry(selectedEntry))}>{copiedKey === selectedEntry.id ? <Check size={13} /> : <Copy size={13} />}{copiedKey === selectedEntry.id ? 'Copied' : 'Copy record'}</SettingsButton> : null}</>}>
+                {selectedEntry ? <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-[var(--settings-text-secondary)]">{formatLogEntry(selectedEntry)}</pre> : null}
+            </SettingsDialog>
         </SettingsPageContainer>
     )
 }

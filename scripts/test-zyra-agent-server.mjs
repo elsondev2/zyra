@@ -60,7 +60,11 @@ class FakeWorker extends EventEmitter {
     if (type === "prompt" && payload.prompt === "__compaction_cancelled__") {
       return Promise.reject(new Error("Compaction cancelled"));
     }
-    if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
+    if (type === "prompt") {
+      assert.equal(this.activePrompt, null, "foreground prompts must never overlap worker ownership");
+      this.beforePrompt?.(payload);
+      return new Promise((resolve) => { this.activePrompt = resolve; });
+    }
     if (type === "generate_text") {
       return Promise.resolve({ success: true, text: "Utility text result", model: payload.model || "openai-codex/test" });
     }
@@ -365,11 +369,26 @@ try {
 
   const tuiEvents = [];
   tui.on("session-event:chat:test", (event) => tuiEvents.push(event));
+  let acceptedBeforeWorkerDispatch;
+  workers[0].beforePrompt = () => { acceptedBeforeWorkerDispatch = server.sessions.get("chat:test").events.at(-1); };
   const promptResult = desktop.request("session.request", {
     sessionKey: "chat:test", type: "prompt", payload: { prompt: "keep building" },
     requestContext: { turnId: "turn:test", localThreadId: "assistant-thread:desktop" }
   }).catch((error) => ({ disconnected: error.code === "AGENT_SERVER_DISCONNECTED" }));
   await waitUntil(() => workers[0].activePrompt !== null);
+  workers[0].beforePrompt = undefined;
+  assert.equal(acceptedBeforeWorkerDispatch.event.type, "zyra_server_prompt_accepted", "prompt visibility is published before worker preflight starts");
+  assert.equal(acceptedBeforeWorkerDispatch.requestContext.turnId, "turn:test");
+  assert.equal(acceptedBeforeWorkerDispatch.event.message.role, "user");
+  assert.ok(JSON.stringify(acceptedBeforeWorkerDispatch.event.message.content).includes("keep building"));
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "zyra_server_prompt_accepted"));
+  const preflightSession = server.sessions.get("chat:test");
+  const preflightSnapshot = server.attachmentSnapshot(preflightSession, preflightSession.sequence);
+  assert.equal(preflightSnapshot.replay.length, 0, "watermark attachment need not replay the accepted prompt");
+  assert.equal(preflightSnapshot.pendingOperations.length, 1);
+  assert.equal(preflightSnapshot.pendingOperations[0].event.type, "zyra_server_prompt_accepted");
+  assert.equal(preflightSnapshot.pendingOperations[0].requestContext.turnId, "turn:test");
+  assert.equal(preflightSnapshot.pendingOperations[0].sequence, acceptedBeforeWorkerDispatch.sequence);
   const runningCatalog = await tui.request("catalog.list", {});
   assert.equal(runningCatalog.chats[0].presence.state, "running", "catalog presence must expose unopened work as running");
   assert.equal(runningCatalog.chats[0].presence.latestTurn?.id, "turn:test", "catalog presence must identify the active canonical turn");
@@ -379,7 +398,7 @@ try {
     /strong foreground turn is active/
   );
   workers[0].emit("event", { type: "message_update", message: { role: "assistant", content: "still working" } });
-  await waitUntil(() => tuiEvents.length === 1);
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "message_update"));
   workers[0].emit("event", { type: "approval_requested", requestId: "approval:test", requestType: "command", command: "npm test" });
   await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_requested"));
   assert.equal((await tui.request("catalog.list", {})).chats[0].presence.attention, "approval", "catalog presence must expose approval attention before Desktop opens the thread");
@@ -394,6 +413,10 @@ try {
   }, "an attached surface should resolve a canonical approval while the prompt remains active");
   await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_resolved"));
   assert.equal((await tui.request("catalog.list", {})).chats[0].presence.attention, null, "catalog presence must clear resolved approval attention");
+  await assert.rejects(tui.request("session.request", {
+    sessionKey: "chat:test", type: "approval.respond",
+    payload: { requestId: "approval:test", decision: "decline" }
+  }), { code: "AGENT_SERVER_APPROVAL_ALREADY_ANSWERED" }, "a conflicting stale approval must not reach the worker");
   workers[0].emit("event", {
     type: "user_input_requested",
     requestId: "user-input:test",
@@ -432,6 +455,10 @@ try {
   assert.equal(retryingCatalog.chats[0].presence.state, "running", "a retryable agent_end cannot settle the canonical turn");
   assert.equal(retryingCatalog.chats[0].presence.activeTurnId, "turn:test", "retry backoff retains canonical prompt ownership");
   assert.ok(server.sessions.get("chat:test")?.activeRequestContext, "another prompt cannot enter while the existing turn is retrying");
+  await assert.rejects(tui.request("session.request", {
+    sessionKey: "chat:test", type: "prompt", payload: { prompt: "cannot overlap retry" },
+    requestContext: { turnId: "turn:busy", localThreadId: "tui:test" }
+  }), { code: "AGENT_SERVER_SESSION_BUSY" }, "an unfinished turn still rejects competing prompts");
   desktop.close();
   assert.equal(server.state().sessions[0].activeRequests, 1, "closing Desktop must not stop active work");
   workers[0].emit("event", { type: "agent_end", willRetry: false });
@@ -439,7 +466,11 @@ try {
   const agentEndCatalog = await tui.request("catalog.list", {});
   assert.equal(agentEndCatalog.chats[0].presence.state, "ready", "agent_end must settle the canonical turn before the prompt request unwinds");
   assert.equal(agentEndCatalog.chats[0].presence.activeTurnId, null, "settled presence cannot advertise a live turn id");
-  assert.equal(server.sessions.get("chat:test")?.activeRequestContext, null, "a completed Desktop turn must release prompt ownership immediately so an attached TUI is not blocked");
+  assert.equal(server.sessions.get("chat:test")?.activeRequestContext?.turnId, "turn:test", "completed response retains worker ownership through post-turn maintenance");
+  workers[0].emit("event", { type: "compaction_start", reason: "manual" });
+  workers[0].emit("event", { type: "compaction_end", reason: "manual", aborted: false, willRetry: false });
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "compaction_end"));
+  assert.deepEqual(tuiEvents.filter((entry) => entry.event?.type?.startsWith("compaction_")).map((entry) => entry.requestContext?.turnId), ["turn:test", "turn:test"], "maintenance stays associated with its completed turn");
   workers[0].finishPrompt({ completed: true });
   await waitUntil(() => server.state().sessions[0].activeRequests === 0);
   await promptResult;
@@ -459,23 +490,84 @@ try {
   const reconnect = client("desktop:reconnect", "desktop", ["desktop-control"]);
   await reconnect.connect();
   const replay = await reconnect.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:reconnect", lastSequence: 0 });
-  assert.equal(replay.replay.length, 9, "reconnect must replay metadata, fleet, provider events, approvals, user input, retry state, and the authoritative agent completion");
-  assert.equal(replay.replay[0].event.type, "agent.created");
-  assert.equal(Object.keys(replay.replay[0].event.fleet.agents).length, 1);
-  assert.equal(replay.replay[1].event.type, "session_metadata");
-  assert.equal(replay.replay[2].event.message.content, "still working");
-  assert.equal(replay.replay[2].requestContext.turnId, "turn:test");
-  assert.equal(replay.replay[3].event.type, "approval_requested");
-  assert.equal(replay.replay[4].event.type, "approval_resolved");
-  assert.equal(replay.replay[5].event.type, "user_input_requested");
-  assert.equal(replay.replay[6].event.type, "user_input_resolved");
-  assert.deepEqual(replay.replay[6].event.answers.targets, ["Desktop", "TUI"]);
-  assert.equal(replay.replay[7].event.type, "agent_end");
-  assert.equal(replay.replay[7].event.willRetry, true);
-  assert.equal(replay.replay[8].event.type, "agent_end");
-  assert.equal(replay.replay[8].event.willRetry, false);
-  assert.equal(replay.replay.filter((entry) => entry.event.type === "agent_end" && entry.event.willRetry !== true).length, 1, "only the final agent_end is the durable provider completion boundary");
-  assert.equal(replay.replay.filter((entry) => entry.event.type === "zyra_server_turn_completed").length, 0, "prompt resolution cannot append a duplicate synthetic completion after agent_end");
+  assert.equal(replay.replay.length, 12, "replay includes accepted prompt and two post-turn maintenance events");
+  assert.equal(replay.replay.filter((entry) => entry.event.type === "zyra_server_prompt_accepted").length, 1);
+  const providerReplay = replay.replay.filter((entry) => !["zyra_server_prompt_accepted", "compaction_start", "compaction_end"].includes(entry.event.type));
+  assert.equal(providerReplay.length, 9, "reconnect must replay metadata, fleet, provider events, approvals, user input, retry state, and the authoritative agent completion");
+  assert.equal(providerReplay[0].event.type, "agent.created");
+  assert.equal(Object.keys(providerReplay[0].event.fleet.agents).length, 1);
+  assert.equal(providerReplay[1].event.type, "session_metadata");
+  assert.equal(providerReplay[2].event.message.content, "still working");
+  assert.equal(providerReplay[2].requestContext.turnId, "turn:test");
+  assert.equal(providerReplay[3].event.type, "approval_requested");
+  assert.equal(providerReplay[4].event.type, "approval_resolved");
+  assert.equal(providerReplay[5].event.type, "user_input_requested");
+  assert.equal(providerReplay[6].event.type, "user_input_resolved");
+  assert.deepEqual(providerReplay[6].event.answers.targets, ["Desktop", "TUI"]);
+  assert.equal(providerReplay[7].event.type, "agent_end");
+  assert.equal(providerReplay[7].event.willRetry, true);
+  assert.equal(providerReplay[8].event.type, "agent_end");
+  assert.equal(providerReplay[8].event.willRetry, false);
+  assert.equal(providerReplay.filter((entry) => entry.event.type === "agent_end" && entry.event.willRetry !== true).length, 1, "only the final agent_end is the durable provider completion boundary");
+  assert.equal(providerReplay.filter((entry) => entry.event.type === "zyra_server_turn_completed").length, 0, "prompt resolution cannot append a duplicate synthetic completion after agent_end");
+
+  const maintenancePrompt = tui.request("session.request", {
+    sessionKey: "chat:test", type: "prompt", payload: { prompt: "complete then maintain" },
+    requestContext: { turnId: "turn:maintenance", localThreadId: "tui:maintenance" }
+  });
+  await waitUntil(() => workers[0].activePrompt !== null);
+  const maintainedSession = server.sessions.get("chat:test");
+  assert.equal(server.attachmentSnapshot(maintainedSession, maintainedSession.sequence).pendingOperations[0].event.type, "zyra_server_prompt_accepted");
+  workers[0].emit("event", { type: "message_start", message: { role: "user", content: [{ type: "text", text: "complete then maintain" }] } });
+  assert.equal(server.attachmentSnapshot(maintainedSession, maintainedSession.sequence).pendingOperations.length, 0, "canonical user receipt clears accepted placeholder from attach snapshots");
+  workers[0].emit("event", { type: "agent_end", willRetry: false });
+  await waitUntil(() => server.state().sessions[0].latestTurn?.state === "completed");
+  const beforeQueued = workers[0].requests.filter((entry) => entry.type === "prompt").length;
+  const queuedPrompt = tui.request("session.request", {
+    sessionKey: "chat:test", type: "prompt", payload: { prompt: "next during maintenance" },
+    requestContext: { turnId: "turn:after-maintenance", localThreadId: "tui:after-maintenance" }
+  });
+  // This roundtrip drains the same connection after the queued request has arrived.
+  await tui.request("catalog.list", {});
+  assert.equal(workers[0].requests.filter((entry) => entry.type === "prompt").length, beforeQueued, "queued prompt must wait while the prior worker request maintains context");
+  workers[0].emit("event", { type: "compaction_start", reason: "manual" });
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "compaction_start" && entry.requestContext?.turnId === "turn:maintenance"));
+  const maintainingSnapshot = server.attachmentSnapshot(maintainedSession, maintainedSession.sequence);
+  assert.equal(maintainingSnapshot.replay.length, 0);
+  assert.equal(maintainingSnapshot.activeRequestContext, null, "completed work is not advertised as an active response during compaction");
+  assert.equal(maintainingSnapshot.pendingOperations.length, 1);
+  assert.equal(maintainingSnapshot.pendingOperations[0].event.type, "compaction_start");
+  assert.equal(maintainingSnapshot.pendingOperations[0].requestContext.turnId, "turn:maintenance", "reconnect retains the completed turn's maintenance envelope");
+  workers[0].emit("event", { type: "compaction_end", reason: "manual", aborted: false, willRetry: false });
+  assert.equal(server.attachmentSnapshot(maintainedSession, maintainedSession.sequence).pendingOperations.length, 0, "compaction completion clears pending attach activity");
+  workers[0].finishPrompt({ completed: true });
+  await maintenancePrompt;
+  await waitUntil(() => workers[0].requests.filter((entry) => entry.type === "prompt").length === beforeQueued + 1);
+  assert.equal(workers[0].requests.at(-1).payload.prompt, "next during maintenance");
+  assert.equal(server.sessions.get("chat:test").activeRequestContext.turnId, "turn:after-maintenance");
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "zyra_server_prompt_accepted" && entry.requestContext?.turnId === "turn:after-maintenance"));
+  workers[0].emit("event", { type: "agent_end", willRetry: false });
+  workers[0].finishPrompt({ completed: true });
+  await queuedPrompt;
+  assert.equal(server.sessions.get("chat:test").activeRequestContext, null, "ownership clears once maintenance and queued work are complete");
+
+  const abortMaintenance = tui.request("session.request", {
+    sessionKey: "chat:test", type: "prompt", payload: { prompt: "maintenance to abort" },
+    requestContext: { turnId: "turn:abort-maintenance", localThreadId: "tui:test" }
+  });
+  await waitUntil(() => workers[0].activePrompt !== null);
+  workers[0].emit("event", { type: "agent_end", willRetry: false });
+  const cancelledWaitingPrompt = assert.rejects(tui.request("session.request", {
+    sessionKey: "chat:test", type: "prompt", payload: { prompt: "must not start after abort" },
+    requestContext: { turnId: "turn:cancelled-waiter", localThreadId: "tui:test" }
+  }), /stopped/i, "abort cancels a pending prompt instead of silently starting it later");
+  await waitUntil(() => server.sessions.get("chat:test").userInputContinuationWaiters.size === 1);
+  await tui.request("session.request", { sessionKey: "chat:test", type: "abort", payload: {} });
+  await cancelledWaitingPrompt;
+  workers[0].finishPrompt({ completed: true });
+  await abortMaintenance;
+  assert.equal(workers[0].requests.some((entry) => entry.type === "prompt" && entry.payload.prompt === "must not start after abort"), false);
+
   // Older journals could attribute agent_settled to the just-completed request.
   // Presence is ready, so transcript replay must never resurrect that turn in TUI state.
   const completedSession = server.sessions.get("chat:test");
@@ -547,6 +639,8 @@ try {
   resumedActiveTui.agentServer.client.socket.destroy();
   await waitUntil(() => (server.sessions.get("chat:test")?.clients.size || 0) >= attachedClientCount && resumedActiveTui.session.isStreaming);
   assert.equal(resumedActiveTui.session.isStreaming, true, "a TUI socket reconnect reattaches to the still-running canonical turn");
+  const previousAssistantTexts = tuiRuntime.session.sessionManager.getEntries()
+    .filter((entry) => entry.message.role === "assistant").map((entry) => JSON.stringify(entry.message.content));
   workers[0].emit("event", {
     type: "message_end",
     message: {
@@ -556,12 +650,22 @@ try {
       usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 1000, cost: { total: 0.05 } }
     }
   });
+  workers[0].emit("event", { type: "agent_end", willRetry: false });
+  await waitUntil(() => !tuiRuntime.session.isStreaming && !resumedActiveTui.session.isStreaming);
+  workers[0].emit("event", { type: "compaction_start", reason: "manual" });
+  await waitUntil(() => tuiRuntime.session.isCompacting && resumedActiveTui.session.isCompacting);
+  assert.equal(tuiRuntime.session.isStreaming, false, "post-answer compaction cannot resurrect the completed TUI response");
+  assert.equal(resumedActiveTui.session.isStreaming, false);
+  workers[0].emit("event", { type: "compaction_end", reason: "manual", aborted: false, willRetry: false });
+  await waitUntil(() => !tuiRuntime.session.isCompacting && !resumedActiveTui.session.isCompacting);
+  assert.equal(tuiRuntime.session.isStreaming, false, "maintenance completion keeps the TUI response settled");
   workers[0].finishPrompt({});
   await externalPrompt;
   await waitUntil(() => !tuiRuntime.session.isStreaming && !resumedActiveTui.session.isStreaming);
   resumedActiveTui.session.dispose();
   assert.equal(tuiRuntime.session.getContextUsage().tokens, 1000, "remote context status must use canonical model usage");
   assert.equal(tuiRuntime.session.sessionManager.getEntries().at(-1).message.usage.cost.total, 0.05, "remote cost status must retain usage cost");
+  assert.deepEqual(tuiRuntime.session.sessionManager.getEntries().filter((entry) => entry.message.role === "assistant").slice(0, -1).map((entry) => JSON.stringify(entry.message.content)), previousAssistantTexts, "a new assistant snapshot after a user boundary preserves prior-turn responses");
   assert.equal(tuiRuntime.session.sessionManager.getSessionUsage().cost.total, 0.05, "remote status must expose cumulative canonical cost");
   resolveApprovalDialog?.("decline");
 

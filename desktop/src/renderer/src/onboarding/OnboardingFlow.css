@@ -1,27 +1,23 @@
-.onboarding-fixed-heading {
-    position: fixed;
-    top: clamp(70px, 9vh, 96px);
-    left: 50%;
-    z-index: 20;
-    width: min(560px, calc(100vw - 48px));
-    transform: translateX(-50%);
-    pointer-events: none;
+.onboarding-step-heading {
+    width: min(520px, 100%);
+    margin: 0 auto 28px;
 }
 
-.onboarding-fixed-step-scroll {
+.onboarding-step-scroll {
     position: fixed;
     inset-inline: 0;
-    top: clamp(164px, 20vh, 196px);
+    top: 34px;
     bottom: clamp(108px, 13vh, 128px);
     z-index: 10;
+    display: flex;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable both-edges;
 }
 
 .onboarding-step-content {
-    padding-top: 4px;
-    padding-bottom: 24px;
+    margin-block: auto;
+    padding-block: 32px;
 }
 
 .onboarding-action-dock {
@@ -40,11 +36,15 @@
 
 .onboarding-action-row {
     display: grid;
-    grid-template-columns: 120px minmax(120px, 1fr) 120px;
+    grid-template-columns: 100px minmax(0, 1fr) 100px;
     align-items: end;
-    gap: 24px;
-    width: min(640px, 100%);
+    gap: 16px;
+    width: min(520px, 100%);
     margin-inline: auto;
+}
+
+.onboarding-action-row > button {
+    width: 100%;
 }
 
 .onboarding-dock-progress {
@@ -65,113 +65,307 @@
     color: var(--status-danger);
 }
 
-.onboarding-review-ready {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    margin-bottom: 20px;
-}
-
-.onboarding-review-ready-mark {
-    display: inline-flex;
-    width: 40px;
-    height: 40px;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid color-mix(in srgb, var(--status-success) 34%, transparent);
-    border-radius: 50%;
-    color: var(--status-success);
-    background: color-mix(in srgb, var(--status-success) 11%, var(--color-bg));
-    box-shadow: 0 0 0 7px color-mix(in srgb, var(--status-success) 5%, transparent);
-}
-
 .onboarding-review-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    overflow: hidden;
-    border: 1px solid color-mix(in srgb, var(--color-text) 13%, transparent);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--color-bg) 80%, transparent);
-    box-shadow: 0 20px 52px color-mix(in srgb, var(--color-bg) 24%, transparent);
-    backdrop-filter: blur(14px);
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .onboarding-review-item {
+    display: grid;
+    grid-template-columns: 30px minmax(70px, 0.4fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 3px 12px;
     min-width: 0;
-    padding: 18px;
+    padding: 16px 0;
 }
 
 .onboarding-review-item + .onboarding-review-item {
-    border-left: 1px solid var(--surface-divider);
+    border-top: 1px solid var(--surface-divider);
 }
 
 .onboarding-review-icon {
     display: inline-flex;
-    width: 30px;
-    height: 30px;
+    grid-row: span 2;
     align-items: center;
     justify-content: center;
-    border-radius: 8px;
+    color: var(--color-text);
+}
+
+.onboarding-review-detail {
+    grid-column: 3;
+}
+
+.onboarding-logo-slot { width: 91px; height: 84px; flex: none; }
+.onboarding-logo-slot-welcome { width: 126px; height: 116px; }
+
+.onboarding-stage-logo-layer {
+    position: fixed;
+    inset-inline: 0;
+    top: 34px;
+    bottom: clamp(108px, 13vh, 128px);
+    z-index: 20;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.onboarding-shared-logo {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: max-content;
+    visibility: hidden;
+    transform-origin: 0 0;
+    will-change: transform;
+    animation: onboarding-logo-arrive 760ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.onboarding-shared-logo [style] { transition: color 480ms ease; }
+
+.onboarding-appearance-modes {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: min(320px, 100%);
+    margin-inline: auto;
+    padding: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-text) 5%, transparent);
+}
+
+.onboarding-appearance-selection {
+    position: absolute;
+    inset-block: 4px;
+    left: 4px;
+    width: calc((100% - 8px) / 3);
+    border-radius: 999px;
+    background: var(--surface-active);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.08), inset 0 0 0 1px var(--surface-border);
+    transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1), background-color 400ms ease;
+}
+
+.onboarding-appearance-mode {
+    position: relative;
+    display: flex;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border-radius: 999px;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    transition: color 300ms ease;
+}
+
+.onboarding-appearance-mode:has(:checked) { color: var(--color-text); }
+.onboarding-appearance-mode:has(:focus-visible) { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+.onboarding-theme-picker {
+    margin-top: 18px;
+    text-align: left;
+}
+.onboarding-theme-caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    font-size: 12px;
+}
+.onboarding-theme-current {
+    min-width: 0;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.onboarding-theme-caption button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0 4px 8px;
+    color: var(--color-text-secondary);
+    transition: color 250ms ease;
+}
+.onboarding-theme-caption button:hover {
+    color: var(--color-text);
+}
+.onboarding-theme-caption button svg {
+    transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.onboarding-theme-caption button:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 4px;
+    border-radius: 3px;
+}
+.onboarding-theme-suggestions {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+}
+.onboarding-theme-choice {
+    position: relative;
+    min-width: 0;
+    cursor: pointer;
+}
+.onboarding-theme-swatch {
+    display: flex;
+    height: 32px;
+    overflow: hidden;
+    border-radius: 7px;
+    box-shadow: inset 0 0 0 1px rgb(128 128 128 / 0.2);
+}
+.onboarding-theme-swatch > span {
+    flex: 1;
+    min-width: 0;
+}
+.onboarding-theme-swatch > span:first-child {
+    flex: 2.2;
+}
+.onboarding-theme-swatch > span:last-child {
+    flex: 0.7;
+}
+.onboarding-theme-choice > .onboarding-theme-swatch {
+    outline: 1px solid var(--surface-border);
+    outline-offset: 0;
+    transition: outline-color 250ms ease, outline-offset 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.onboarding-theme-choice:hover > .onboarding-theme-swatch {
+    outline-color: var(--color-text-secondary);
+}
+.onboarding-theme-choice:has(:checked) > .onboarding-theme-swatch {
+    outline: 2px solid var(--color-text);
+    outline-offset: 3px;
+}
+.onboarding-theme-choice:has(:focus-visible) > .onboarding-theme-swatch {
+    outline-color: var(--accent-primary);
+    outline-offset: 3px;
+}
+.onboarding-theme-choice-name {
+    display: block;
+    margin-top: 9px;
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    color: var(--color-text-secondary);
+}
+.onboarding-theme-choice:has(:checked) .onboarding-theme-choice-name {
+    color: var(--color-text);
+}
+.onboarding-theme-search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 2px 12px;
+    color: var(--color-text-secondary);
+}
+.onboarding-theme-search input {
+    min-width: 0;
+    flex: 1;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 12px;
+    outline: none;
+}
+.onboarding-theme-search:focus-within {
     color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 11%, transparent);
+}
+.onboarding-theme-empty {
+    grid-column: 1 / -1;
+    padding: 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--color-text-secondary);
 }
 
-@media (max-width: 560px) {
-    .onboarding-review-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .onboarding-review-item {
-        display: grid;
-        grid-template-columns: 30px minmax(76px, 0.4fr) minmax(0, 1fr);
-        align-items: center;
-        gap: 12px;
-        padding: 13px 15px;
-    }
-
-    .onboarding-review-item + .onboarding-review-item {
-        border-top: 1px solid var(--surface-divider);
-        border-left: 0;
-    }
-
-    .onboarding-review-item dt,
-    .onboarding-review-item dd {
-        margin-top: 0;
-    }
-
-    .onboarding-review-item dd:last-child {
-        display: none;
-    }
+@media (max-width: 480px) {
+    .onboarding-theme-suggestions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
 }
 
-@keyframes onboarding-step-in-forward {
-    from { opacity: 0; transform: translate3d(14px, 0, 0); }
-    to { opacity: 1; transform: translate3d(0, 0, 0); }
+@keyframes onboarding-logo-arrive {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
-@keyframes onboarding-step-in-backward {
-    from { opacity: 0; transform: translate3d(-14px, 0, 0); }
-    to { opacity: 1; transform: translate3d(0, 0, 0); }
+@keyframes onboarding-dock-arrive {
+    from { opacity: 0; transform: translate3d(0, 8px, 0); }
+    to { opacity: 1; transform: none; }
 }
 
-.onboarding-step-enter-forward {
-    animation: onboarding-step-in-forward 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.onboarding-step-enter-backward {
-    animation: onboarding-step-in-backward 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
+.onboarding-action-dock { animation: onboarding-dock-arrive 620ms cubic-bezier(0.22, 1, 0.36, 1); }
 
 @media (prefers-reduced-motion: reduce) {
-    .onboarding-step-enter-forward,
-    .onboarding-step-enter-backward {
-        animation: none !important;
-    }
+    .onboarding-shared-logo, .onboarding-action-dock { animation: none !important; }
+    .onboarding-theme-picker *,
+    .onboarding-appearance-selection,
+    .onboarding-shared-logo [style] { transition: none !important; }
 }
 
-body.zyra-reduce-motion .onboarding-step-enter-forward,
-body.zyra-reduce-motion .onboarding-step-enter-backward {
-    animation: none !important;
+body.zyra-reduce-motion .onboarding-theme-picker *,
+body.zyra-reduce-motion .onboarding-appearance-selection,
+body.zyra-reduce-motion .onboarding-shared-logo [style] { transition: none !important; }
+
+body.zyra-reduce-motion .onboarding-shared-logo,
+body.zyra-reduce-motion .onboarding-action-dock { animation: none !important; }
+
+.onboarding-page-body { opacity: 1; transform: none; animation: onboarding-page-enter 620ms cubic-bezier(0.22, 1, 0.36, 1); }
+.onboarding-page-body[data-direction="backward"] { --page-offset: -10px; }
+.onboarding-page-body[data-leaving="true"] { animation: onboarding-page-leave 140ms ease-in forwards; }
+.onboarding-page-body[data-onboarding-step-body="welcome"]:not([data-leaving="true"]) { animation: none; }
+@keyframes onboarding-page-enter {
+    from { opacity: 0; transform: translateX(var(--page-offset, 10px)); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes onboarding-page-leave {
+    to { opacity: 0; transform: translateX(calc(-1 * var(--page-offset, 10px))); }
+}
+.onboarding-welcome-letters > span {
+    display: inline-block;
+    animation: onboarding-welcome-letter 760ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(180ms + var(--letter-index) * 32ms);
+}
+.onboarding-welcome-button { animation: onboarding-welcome-button 760ms 640ms cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+@keyframes onboarding-welcome-letter {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes onboarding-welcome-button {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+}
+.onboarding-page-body[data-reduced-motion="true"],
+.onboarding-page-body[data-reduced-motion="true"] .onboarding-welcome-letters > span,
+.onboarding-page-body[data-reduced-motion="true"] .onboarding-welcome-button { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+    .onboarding-page-body, .onboarding-welcome-letters > span, .onboarding-welcome-button { animation: none !important; }
+}
+
+.onboarding-progress-fill { transform-origin: left; transition: transform 680ms cubic-bezier(0.22, 1, 0.36, 1); }
+.onboarding-dock-copy { display: inline-flex; animation: onboarding-dock-copy-in 520ms cubic-bezier(0.22, 1, 0.36, 1); }
+.onboarding-action-dock[data-direction="backward"] { --dock-offset: -8px; }
+.onboarding-action-dock[data-changing="true"] .onboarding-dock-copy { display: inline-flex; animation: onboarding-dock-copy-out 140ms ease-in forwards; }
+.onboarding-action-dock[data-leaving="true"] { animation: onboarding-dock-out 140ms ease-in forwards; }
+@keyframes onboarding-dock-copy-in { from { opacity: 0; transform: translateX(var(--dock-offset, 8px)); } to { opacity: 1; transform: none; } }
+@keyframes onboarding-dock-copy-out { to { opacity: 0; transform: translateX(calc(-1 * var(--dock-offset, 8px))); } }
+@keyframes onboarding-dock-out { to { opacity: 0; transform: translateY(6px); } }
+.onboarding-review-item, .onboarding-review-choice {
+    animation: onboarding-review-in 650ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation-delay: calc(80ms + var(--item-index, 3) * 65ms);
+}
+.onboarding-page-body[data-leaving="true"] .onboarding-review-item,
+.onboarding-page-body[data-leaving="true"] .onboarding-review-choice { animation: onboarding-review-out 140ms ease-in forwards; }
+@keyframes onboarding-review-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@keyframes onboarding-review-out { to { opacity: 0; transform: translateX(-8px); } }
+.onboarding-action-dock[data-reduced-motion="true"],
+.onboarding-action-dock[data-reduced-motion="true"] *,
+.onboarding-page-body[data-reduced-motion="true"] .onboarding-review-item,
+.onboarding-page-body[data-reduced-motion="true"] .onboarding-review-choice { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+    .onboarding-dock-copy, .onboarding-review-item, .onboarding-review-choice { animation: none !important; }
+    .onboarding-progress-fill { transition: none !important; }
 }

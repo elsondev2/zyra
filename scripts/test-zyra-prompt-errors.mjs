@@ -45,7 +45,9 @@ function createClientRuntime(project) {
 const tempProject = mkdtempSync(path.join(os.tmpdir(), "zyra-client-runtime-"));
 try {
   const clientRuntime = createClientRuntime(tempProject);
-  assert.equal(setProfile(clientRuntime, "default"), "default");
+  for (const legacyProfile of ["default", "learner", "builder"]) {
+    assert.equal(setProfile(clientRuntime, legacyProfile), "concise", 'legacy built-in profiles resolve to the current default speaking style');
+  }
   assert.match(clientRuntime.systemPrompt, /ZYRA_ACTIVE_PROFILE/);
 } finally {
   rmSync(tempProject, { recursive: true, force: true });

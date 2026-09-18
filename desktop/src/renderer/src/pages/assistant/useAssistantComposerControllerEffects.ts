@@ -1,3 +1,5 @@
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useLayoutEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react'
 import type { AssistantInteractionMode, AssistantRuntimeMode } from '@shared/assistant/contracts'
 import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
@@ -288,22 +290,22 @@ export function useAssistantComposerControllerEffects(input: {
             setShowMentionMenu(false)
         }
         const handleClickOutside = (event: PointerEvent) => {
-            if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) setShowModelDropdown(false)
-            if (traitsDropdownRef.current && !traitsDropdownRef.current.contains(event.target as Node)) setShowTraitsDropdown(false)
-            if (branchDropdownRef.current && !branchDropdownRef.current.contains(event.target as Node)) setShowBranchDropdown(false)
-            if (mentionMenuRef.current && !mentionMenuRef.current.contains(event.target as Node)) setShowMentionMenu(false)
+            if (modelDropdownRef.current && !isOverlayEventInside(event, modelDropdownRef.current)) setShowModelDropdown(false)
+            if (traitsDropdownRef.current && !isOverlayEventInside(event, traitsDropdownRef.current)) setShowTraitsDropdown(false)
+            if (branchDropdownRef.current && !isOverlayEventInside(event, branchDropdownRef.current)) setShowBranchDropdown(false)
+            if (mentionMenuRef.current && !isOverlayEventInside(event, mentionMenuRef.current)) setShowMentionMenu(false)
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') dismissMenus()
         }
-        document.addEventListener('pointerdown', handleClickOutside, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissMenus)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handleClickOutside, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(dismissMenus)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenus)
         return () => {
-            document.removeEventListener('pointerdown', handleClickOutside, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissMenus)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenus)
         }
     }, [

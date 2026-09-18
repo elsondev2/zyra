@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useDeferredValue } from 'react'
 import { GitBranch, GitPullRequest, RefreshCw, Search, X } from 'lucide-react'
 import { Checkbox, Input, Radio, Select } from '@/components/ui/FormControls'
@@ -74,7 +75,7 @@ export function InitGitModal({
     if (!isOpen) return null
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={step === 'config' ? onClose : undefined}>
+        <NativeOverlayPortal><div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={step === 'config' ? onClose : undefined}>
             <div
                 className="bg-sparkle-card border border-white/10 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[95vh] flex flex-col m-4 overflow-hidden"
                 onClick={(event) => event.stopPropagation()}
@@ -355,6 +356,6 @@ export function InitGitModal({
                     )}
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

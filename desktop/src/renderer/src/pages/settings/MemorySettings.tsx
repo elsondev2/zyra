@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Copy, RefreshCw } from 'lucide-react'
-import type { ZyraMemoryOverview } from '@shared/contracts/memory-contracts'
+import type { ZyraMemoryOverview, ZyraMemoryJobStatus } from '@shared/contracts/memory-contracts'
+import { ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS } from '@shared/assistant/runtime-policy'
+import { useSettings } from '@/lib/settings'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
+import { SettingsPageLink } from './SettingsPageTabs'
+import { SettingsKeyValueList } from './SettingsKeyValueList'
 import {
     SettingsButton,
     SettingsNotice,
     SettingsPageContainer,
     SettingsRow,
-    SettingsSection
+    SettingsSection,
+    SettingsSelect
 } from './settings-layout'
 import { createSettingsRowTargetId } from './settings-search'
 
@@ -37,16 +42,18 @@ type LoadState =
     | { status: 'ready'; overview: ZyraMemoryOverview; error: null }
     | { status: 'error'; overview: ZyraMemoryOverview | null; error: string }
 
-export default function MemorySettings() {
+export type MemorySettingsView = 'overview' | 'inspect'
+
+export default function MemorySettings({ view = 'overview' }: { view?: MemorySettingsView }) {
     const [state, setState] = useState<LoadState>(() => cachedMemoryOverview
         ? { status: 'ready', overview: cachedMemoryOverview, error: null }
         : { status: 'loading', overview: null, error: null })
     const [selectedId, setSelectedId] = useState<string | null>(() => cachedMemoryOverview?.memoryLayers[0]?.id || null)
-    const [copiedPath, setCopiedPath] = useState<string | null>(null)
+    const [copiedValue, setCopiedValue] = useState<string | null>(null)
     const requestIdRef = useRef(0)
     const copiedTimerRef = useRef<number | null>(null)
 
-    const load = async (forceRefresh = false) => {
+    const load = useCallback(async (forceRefresh = false) => {
         if (!forceRefresh && cachedMemoryOverview && Date.now() - cachedMemoryOverviewAt < MEMORY_OVERVIEW_TTL_MS) {
             setState({ status: 'ready', overview: cachedMemoryOverview, error: null })
             setSelectedId((current) => current || cachedMemoryOverview?.memoryLayers[0]?.id || null)
@@ -72,81 +79,204 @@ export default function MemorySettings() {
                 error: error instanceof Error ? error.message : 'Could not load local memory.'
             }))
         }
-    }
+    }, [])
 
     useEffect(() => {
-        void load()
+        if (view === 'inspect') void load()
         return () => {
             requestIdRef.current += 1
             if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
         }
-    }, [])
+    }, [load, view])
 
-    const overview = state.overview
-    const selectedLayer = useMemo(() => overview?.memoryLayers.find((layer) => layer.id === selectedId) || overview?.memoryLayers[0] || null, [overview, selectedId])
-
-    const copyPath = async (path: string) => {
+    const copyValue = useCallback(async (value: string) => {
         try {
-            const result = await window.devscope.copyToClipboard(path)
-            if (result?.success === false) throw new Error(result.error || 'Could not copy the path.')
-            setCopiedPath(path)
+            const result = await window.devscope.copyToClipboard(value)
+            if (result?.success === false) throw new Error(result.error || 'Could not copy this value.')
+            setCopiedValue(value)
             if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
             copiedTimerRef.current = window.setTimeout(() => {
                 copiedTimerRef.current = null
-                setCopiedPath((current) => current === path ? null : current)
+                setCopiedValue((current) => current === value ? null : current)
             }, 1400)
         } catch (error) {
             setState((current) => ({
                 status: 'error',
                 overview: current.overview,
-                error: error instanceof Error ? error.message : 'Could not copy the path.'
+                error: error instanceof Error ? error.message : 'Could not copy this value.'
             }))
         }
-    }
+    }, [])
 
-    const copyButton = (path: string, label: string) => (
-        <SettingsButton variant="ghost" onClick={() => void copyPath(path)} aria-label={`Copy ${label}`}>
-            {copiedPath === path ? <Check size={13} /> : <Copy size={13} />}
-            {copiedPath === path ? 'Copied' : 'Copy'}
-        </SettingsButton>
+    return (
+        <SettingsPageContainer title={view === 'inspect' ? 'Saved memory' : 'Context & memory'} navigation={<></>} backTo="/settings/assistant/memory" backLabel="Context & memory" showSettingsBack={view === 'inspect'}>
+            {view === 'overview' ? (
+                <MemoryOverviewView />
+            ) : (
+                <MemoryInspectView
+                    state={state}
+                    selectedId={selectedId}
+                    setSelectedId={setSelectedId}
+                    load={load}
+                    copiedValue={copiedValue}
+                    copyValue={copyValue}
+                />
+            )}
+        </SettingsPageContainer>
+    )
+}
+
+function MemoryOverviewView() {
+    const { settings, updateSettings } = useSettings()
+    const { job, error: jobError } = useMemoryJobStatus()
+    const jobLabel = jobError ? 'Unavailable' : job?.phase === 'running' ? 'Updating memory'
+        : job?.phase === 'waiting' ? 'Waiting for chats to be idle'
+            : job?.phase === 'error' ? 'Update needs attention'
+                : job?.phase === 'offline' ? 'Background service is idle'
+                    : job ? 'Ready for the next conversation' : 'Checking'
+    const jobDescription = jobError || job?.lastError
+        || (job?.lastSuccessAt ? `Last saved ${new Date(job.lastSuccessAt).toLocaleString()}`
+            : job?.lastCheckedAt ? `Last checked ${new Date(job.lastCheckedAt).toLocaleString()}. No new memory was needed.`
+                : 'Useful context is saved after a conversation becomes idle.')
+
+    return (
+        <>
+            <SettingsSection title="Context" searchSection="Reasoning and context">
+                <SettingsRow
+                    title="Context limit"
+                    description="Summarize older context before it reaches this token limit."
+                    info="Smaller model windows use a lower safe limit."
+                    status={formatContextTokenLimit(settings.assistantContextCompactionThresholdTokens)}
+                    statusTone="info"
+                    control={(
+                        <SettingsSelect
+                            value={String(settings.assistantContextCompactionThresholdTokens)}
+                            onChange={(event) => updateSettings({ assistantContextCompactionThresholdTokens: Number(event.target.value) })}
+                            aria-label="Context compaction limit"
+                        >
+                            {ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS.map((tokens) => (
+                                <option key={tokens} value={tokens}>{formatContextTokenLimit(tokens)} tokens</option>
+                            ))}
+                        </SettingsSelect>
+                    )}
+                />
+            </SettingsSection>
+
+            <SettingsSection title="Memory">
+                <SettingsRow title="Automatic updates" description={jobDescription} status={jobLabel} statusTone={jobError || job?.phase === 'error' ? 'danger' : 'muted'} />
+                <SettingsPageLink to="/settings/assistant/memory/inspect" title="Inspect saved memory" description="Read saved context and copy its file locations." />
+            </SettingsSection>
+        </>
+    )
+}
+
+function MemoryInspectView({ state, selectedId, setSelectedId, load, copiedValue, copyValue }: {
+    state: LoadState
+    selectedId: string | null
+    setSelectedId: (id: string) => void
+    load: (forceRefresh?: boolean) => Promise<void>
+    copiedValue: string | null
+    copyValue: (value: string) => Promise<void>
+}) {
+    const overview = state.overview
+    const selectedLayer = useMemo(
+        () => overview?.memoryLayers.find((layer) => layer.id === selectedId) || overview?.memoryLayers[0] || null,
+        [overview, selectedId]
     )
 
     return (
-        <SettingsPageContainer title="Memory" backTo="/settings/data" backLabel="Data & privacy">
-            <SettingsSection title="Memory" headerAction={<SettingsButton variant="ghost" onClick={() => void load(true)} disabled={state.status === 'loading'}><RefreshCw size={12} className={state.status === 'loading' ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
+        <>
+            <SettingsSection title="Layers" headerAction={<SettingsButton variant="ghost" onClick={() => void load(true)} disabled={state.status === 'loading'}><RefreshCw size={12} className={state.status === 'loading' ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
                 {state.status === 'error' ? <SettingsNotice tone="error">{state.error}</SettingsNotice> : null}
-                <SettingsRow title="Zyra root" description="Local root used by the active Zyra installation." status={overview?.rootPath || 'Loading…'} statusTone={overview ? 'muted' : 'info'} control={overview ? copyButton(overview.rootPath, 'Zyra root') : null} />
-                <SettingsRow title="Memory directory" description="Folder containing the memory layers loaded before a chat starts." status={overview?.memoryDirectory || 'Loading…'} statusTone={overview ? 'muted' : 'info'} control={overview ? copyButton(overview.memoryDirectory, 'memory directory') : null} />
-                <SettingsRow title="Sessions directory" description="Local location for canonical session records." status={overview?.sessionsDirectory || 'Loading…'} statusTone={overview ? 'muted' : 'info'} control={overview ? copyButton(overview.sessionsDirectory, 'sessions directory') : null} />
-                <SettingsRow title="Runtime defaults" description="Default model and thinking level used by the local runtime." control={<span className="text-xs font-medium text-sparkle-text-secondary">{overview ? `${overview.defaultModel} · ${overview.defaultThinking}` : 'Loading…'}</span>} />
+                {overview?.memoryLayers.length && selectedLayer ? (
+                    <>
+                        <SettingsRow
+                            title="Memory layer"
+                            description="Choose a file to read its saved context."
+                            status={formatBytes(selectedLayer.size)}
+                            info={<div className="space-y-2"><p>{selectedLayer.summary || 'No stable summary yet.'}</p><p>Updated {new Date(selectedLayer.updatedAt).toLocaleString()}</p><code className="block break-all text-[11px]">{selectedLayer.filePath}</code></div>}
+                            control={<div className="flex items-center gap-1"><SettingsSelect value={selectedLayer.id} onChange={(event) => setSelectedId(event.target.value)} aria-label="Memory layer">{overview.memoryLayers.map((layer) => <option key={layer.id} value={layer.id}>{layer.title}</option>)}</SettingsSelect><MemoryCopyButton value={selectedLayer.filePath} label={`${selectedLayer.title} path`} copiedValue={copiedValue} onCopy={copyValue} /></div>}
+                        />
+                        <pre
+                            data-settings-search-target={createSettingsRowTargetId('Layers', 'File content')}
+                            tabIndex={-1}
+                            aria-label={`${selectedLayer.title} content`}
+                            className="max-h-[400px] overflow-auto whitespace-pre-wrap break-words border-t border-[var(--settings-row-divider)] p-4 font-mono text-[12px] leading-5 text-[var(--settings-text-secondary)] [scrollbar-gutter:stable]"
+                        >{selectedLayer.content || 'This memory layer is empty.'}</pre>
+                    </>
+                ) : <SettingsNotice>{state.status === 'loading' ? 'Loading memory layers…' : state.status === 'error' ? 'Memory layers could not be loaded.' : 'No memory layers were found.'}</SettingsNotice>}
             </SettingsSection>
 
-            <SettingsSection title="Layers">
-                {overview?.memoryLayers.length ? overview.memoryLayers.map((layer) => (
-                    <SettingsRow
-                        key={layer.id}
-                        title={layer.title}
-                        description={layer.summary || 'No stable summary yet.'}
-                        status={`${formatBytes(layer.size)} · updated ${new Date(layer.updatedAt).toLocaleString()}`}
-                        className={selectedLayer?.id === layer.id ? 'bg-[var(--settings-active)]' : undefined}
-                        control={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => setSelectedId(layer.id)}>{selectedLayer?.id === layer.id ? 'Selected' : 'View'}</SettingsButton>{copyButton(layer.filePath, `${layer.title} path`)}</div>}
-                    />
-                )) : <SettingsNotice>{state.status === 'loading' ? 'Loading memory layers…' : 'No memory layers were found.'}</SettingsNotice>}
+            <SettingsSection title="Locations">
+                {overview ? <SettingsKeyValueList label="Memory locations" items={[
+                    ['root', 'Zyra data', overview.rootPath],
+                    ['memory', 'Memory files', overview.memoryDirectory],
+                    ['sessions', 'Chat records', overview.sessionsDirectory],
+                    ['cli', 'CLI entry', overview.cliPath]
+                ].map(([id, label, value]) => ({ id, label, value: <div className="flex min-w-0 items-center justify-end gap-2"><code className="min-w-0 truncate text-[11px]" title={value}>{value}</code><MemoryCopyButton value={value} label={`${label} path`} copiedValue={copiedValue} onCopy={copyValue} /></div> }))} /> : <SettingsNotice>{state.status === 'loading' ? 'Loading locations…' : 'Locations are unavailable.'}</SettingsNotice>}
             </SettingsSection>
-
-            {selectedLayer ? (
-                <SettingsSection title={selectedLayer.title}>
-                    <SettingsRow searchTargetId={createSettingsRowTargetId('Layers', 'File content')} title="File content" description="Read-only view of the selected local memory layer.">
-                        <pre className="mt-3 max-h-[480px] overflow-auto whitespace-pre-wrap border-t border-[var(--settings-border)] py-4 font-mono text-[12px] leading-relaxed text-sparkle-text-secondary">{selectedLayer.content || 'This memory layer is empty.'}</pre>
-                    </SettingsRow>
-                </SettingsSection>
-            ) : null}
 
             <SettingsSection title="Recommended prompts">
-                {overview?.recommendedPrompts.length ? overview.recommendedPrompts.map((prompt) => <SettingsRow key={prompt} title={prompt} description="Suggested prompt derived from the active memory setup." />) : <SettingsNotice>No recommended prompts are available.</SettingsNotice>}
+                {overview?.recommendedPrompts.length ? overview.recommendedPrompts.map((prompt) => (
+                    <SettingsRow key={prompt} title={<span className="block truncate" title={prompt}>{prompt}</span>} description="Copy this suggestion into a chat." control={<MemoryCopyButton value={prompt} label="suggested prompt" copiedValue={copiedValue} onCopy={copyValue} />} />
+                )) : <SettingsNotice>{state.status === 'loading' ? 'Loading suggestions…' : 'No recommended prompts are available.'}</SettingsNotice>}
             </SettingsSection>
-        </SettingsPageContainer>
+        </>
     )
+}
+
+function useMemoryJobStatus(): { job: ZyraMemoryJobStatus | null; error: string | null } {
+    const [job, setJob] = useState<ZyraMemoryJobStatus | null>(null)
+    const [error, setError] = useState<string | null>(null)
+
+    useEffect(() => {
+        let mounted = true
+        let pending = false
+        const read = async () => {
+            if (pending || document.hidden) return
+            pending = true
+            try {
+                const result = await window.devscope.memory.getJobStatus()
+                if (mounted) {
+                    if (result.success) { setJob(result.status); setError(null) }
+                    else setError(result.error || 'Could not check memory updates.')
+                }
+            } catch {
+                if (mounted) setError('Could not check memory updates; retrying automatically.')
+            } finally {
+                pending = false
+            }
+        }
+        void read()
+        const timer = window.setInterval(() => void read(), 5000)
+        document.addEventListener('visibilitychange', read)
+        return () => {
+            mounted = false
+            window.clearInterval(timer)
+            document.removeEventListener('visibilitychange', read)
+        }
+    }, [])
+
+    return { job, error }
+}
+
+function MemoryCopyButton({ value, label, copiedValue, onCopy }: {
+    value: string
+    label: string
+    copiedValue: string | null
+    onCopy: (value: string) => Promise<void>
+}) {
+    const copied = copiedValue === value
+    return (
+        <SettingsButton variant="ghost" onClick={() => void onCopy(value)} aria-label={`Copy ${label}`}>
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+            {copied ? 'Copied' : 'Copy'}
+        </SettingsButton>
+    )
+}
+
+function formatContextTokenLimit(value: number): string {
+    return `${Math.round(value / 1_000).toLocaleString()}k`
 }
 
 function formatBytes(value: number): string {

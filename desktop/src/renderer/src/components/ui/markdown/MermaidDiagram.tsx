@@ -1,3 +1,4 @@
+import { defaultThemeTokens } from '@shared/preferences/default-theme-tokens'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import mermaid from 'mermaid'
 import { useMarkdownVisualTheme } from './markdownTheme'
@@ -6,12 +7,13 @@ import { useThemeRevision } from '@/lib/use-theme-revision'
 function readMermaidTheme(visualTheme: 'light' | 'dark') {
     const root = getComputedStyle(document.documentElement)
     const read = (property: string, fallback: string) => root.getPropertyValue(property).trim() || fallback
-    const background = read('--color-bg', visualTheme === 'light' ? '#f9fafb' : '#0c121f')
-    const surface = read('--color-card', visualTheme === 'light' ? '#ffffff' : '#131c2c')
-    const text = read('--color-text', visualTheme === 'light' ? '#1e293b' : '#f0f4f8')
-    const supportingText = read('--color-text-secondary', visualTheme === 'light' ? '#475569' : '#aab4c3')
-    const border = read('--color-border-secondary', visualTheme === 'light' ? '#cbd5e1' : '#334155')
-    const accent = read('--accent-primary', '#3b82f6')
+    const fallback = defaultThemeTokens(visualTheme)
+    const background = read('--color-bg', fallback.bg)
+    const surface = read('--color-card', fallback.card)
+    const text = read('--color-text', fallback.text)
+    const supportingText = read('--color-text-secondary', fallback.textSecondary)
+    const border = read('--color-border-secondary', fallback.borderSecondary)
+    const accent = read('--accent-primary', fallback.primary)
     const accentSurface = read('--color-accent', surface)
     return {
         cacheKey: [visualTheme, background, surface, text, supportingText, border, accent, accentSurface].join(':'),

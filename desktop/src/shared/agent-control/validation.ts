@@ -268,12 +268,36 @@ export function assertControlSemanticActionSequenceRequest(value: unknown): Cont
             assertRoutineSequenceKey(key, modifiers, index)
             return { type: 'key', key, modifiers, sideEffect: 'none' }
         }
+        if (record.type === 'click_point') {
+            return {
+                type: 'click_point',
+                x: pointerCoordinate(record.x, `steps[${index}].x`),
+                y: pointerCoordinate(record.y, `steps[${index}].y`),
+                sideEffect: 'none'
+            }
+        }
+        if (record.type === 'drag') {
+            return {
+                type: 'drag',
+                fromX: pointerCoordinate(record.fromX, `steps[${index}].fromX`),
+                fromY: pointerCoordinate(record.fromY, `steps[${index}].fromY`),
+                toX: pointerCoordinate(record.toX, `steps[${index}].toX`),
+                toY: pointerCoordinate(record.toY, `steps[${index}].toY`),
+                ...(record.durationMs === undefined ? {} : { durationMs: finiteNumber(record.durationMs, `steps[${index}].durationMs`, 0, 5_000) }),
+                sideEffect: 'none'
+            }
+        }
         if (record.type === 'wait') {
             return {
                 type: 'wait',
                 durationMs: finiteNumber(record.durationMs, `steps[${index}].durationMs`, 0, 2_000),
                 sideEffect: 'none'
             }
+        }
+        if (record.type === 'stroke') {
+            const action = assertControlAction(record)
+            if (action.type !== 'stroke') return fail('Invalid stroke action.')
+            return { type: 'stroke', points: action.points, durationMs: action.durationMs, sideEffect: 'none' }
         }
         return fail(`Computer sequence step ${index + 1} has an unsupported action.`)
     })

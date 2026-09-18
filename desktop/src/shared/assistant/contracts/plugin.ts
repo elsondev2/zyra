@@ -178,9 +178,19 @@ export interface AssistantPluginDownloadInput {
     id: string
 }
 
+export interface AssistantPluginDownloadProgress {
+    phase: 'metadata' | 'downloading' | 'inspecting'
+    completedFiles: number
+    totalFiles: number
+    completedBytes: number
+    totalBytes: number
+    cacheHits: number
+}
+
 export interface AssistantPluginDownload {
     id: string
     status: 'downloading' | 'ready' | 'failed'
+    progress?: AssistantPluginDownloadProgress
     inspection?: AssistantPluginInspection
     error?: string
 }
@@ -204,17 +214,20 @@ export interface AssistantSetPluginSetInput {
 
 export interface AssistantRefreshChatPluginScopeInput {
     sessionId: string
+    expectedCatalogRevision?: number
 }
 
 export interface AssistantSetPluginStateInput {
     pluginId: string
     state: 'active' | 'disabled'
+    expectedCatalogRevision?: number
 }
 
 export interface AssistantRollbackPluginInput {
     pluginId: string
     releaseId: string
     confirmed: true
+    expectedCatalogRevision?: number
 }
 
 export interface AssistantPluginScopeDiff {

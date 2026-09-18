@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { getOverlayActiveElement } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, X } from 'lucide-react'
 import type { ExternalBrowserHistoryImportResult, ExternalBrowserHistoryProfile, ExternalBrowserHistoryScanResult } from '@shared/external-browser-history-contracts'
@@ -41,7 +44,7 @@ export function AssistantBrowserHistoryImportDialog({ onClose, onImported }: { o
     }, [scan?.profiles])
 
     useEffect(() => {
-        const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        const previouslyFocused = getOverlayActiveElement()
         dialogRef.current?.focus()
         return () => {
             window.requestAnimationFrame(() => previouslyFocused?.focus())
@@ -62,20 +65,20 @@ export function AssistantBrowserHistoryImportDialog({ onClose, onImported }: { o
             }
             const first = focusable[0]
             const last = focusable[focusable.length - 1]
-            if (document.activeElement === dialogRef.current) {
+            if (getOverlayActiveElement() === dialogRef.current) {
                 event.preventDefault()
                 const target = event.shiftKey ? last : first
                 target.focus()
-            } else if (event.shiftKey && document.activeElement === first) {
+            } else if (event.shiftKey && getOverlayActiveElement() === first) {
                 event.preventDefault()
                 last.focus()
-            } else if (!event.shiftKey && document.activeElement === last) {
+            } else if (!event.shiftKey && getOverlayActiveElement() === last) {
                 event.preventDefault()
                 first.focus()
             }
         }
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
+        return () => removeOverlayListener1()
     }, [importing, onClose])
 
     const scanProfiles = async () => {
@@ -120,8 +123,8 @@ export function AssistantBrowserHistoryImportDialog({ onClose, onImported }: { o
     }
 
     return (
-        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-[color-mix(in_srgb,var(--color-bg)_76%,transparent)] p-4 backdrop-blur-[3px]" role="dialog" aria-modal="true" aria-label="Import Browser history">
-            <section ref={dialogRef} tabIndex={-1} className="flex max-h-[min(680px,calc(100%-24px))] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--color-card)_98%,var(--color-bg))] shadow-[0_28px_90px_rgba(0,0,0,0.42)]">
+        <AnchoredNativeOverlay><div className="absolute inset-0 z-[120] flex items-center justify-center bg-[color-mix(in_srgb,var(--color-bg)_76%,transparent)] p-4 backdrop-blur-[3px]" role="dialog" aria-modal="true" aria-label="Import Browser history">
+            <section ref={dialogRef} data-native-overlay-autofocus tabIndex={-1} className="flex max-h-[min(680px,calc(100%-24px))] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--color-card)_98%,var(--color-bg))] shadow-[0_28px_90px_rgba(0,0,0,0.42)]">
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--surface-divider)] px-3.5">
                     <Download size={14} className="text-[var(--accent-primary)]/80" />
                     <h3 className="text-[12px] font-semibold text-sparkle-text">Import Browser history</h3>
@@ -148,6 +151,6 @@ export function AssistantBrowserHistoryImportDialog({ onClose, onImported }: { o
                     </div>
                 </footer>
             </section>
-        </div>
+        </div></AnchoredNativeOverlay>
     )
 }

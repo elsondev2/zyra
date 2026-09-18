@@ -1,0 +1,175 @@
+const assert = require('node:assert/strict')
+const { join } = require('node:path')
+const { writeFileSync } = require('node:fs')
+const { app, BrowserWindow, ipcMain } = require('electron')
+
+app.setPath('userData', process.env.ZYRA_RECORDER_DOCUMENT_USER_DATA)
+const deadline = setTimeout(() => app.exit(1), 20_000)
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+app.whenReady().then(async () => {
+    let state = {
+        target: { guestWebContentsId: 1, tabId: 'browser:fixture' }, status: 'ready', title: 'Recorder fixture', elapsedMs: 65_000,
+        microphone: 'off', microphonePending: false, microphones: [{ id: 'device-1', label: 'Studio microphone' }],
+        audioSource: 'off', audioPending: false, tabAudioSupported: true, systemAudioSupported: false,
+        error: null, unsaved: false, hasArtifact: false,
+        theme: { background: '#252525', foreground: '#eeeeee', muted: '#aaaaaa', accent: '#f5a044', border: '#ffffff1a', dark: true }
+    }
+    const commands = [], sizes = [], nativeAllocations = []
+    let window, centerX, topY, availableWidth = 440
+    ipcMain.handle('read', () => state)
+    ipcMain.on('command', (_event, command) => commands.push(command))
+    ipcMain.on('resize', (_event, size) => {
+        sizes.push(size)
+        if (!window || window.isDestroyed()) return
+        const width = Math.min(availableWidth, size.width)
+        const before = window.getContentBounds()
+        const requested = { x: Math.round(centerX - width / 2), y: topY, width, height: Math.min(340, size.height) }
+        window.setContentBounds(requested)
+        nativeAllocations.push({ at: Date.now(), before, requested, actual: window.getContentBounds() })
+    })
+    window = new BrowserWindow({ width: 440, height: 340, useContentSize: true, frame: false, show: false, alwaysOnTop: true, webPreferences: { preload: join(process.env.ZYRA_RECORDER_DOCUMENT_USER_DATA, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+    const initialBounds = window.getContentBounds()
+    centerX = initialBounds.x + initialBounds.width / 2; topY = initialBounds.y
+    const { buildBrowserRecordingOverlayDocument } = require(process.env.ZYRA_RECORDER_DOCUMENT_MODULE)
+    const html = buildBrowserRecordingOverlayDocument()
+    assert.match(html, /default-src 'none'/)
+    assert.notEqual(html, buildBrowserRecordingOverlayDocument(), 'each document gets a fresh script nonce')
+    await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+    window.webContents.debugger.attach('1.3')
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+    window.showInactive()
+    const run = code => window.webContents.executeJavaScript(code)
+    const update = async patch => { state = { ...state, ...patch }; window.webContents.send('state', state); await delay(40) }
+    await delay(100)
+    await run(`Promise.all(document.getElementById('recorder').getAnimations().map(animation=>animation.finished.catch(()=>{})))`)
+    await run(`globalThis.recorderIdentity={root:document.getElementById('recorder'),toolbar:document.getElementById('toolbar'),timeOrigin:performance.timeOrigin,buttons:Object.fromEntries(['start','pause','stop','microphone','audio','dismiss'].map(id=>[id,document.getElementById(id)]))};
+        globalThis.sampleRecorder=()=>{const root=document.getElementById('recorder'),toolbar=document.getElementById('toolbar');const rect=element=>{const b=element.getBoundingClientRect();return{x:screenX+b.x,y:screenY+b.y,width:b.width,height:b.height}};return{at:performance.timeOrigin+performance.now(),viewport:{screenX,screenY,innerWidth,innerHeight,outerWidth,outerHeight,dpr:devicePixelRatio},card:rect(root),toolbar:rect(toolbar),metrics:{cardStyleWidth:root.style.width,cardMaxWidth:getComputedStyle(root).maxWidth,toolbarStyleWidth:getComputedStyle(toolbar).width,toolbarScrollWidth:toolbar.scrollWidth,toolbarClientWidth:toolbar.clientWidth},buttons:Object.fromEntries(Object.entries(recorderIdentity.buttons).filter(([,button])=>!button.hidden).map(([id,button])=>[id,rect(button)])),sameDocument:performance.timeOrigin===recorderIdentity.timeOrigin&&root===recorderIdentity.root&&toolbar===recorderIdentity.toolbar&&Object.entries(recorderIdentity.buttons).every(([id,button])=>button===document.getElementById(id)),scroll:[scrollX,scrollY,document.documentElement.scrollTop,document.body.scrollTop,root.scrollTop,root.scrollLeft]}};void 0`)
+    const transition = async (action, { opening = false, opacity = false } = {}) => {
+        const beforeAllocations = sizes.length
+        const beforeNativeAllocations = nativeAllocations.length
+        const result = await run(`(async()=>{const before=sampleRecorder(),frames=[];${action};let sampledOpacity=null;
+            if(${opacity}){const menu=document.getElementById('menu');const animation=menu.getAnimations().find(value=>value.effect?.getKeyframes().some(frame=>frame.transform));if(!animation)throw Error('Menu entrance animation is missing');animation.pause();animation.currentTime=75;sampledOpacity=Number.parseFloat(getComputedStyle(menu).opacity);animation.play()}
+            const started=performance.now();await new Promise(resolve=>{const sample=now=>{frames.push(sampleRecorder());if(now-started<340)requestAnimationFrame(sample);else resolve()};requestAnimationFrame(sample)});return{before,frames,after:sampleRecorder(),sampledOpacity}})()`)
+        const after = result.after
+        for (const [frameIndex, sample] of [...result.frames, after].entries()) {
+            assert.equal(sample.sameDocument, true, 'opening options retains the document, toolbar and button nodes')
+            assert(sample.scroll.every(value => value === 0), 'focusing menu items must not scroll the recorder or its document')
+            assert(Math.abs(sample.card.y - result.before.card.y) <= 1.1, 'the card grows down from its fixed top edge')
+            for (const [id, before] of Object.entries(result.before.buttons)) {
+                const button = sample.buttons[id]
+                assert(button, `${id} stays visible during options transitions`)
+                for (const key of ['x', 'y', 'width', 'height']) {
+                    if (Math.abs(button[key] - before[key]) <= 1.1) continue
+                    const details = value => ({ at: value.at, viewport: value.viewport, card: value.card, toolbar: value.toolbar, metrics: value.metrics, button: value.buttons[id], scroll: value.scroll })
+                    assert.fail(`${id} ${key} stays anchored: ${JSON.stringify({ frameIndex, frameCount: result.frames.length, before: details(result.before), frame: details(sample), lastFrame: details(result.frames.at(-1)), after: details(after), allocations: nativeAllocations.slice(beforeNativeAllocations) })}`)
+                }
+            }
+        }
+        const allocations = sizes.slice(beforeAllocations)
+        assert(allocations.length <= 2, `native bounds allocate at transition boundaries, not every animation frame: ${JSON.stringify(allocations)}`)
+        for (const axis of ['width', 'height']) {
+            const low = Math.min(result.before.card[axis], after.card[axis]), high = Math.max(result.before.card[axis], after.card[axis])
+            if (high - low > 2) assert(result.frames.some(frame => frame.card[axis] > low + .25 && frame.card[axis] < high - .25), `the actual card animates through intermediate ${axis}`)
+        }
+        if (opening) assert(after.card.height > result.before.card.height, 'options expand below the toolbar')
+        else assert(after.card.height < result.before.card.height, 'closing options returns to the compact toolbar')
+        if (opacity) assert(result.sampledOpacity > 0 && result.sampledOpacity < 1, 'the real entrance animation has intermediate opacity at75ms')
+        return result
+    }
+    assert.equal(await run("matchMedia('(prefers-reduced-motion: reduce)').matches"), false)
+    const compact = await run(`({width:document.getElementById('recorder').offsetWidth,height:document.getElementById('recorder').offsetHeight,toolbar:document.getElementById('toolbar').scrollWidth})`)
+    assert.ok(compact.width < 280 && compact.width <= compact.toolbar + 2, 'ready toolbar fits its controls without a flexible empty stretch')
+    assert.equal(await run(`['start','microphone','audio','dismiss'].every(id=>{const button=document.getElementById(id);return !button.hidden&&!button.disabled})`), true, 'ready controls offer Start, Mic, Audio and Dismiss')
+    assert.equal(await run(`['clock','pause','stop'].every(id=>document.getElementById(id).hidden)`), true, 'setup has no running timer or recording controls')
+    assert.deepEqual(commands, [], 'showing setup sends no capture or microphone commands')
+    if (process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT) writeFileSync(process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT.replace(/\.png$/, '-ready.png'), (await window.webContents.capturePage()).toPNG())
+    await transition(`document.getElementById('microphone').click()`, { opening: true, opacity: true })
+    const expanded = await run(`({width:document.getElementById('recorder').offsetWidth,height:document.getElementById('recorder').offsetHeight})`)
+    assert.ok(expanded.width > compact.width && expanded.height > compact.height)
+    if (process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT) writeFileSync(process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT.replace(/\.png$/, '-microphone.png'), (await window.webContents.capturePage()).toPNG())
+    await transition(`document.querySelector('#choices button[data-value="device-1"]').click()`)
+    await update({ microphone: 'device-1' })
+    assert.equal(await run(`document.getElementById('recorder').offsetWidth`), compact.width)
+    await transition(`document.getElementById('audio').click()`, { opening: true })
+    await transition(`document.getElementById('audio').click()`)
+    await update({ microphones: [{ id: 'device-1', label: 'Studio microphone with a long manufacturer and USB interface name' }] })
+    await transition(`document.getElementById('microphone').click()`, { opening: true })
+    assert(window.getContentBounds().width > 360, 'long microphone choices exercise the former toolbar density breakpoint')
+    await transition(`document.getElementById('microphone').click()`)
+    await update({ microphones: [{ id: 'device-1', label: 'Studio microphone' }] })
+    await run(`document.getElementById('microphone').click()`)
+    await delay(320)
+    assert.equal(await run(`document.querySelector('#choices button[data-value="device-1"]').getAttribute('aria-checked')`), 'true', 'reopening keeps the selected microphone')
+    await run(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}))`)
+    assert.equal(await run(`document.activeElement.dataset.value`), 'device-1')
+    await run(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+    await delay(320)
+    assert.equal(await run(`document.activeElement.id`), 'microphone')
+    await run(`document.getElementById('start').click();document.getElementById('dismiss').click()`)
+    await delay(20)
+    assert.ok(commands.some(command => command.kind === 'start'))
+    assert.ok(commands.some(command => command.kind === 'dismiss'))
+    const idleSizes = sizes.length
+    await delay(100)
+    assert.equal(sizes.length, idleSizes, 'settled setup does no idle resize work')
+    await update({ status: 'recording', microphone: 'off' })
+    await delay(320)
+    assert.equal(await run(`document.getElementById('duration').textContent`), '1:05')
+    assert.equal(await run('document.querySelectorAll("select").length'), 0, 'microphones use a rendered menu instead of a disappearing native select')
+    await run(`document.getElementById('microphone').click()`)
+    await delay(320)
+    assert.deepEqual(await run(`Array.from(document.querySelectorAll('#choices button'),button=>button.textContent)`), ['✓Microphone off', '✓Default microphone', '✓Studio microphone'])
+    await run(`globalThis.choiceBefore=document.querySelector('#choices button[data-value="device-1"]')`)
+    await update({ elapsedMs: 66_000 })
+    assert.equal(await run(`globalThis.choiceBefore===document.querySelector('#choices button[data-value="device-1"]')`), true, 'timer updates preserve open menu DOM and focus')
+    await run(`document.querySelector('#choices button[data-value="device-1"]').click()`)
+    await delay(320)
+    assert.ok(commands.some(command => command.kind === 'microphone' && command.deviceId === 'device-1'))
+    await run(`document.getElementById('audio').click()`)
+    assert.equal(await run(`document.querySelector('#choices button[data-value="system"]').disabled`), true)
+    await run(`document.querySelector('#choices button[data-value="tab"]').click()`)
+    await delay(320)
+    assert.ok(commands.some(command => command.kind === 'audio' && command.source === 'tab'))
+    await update({ status: 'paused' })
+    await run(`document.getElementById('pause').click()`)
+    await delay(20)
+    assert.ok(commands.some(command => command.kind === 'resume'))
+    await update({ status: 'recording', microphones: Array.from({ length: 16 }, (_, i) => ({ id: 'device-' + i, label: i === 0 ? '<img src=x onerror=alert(1)>' : 'Studio microphone ' + i })) })
+    await run(`document.getElementById('microphone').click()`)
+    await delay(320)
+    assert.equal(await run(`document.querySelectorAll('#choices img').length`), 0, 'device labels remain text')
+    assert.equal(await run(`document.documentElement.scrollWidth <= innerWidth`), true)
+    assert.ok(sizes.every(size => size.height <= 340 && size.width <= 440))
+    if (process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT) writeFileSync(process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT, (await window.webContents.capturePage()).toPNG())
+    await run(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+    await delay(320)
+    assert.equal(await run(`document.getElementById('menu').hidden`), true)
+    assert.equal(await run(`document.activeElement.id`), 'microphone')
+    await run(`document.getElementById('audio').click(); window.dispatchEvent(new Event('blur'))`)
+    await delay(320)
+    assert.equal(await run(`document.getElementById('menu').hidden`), true, 'returning focus to the page closes the native menu')
+    await update({ status: 'error', unsaved: true, error: 'Recording is ready. Choose where to save it.' })
+    assert.equal(await run(`document.getElementById('dismiss').hidden`), true, 'unsaved video cannot be dismissed')
+    await run(`document.getElementById('save-copy').click()`)
+    await delay(20)
+    assert.ok(commands.some(command => command.kind === 'save-copy'))
+    await update({ status: 'saved', unsaved: false, hasArtifact: true, error: null, theme: { ...state.theme, background: '#fafafa', foreground: '#222222', muted: '#666666', border: '#00000018', dark: false } })
+    await run(`document.getElementById('view').click()`)
+    await delay(20)
+    assert.ok(commands.some(command => command.kind === 'show-artifact'))
+    assert.equal(await run(`document.getElementById('dismiss').hidden`), false)
+    availableWidth = 276
+    window.setContentBounds({ x: Math.round(centerX - availableWidth / 2), y: topY, width: availableWidth, height: 340 })
+    await update({ status: 'recording', hasArtifact: false, elapsedMs: 3_661_000 })
+    await delay(100)
+    assert.equal(await run(`['pause','stop','microphone','audio'].every(id=>{const b=document.getElementById(id).getBoundingClientRect();return b.width>0&&b.left>=0&&b.right<=innerWidth})`), true, 'all controls remain reachable in a narrow inspector, including hour-long recordings')
+    assert.equal(await run(`document.documentElement.scrollWidth <= innerWidth`), true)
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    await run(`document.getElementById('audio').click()`)
+    assert.equal(await run(`document.getElementById('recorder').dataset.resizing`), 'false', 'reduced motion opens without a resize animation')
+    await run(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+    assert.equal(await run(`document.getElementById('menu').hidden`), true, 'reduced motion closes immediately')
+    window.webContents.debugger.detach()
+    console.log('Browser recording overlay document: ok', JSON.stringify({ commandKinds: commands.map(command => command.kind), maxHeight: Math.max(...sizes.map(size => size.height)), compactWidth: compact.width }))
+    window.destroy(); clearTimeout(deadline); app.quit()
+}).catch(error => { console.error(error); clearTimeout(deadline); app.exit(1) })

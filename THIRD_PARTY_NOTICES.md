@@ -10,6 +10,18 @@ Desktop packages also retain Electron's license and Chromium's generated license
 
 Zyra can send explicitly enabled, allowlisted product events to a user-configured [PostHog](https://posthog.com/) project through PostHog's documented capture API. Zyra does not bundle the PostHog SDK or enable its browser autocapture, session replay, heatmap, DOM capture, or remote feature-flag features. Use of a configured PostHog service remains subject to the service operator's terms and privacy settings.
 
+## Provider logos from T3 Code
+
+The Claude and Gemini SVG marks are adapted from the MIT-licensed [T3 Code icon source](https://github.com/pingdotgg/t3code/blob/de37964db26bd3260d253f138bfde2ac60fe254e/apps/web/src/components/Icons.tsx). Copyright (c) 2026 T3 Tools Inc. The complete notice is retained with the assets in `desktop/src/renderer/src/assets/provider-logos/LICENSE.t3-code.txt`. Product trademarks remain with their owners.
+
+## Pi product mark
+
+The Pi mark is sourced from [Pi's official logo](https://pi.dev/logo-auto.svg) and identifies the compatible Pi skill source. Pi's MIT notice, copyright (c) 2025 Mario Zechner, is retained in `desktop/src/renderer/src/assets/provider-logos/LICENSE.pi.txt`. The product mark remains with its owner and does not imply endorsement.
+
+## Groq product mark
+
+The Groq mark is sourced from the [official Groq favicon](https://groq.com/favicon.svg). It identifies the compatible writing service, remains the property of its owner, and does not imply endorsement. Zyra does not assign this product artwork its Apache-2.0 source-code license.
+
 ## Product logos from SVGL
 
 Zyra includes logo artwork published by the SVGL project:

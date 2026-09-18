@@ -4,22 +4,9 @@ import { stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { resolveFileMimeType, resolveProtocolFilePath } from './local-file-content'
 
-export const LOCAL_HTML_CONTENT_SECURITY_POLICY = [
-    "sandbox",
-    "default-src 'none'",
-    "base-uri 'none'",
-    "frame-ancestors 'none'",
-    "object-src 'none'",
-    "script-src 'none'",
-    "connect-src 'none'",
-    "frame-src 'none'",
-    "child-src 'none'",
-    "form-action 'none'",
-    "style-src 'unsafe-inline'",
-    "img-src data: blob:",
-    "media-src data: blob:",
-    "font-src data:"
-].join('; ')
+import { buildLocalHtmlContentSecurityPolicy } from './local-html-security-policy'
+
+export const LOCAL_HTML_CONTENT_SECURITY_POLICY = buildLocalHtmlContentSecurityPolicy()
 const PASSIVE_FILE_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; object-src 'none'"
 const LOCAL_FILE_PERMISSIONS_POLICY = [
     'camera=()',
@@ -93,18 +80,18 @@ function isMissingFileError(error: unknown): boolean {
     return false
 }
 
-function fileContentSecurityPolicy(filePath: string): string {
+function fileContentSecurityPolicy(filePath: string, htmlPolicy: string): string {
     const mimeType = resolveFileMimeType(filePath)
     return mimeType === 'text/html' || mimeType === 'image/svg+xml'
-        ? LOCAL_HTML_CONTENT_SECURITY_POLICY
+        ? htmlPolicy
         : PASSIVE_FILE_CONTENT_SECURITY_POLICY
 }
 
-function createResponseHeaders(filePath: string, fileSize: number): Headers {
+function createResponseHeaders(filePath: string, fileSize: number, htmlPolicy: string): Headers {
     return new Headers({
         'Accept-Ranges': 'bytes',
         'Content-Length': String(fileSize),
-        'Content-Security-Policy': fileContentSecurityPolicy(filePath),
+        'Content-Security-Policy': fileContentSecurityPolicy(filePath, htmlPolicy),
         'Content-Type': resolveFileMimeType(filePath),
         'Cross-Origin-Resource-Policy': 'same-origin',
         'Permissions-Policy': LOCAL_FILE_PERMISSIONS_POLICY,
@@ -194,7 +181,7 @@ function getThumbnail(filePath: string, width: number, height: number, size: num
     return request
 }
 
-export async function serveLocalFileRequest(filePath: string, request: Request): Promise<Response> {
+export async function serveLocalFileRequest(filePath: string, request: Request, htmlPolicy = LOCAL_HTML_CONTENT_SECURITY_POLICY): Promise<Response> {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
         return emptyResponse(405, { Allow: 'GET, HEAD' })
     }
@@ -219,7 +206,7 @@ export async function serveLocalFileRequest(filePath: string, request: Request):
     if (thumbnailSize && resolveFileMimeType(filePath).startsWith('image/')) {
         const thumbnail = await getThumbnail(filePath, thumbnailSize.width, thumbnailSize.height, fileSize, modifiedAt)
         if (thumbnail) {
-            const headers = createResponseHeaders(filePath, thumbnail.byteLength)
+            const headers = createResponseHeaders(filePath, thumbnail.byteLength, htmlPolicy)
             headers.set('Cache-Control', 'no-store')
             headers.set('Content-Type', 'image/png')
             const body = new Uint8Array(thumbnail.byteLength)
@@ -231,7 +218,7 @@ export async function serveLocalFileRequest(filePath: string, request: Request):
     const rangeHeader = request.method === 'GET' ? request.headers.get('range') : null
     const byteRange = rangeHeader ? resolveByteRange(rangeHeader, fileSize) : undefined
     if (rangeHeader && !byteRange) {
-        const headers = createResponseHeaders(filePath, 0)
+        const headers = createResponseHeaders(filePath, 0, htmlPolicy)
         headers.set('Content-Range', `bytes */${fileSize}`)
         return emptyResponse(416, headers)
     }
@@ -242,7 +229,7 @@ export async function serveLocalFileRequest(filePath: string, request: Request):
             headers: request.headers
         })
         const headers = new Headers(fileResponse.headers)
-        const safeHeaders = createResponseHeaders(filePath, fileSize)
+        const safeHeaders = createResponseHeaders(filePath, fileSize, htmlPolicy)
         for (const [name, value] of safeHeaders) headers.set(name, value)
 
         if (byteRange) {
@@ -265,7 +252,9 @@ export async function serveLocalFileRequest(filePath: string, request: Request):
     }
 }
 
-export function registerFileProtocol(fileProtocol: string) {
+export function registerFileProtocol(fileProtocol: string, rendererUrl?: string) {
+    const htmlPolicy = buildLocalHtmlContentSecurityPolicy(rendererUrl)
+    const scriptedPreviewPolicy = buildLocalHtmlContentSecurityPolicy(rendererUrl, true)
     protocol.handle(fileProtocol, async (request) => {
         if (request.method !== 'GET' && request.method !== 'HEAD') {
             return emptyResponse(405, { Allow: 'GET, HEAD' })
@@ -277,6 +266,8 @@ export function registerFileProtocol(fileProtocol: string) {
             log.error('Failed to resolve protocol URL:', request.url, error)
             return emptyResponse(500)
         }
-        return serveLocalFileRequest(filePath, request)
+        const previewStamp = new URL(request.url).searchParams.get('devscope-preview') || ''
+        const scriptedPreview = resolveFileMimeType(filePath) === 'text/html' && /^[a-z0-9]+$/i.test(previewStamp)
+        return serveLocalFileRequest(filePath, request, scriptedPreview ? scriptedPreviewPolicy : htmlPolicy)
     })
 }

@@ -1,3 +1,4 @@
+import { recordStreamQueue } from '@shared/performance-samples'
 import type {
     AssistantApprovalResponseInput,
     AssistantApprovePendingPlaygroundLabRequestInput,
@@ -28,6 +29,7 @@ import { assistantStreamPresentation } from './assistant-stream-presentation'
 import { rendererVisibility } from '../renderer-visibility'
 import {
     cacheHydratedThreads,
+    hasCachedSessionSelection,
     type CachedHydratedThreadState
 } from './session-hydration-cache'
 import { deriveAssistantRuntimeStatus, INITIAL_ASSISTANT_RUNTIME_STATUS, type AssistantStoreState } from './assistant-store-runtime'
@@ -47,6 +49,7 @@ import {
     applyAssistantRetainedHistory,
     applyAssistantThreadDetail,
     dematerializeAssistantHistories,
+    getAssistantMaterializedThreadIds,
     formatAssistantHistoryLoadError,
     hasAssistantPersistedThreadContent,
     hasRenderableAssistantRetainedHistory,
@@ -1141,12 +1144,23 @@ export class AssistantStore {
         }
         if (this.pendingAssistantEvents.length === 0) return
 
+        recordStreamQueue(this.pendingAssistantEvents)
         const queuedEvents = collapseAssistantDeltaEvents(this.pendingAssistantEvents)
         this.pendingAssistantEvents = []
         const previousSelectedSessionId = this.state.snapshot.selectedSessionId
         let nextSelectedSessionId = previousSelectedSessionId
         this.setState((current) => {
-            const projectedSnapshot = applyAssistantDomainEvents(current.snapshot, queuedEvents)
+            // Idle shells intentionally contain no timeline rows. Project events
+            // against their retained windows before synchronizing history, then
+            // release those display rows again in the same store transaction.
+            const materializedThreadIds = getAssistantMaterializedThreadIds(current.snapshot)
+            let eventSnapshot = current.snapshot
+            for (const [threadId, history] of Object.entries(current.historyByThreadId)) {
+                if (!materializedThreadIds.has(threadId)) {
+                    eventSnapshot = replaceAssistantVisibleHistory(eventSnapshot, threadId, history)
+                }
+            }
+            const projectedSnapshot = applyAssistantDomainEvents(eventSnapshot, queuedEvents)
             let snapshot = preserveAssistantClientRoute(
                 current.snapshot,
                 projectedSnapshot,
@@ -1172,6 +1186,7 @@ export class AssistantStore {
                     snapshot = replaceAssistantVisibleHistory(snapshot, threadId, synchronizedHistory)
                 }
             }
+            snapshot = dematerializeAssistantHistories(snapshot, getAssistantMaterializedThreadIds(snapshot))
             nextSelectedSessionId = snapshot.selectedSessionId
             return {
                 snapshot,
@@ -1294,6 +1309,9 @@ export class AssistantStore {
             return this.requestSessionHydration(sessionId, threadId, retryAttempt, true, resetLoadedRange)
         }
 
+        const validatedPreview = !resetLoadedRange && hasCachedSessionSelection(
+            this.state.snapshot, sessionId, threadId, this.hydratedThreadCache
+        ) ? currentThread : null
         const requestedRevision = currentThread ? getAssistantThreadHydrationRevision(currentThread) : null
         let request!: Promise<void>
         request = (async () => {
@@ -1334,22 +1352,12 @@ export class AssistantStore {
                     const applied = applyAssistantThreadDetail(
                         current.snapshot,
                         result.detail,
-                        resetLoadedRange ? undefined : current.historyByThreadId[threadId]
+                        resetLoadedRange ? undefined : current.historyByThreadId[threadId],
+                        validatedPreview
                     )
                     const selectedThreadId = current.snapshot.sessions
                         .find((session) => session.id === current.snapshot.selectedSessionId)?.activeThreadId || null
-                    const runningThreadIds = new Set(current.snapshot.sessions.flatMap((session) => (
-                        session.threads.filter((thread) => (
-                            ['starting', 'running', 'waiting', 'background'].includes(thread.state)
-                            || thread.hasPendingApprovals
-                            || thread.hasPendingUserInputs
-                            || thread.hasActivePlan
-                            || thread.pendingApprovals.length > 0
-                            || thread.pendingUserInputs.length > 0
-                            || Boolean(thread.activePlan)
-                        )).map((thread) => thread.id)
-                    )))
-                    if (selectedThreadId) runningThreadIds.add(selectedThreadId)
+                    const runningThreadIds = getAssistantMaterializedThreadIds(applied.snapshot)
                     const historyByThreadId = pruneAssistantHistoryCache({
                         ...current.historyByThreadId,
                         [threadId]: applied.history

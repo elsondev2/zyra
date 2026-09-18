@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { ChevronDown, Play, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
@@ -42,7 +43,7 @@ export function ServerScriptRunModal({
     if (!pendingScriptRun || pendingScriptRun.intent !== 'server') return null
 
     return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
+        <NativeOverlayPortal><div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
             <div
                 className="w-full max-w-3xl max-h-[95vh] rounded-2xl border border-white/10 bg-sparkle-card shadow-2xl m-4 overflow-hidden flex flex-col"
                 onClick={(event) => event.stopPropagation()}
@@ -195,6 +196,6 @@ export function ServerScriptRunModal({
                     </button>
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

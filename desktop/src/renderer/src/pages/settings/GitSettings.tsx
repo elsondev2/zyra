@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { useSettings } from '@/lib/settings'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
+import { GitTextGenerationSettings } from './GitTextGenerationSettings'
 import {
     SettingsButton,
     SettingsDialog,
@@ -15,6 +16,8 @@ import {
     SettingsSwitch,
     SettingsTextarea
 } from './settings-layout'
+import { SettingsPageTabs } from './SettingsPageTabs'
+import { SensitiveSettingValue } from './SensitiveSettingValue'
 
 type GlobalGitAuthor = { name: string; email: string }
 const GLOBAL_GIT_AUTHOR_TTL_MS = 2 * 60_000
@@ -28,7 +31,7 @@ registerSettingsCacheClearer('settings-git-author', () => {
     cachedGlobalGitAuthorAt = 0
 })
 
-export default function GitSettings() {
+export default function GitSettings({ view = 'git' }: { view?: 'git' | 'pull-requests' | 'writing' }) {
     const { settings, updateSettings } = useSettings()
     const [globalAuthorDraft, setGlobalAuthorDraft] = useState<GlobalGitAuthor>(() => cachedGlobalGitAuthor || { name: '', email: '' })
     const [savedGlobalAuthor, setSavedGlobalAuthor] = useState<GlobalGitAuthor>(() => cachedGlobalGitAuthor || { name: '', email: '' })
@@ -38,6 +41,7 @@ export default function GitSettings() {
     const [editValue, setEditValue] = useState('')
 
     useEffect(() => {
+        if (view !== 'git') return
         let cancelled = false
         const generation = globalGitAuthorGeneration
         if (cachedGlobalGitAuthor && Date.now() - cachedGlobalGitAuthorAt < GLOBAL_GIT_AUTHOR_TTL_MS) return
@@ -58,7 +62,7 @@ export default function GitSettings() {
             if (!cancelled) setGlobalAuthorLoading(false)
         })
         return () => { cancelled = true }
-    }, [])
+    }, [view])
 
     const globalAuthorDirty = useMemo(() => globalAuthorDraft.name.trim() !== savedGlobalAuthor.name.trim() || globalAuthorDraft.email.trim() !== savedGlobalAuthor.email.trim(), [globalAuthorDraft, savedGlobalAuthor])
 
@@ -109,17 +113,29 @@ export default function GitSettings() {
     }
 
     return (
-        <SettingsPageContainer title="Source control" backTo="/settings/workspace" backLabel="Workspace">
+        <SettingsPageContainer
+            title="Source control"
+            description="Set Git workflow defaults, pull-request behavior, and AI writing."
+            navigation={<SettingsPageTabs family="git" />}
+            backTo="/settings/workspace/source-control"
+            backLabel="Source control"
+        >
+            {view === 'writing' ? <GitTextGenerationSettings /> : view === 'pull-requests' ? (
+                <>
             <SettingsSection title="Pull requests">
                 <SettingsRow title="Default guide source" description="Instructions used unless the active project stores its own PR settings." control={<SettingsSelect value={settings.gitPullRequestDefaultGuideSource} onChange={(event) => updateSettings({ gitPullRequestDefaultGuideSource: event.target.value as typeof settings.gitPullRequestDefaultGuideSource })} aria-label="Default PR guide source"><option value="global">Global guide</option><option value="repo-template">Repository template</option><option value="none">None</option></SettingsSelect>} />
                 <SettingsRow title="Default target branch" description="Base branch proposed by the pull-request flow." status={settings.gitPullRequestDefaultTargetBranch} control={<SettingsButton onClick={() => openTextEditor('target-branch', settings.gitPullRequestDefaultTargetBranch)}>Edit</SettingsButton>} />
                 <SettingsRow title="Default change source" description="Choose which local changes are proposed when a new pull-request flow starts." control={<SettingsSelect value={settings.gitPullRequestDefaultChangeSource} onChange={(event) => updateSettings({ gitPullRequestDefaultChangeSource: event.target.value as typeof settings.gitPullRequestDefaultChangeSource })} aria-label="Default pull-request change source"><option value="unstaged">Unstaged changes</option><option value="staged">Staged changes</option><option value="local-commits">Local commits</option><option value="all-local-work">All local work</option></SettingsSelect>} />
                 <SettingsRow title="Draft by default" description="Create new pull requests as drafts unless the project overrides this setting." control={<SettingsSwitch checked={settings.gitPullRequestDefaultDraft} onCheckedChange={(gitPullRequestDefaultDraft) => updateSettings({ gitPullRequestDefaultDraft })} label="Create draft pull requests by default" />} />
+                {settings.gitPullRequestDefaultGuideSource === 'global' ? (<>
                 <SettingsRow title="Global guide mode" description="Write the fallback guide here or load it from a markdown file." control={<SettingsSegmented value={settings.gitPullRequestGlobalGuide.mode} options={[{ value: 'text', label: 'Text' }, { value: 'file', label: 'Markdown file' }]} onChange={(mode) => updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, mode } })} label="Global pull-request guide mode" />} />
-                <SettingsRow title="Global guide" description="Fallback structure, checklist, and tone for generated pull-request bodies." status={settings.gitPullRequestGlobalGuide.text.trim() ? 'Custom guide saved' : 'No guide written'} statusTone={settings.gitPullRequestGlobalGuide.text.trim() ? 'ready' : 'muted'} control={<SettingsButton disabled={settings.gitPullRequestGlobalGuide.mode !== 'text'} onClick={() => openTextEditor('global-guide', settings.gitPullRequestGlobalGuide.text)}>Edit guide</SettingsButton>} />
-                <SettingsRow title="Guide file" description="Markdown file used as the global pull-request guide." status={settings.gitPullRequestGlobalGuide.filePath || 'No file selected'} statusTone={settings.gitPullRequestGlobalGuide.filePath ? 'muted' : 'warning'} control={<div className="flex gap-1"><SettingsButton disabled={settings.gitPullRequestGlobalGuide.mode !== 'file'} onClick={() => void chooseGlobalGuideFile()}><FolderOpen size={13} />Choose .md</SettingsButton><SettingsButton variant="ghost" disabled={settings.gitPullRequestGlobalGuide.mode !== 'file' || !settings.gitPullRequestGlobalGuide.filePath} onClick={() => updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, filePath: '' } })}>Clear</SettingsButton></div>} />
+                {settings.gitPullRequestGlobalGuide.mode === 'text' ? (<SettingsRow title="Global guide" description="Fallback structure, checklist, and tone for generated pull-request bodies." status={settings.gitPullRequestGlobalGuide.text.trim() ? 'Custom guide saved' : 'No guide written'} statusTone={settings.gitPullRequestGlobalGuide.text.trim() ? 'ready' : 'muted'} control={<SettingsButton disabled={settings.gitPullRequestGlobalGuide.mode !== 'text'} onClick={() => openTextEditor('global-guide', settings.gitPullRequestGlobalGuide.text)}>Edit guide</SettingsButton>} />
+                ) : (<SettingsRow title="Guide file" description="Markdown file used as the global pull-request guide." status={settings.gitPullRequestGlobalGuide.filePath || 'No file selected'} statusTone={settings.gitPullRequestGlobalGuide.filePath ? 'muted' : 'warning'} control={<div className="flex gap-1"><SettingsButton disabled={settings.gitPullRequestGlobalGuide.mode !== 'file'} onClick={() => void chooseGlobalGuideFile()}><FolderOpen size={13} />Choose .md</SettingsButton><SettingsButton variant="ghost" disabled={settings.gitPullRequestGlobalGuide.mode !== 'file' || !settings.gitPullRequestGlobalGuide.filePath} onClick={() => updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, filePath: '' } })}>Clear</SettingsButton></div>} />)}
+                </>) : null}
             </SettingsSection>
-
+                </>
+            ) : (
+                <>
             <SettingsSection title="Workflow">
                 <SettingsRow title="Auto-refresh on project open" description="Refresh status, history, remotes, and branches when a project opens." control={<SettingsSwitch checked={settings.gitAutoRefreshOnProjectOpen} onCheckedChange={(gitAutoRefreshOnProjectOpen) => updateSettings({ gitAutoRefreshOnProjectOpen })} label="Auto-refresh Git on project open" />} />
                 <SettingsRow title="Warn on author mismatch" description="Confirm before committing when repository ownership and Git author do not align." control={<SettingsSwitch checked={settings.gitWarnOnAuthorMismatch} onCheckedChange={(gitWarnOnAuthorMismatch) => updateSettings({ gitWarnOnAuthorMismatch })} label="Warn on Git author mismatch" />} />
@@ -138,12 +154,19 @@ export default function GitSettings() {
                 {globalAuthorMessage ? <SettingsNotice tone={globalAuthorMessage.includes('updated') ? 'success' : 'neutral'}>{globalAuthorMessage}</SettingsNotice> : null}
                 <SettingsRow
                     title="Git author"
-                    description="Machine-wide author used by future commits. This does not change GitHub authentication."
-                    status={savedGlobalAuthor.name && savedGlobalAuthor.email ? `${savedGlobalAuthor.name} · ${savedGlobalAuthor.email}` : 'No global identity configured'}
+                    description="Set the default author for future commits on this machine." info="This does not change GitHub authentication."
+                    status={savedGlobalAuthor.name && savedGlobalAuthor.email ? 'Configured' : 'No global identity configured'}
                     statusTone={savedGlobalAuthor.name && savedGlobalAuthor.email ? 'ready' : 'warning'}
                     control={<SettingsButton onClick={() => { setGlobalAuthorDraft(savedGlobalAuthor); setEditDialog('identity') }} disabled={globalAuthorLoading}>{globalAuthorLoading ? 'Loading…' : 'Edit identity'}</SettingsButton>}
-                />
+                >
+                    {savedGlobalAuthor.name || savedGlobalAuthor.email ? <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--settings-text-secondary)]">
+                        {savedGlobalAuthor.name ? <span className="inline-flex items-center gap-1">Name <SensitiveSettingValue value={savedGlobalAuthor.name} label="Git author name" /></span> : null}
+                        {savedGlobalAuthor.email ? <span className="inline-flex items-center gap-1">Email <SensitiveSettingValue value={savedGlobalAuthor.email} label="Git author email" visiblePrefix={2} /></span> : null}
+                    </div> : null}
+                </SettingsRow>
             </SettingsSection>
+                </>
+            )}
 
             <SettingsDialog
                 open={editDialog !== null}

@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { Check, ChevronDown, Edit3, FileText, PanelRight, Save, Undo2 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
@@ -76,21 +79,20 @@ export function PreviewHeaderEditMenu({
     useEffect(() => {
         if (!menuVisible) return
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target as Node | null
-            if (menuRef.current?.contains(target) || controlRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, menuRef.current) || isOverlayEventInside(event, controlRef.current)) return
             closeMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') closeMenu()
         }
         const handleBlur = () => closeMenu()
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', handleBlur)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(handleBlur)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', handleBlur)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
         }
     }, [menuVisible])
 
@@ -124,7 +126,7 @@ export function PreviewHeaderEditMenu({
     return (
         <div className="relative inline-flex" ref={controlRef}>
             <div className={cn(
-                'inline-flex overflow-hidden rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] transition-[border-color,border-radius,box-shadow] duration-150',
+                'inline-flex h-7 overflow-hidden rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] transition-[border-color,border-radius,box-shadow] duration-150',
                 menuVisible && 'rounded-b-none border-b-transparent shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
             )}>
                 <button
@@ -132,7 +134,7 @@ export function PreviewHeaderEditMenu({
                     onClick={handlePrimaryAction}
                     disabled={!canToggleMode && !canOpenMenuFromPrimary}
                     className={cn(
-                        'inline-flex h-6 min-w-[112px] items-center gap-1.5 px-2.5 text-[11px] transition-colors',
+                        'inline-flex h-full min-w-[112px] items-center gap-1.5 px-2.5 text-[11px] transition-colors',
                         canToggleMode || canOpenMenuFromPrimary
                             ? 'text-sparkle-text hover:bg-[var(--surface-hover)]'
                             : 'cursor-not-allowed text-sparkle-text-muted/45'
@@ -146,7 +148,7 @@ export function PreviewHeaderEditMenu({
                 <button
                     type="button"
                     onClick={toggleMenu}
-                    className="inline-flex h-6 w-7 items-center justify-center border-l border-[var(--surface-divider)] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                    className="inline-flex h-full w-7 items-center justify-center border-l border-[var(--surface-divider)] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                     title="File view menu"
                     aria-label="File view menu"
                     aria-haspopup="menu"
@@ -157,7 +159,7 @@ export function PreviewHeaderEditMenu({
             </div>
 
             {menuVisible ? (
-                <div
+                <AnchoredNativeOverlay><div
                     ref={menuRef}
                     className="absolute left-0 top-full z-[160] -mt-px w-full overflow-hidden rounded-b-[7px]"
                 >
@@ -278,7 +280,7 @@ export function PreviewHeaderEditMenu({
                             ) : null}
                         </div>
                     </AnimatedHeight>
-                </div>
+                </div></AnchoredNativeOverlay>
             ) : null}
         </div>
     )

@@ -13,6 +13,16 @@ import {
     type WindowsControlOverlayAppearance
 } from './windows-control-overlay'
 
+let chromePairing: ChromePairingServer | null = null
+let chromeAppearanceProvider: (() => Promise<Record<string, unknown>>) | null = null
+export function configureChromeBrowserAppearance(provider: () => Promise<Record<string, unknown>>) { chromeAppearanceProvider = provider }
+export async function refreshChromeBrowserAppearance(): Promise<void> {
+    if (chromePairing && chromeAppearanceProvider) chromePairing.setAppearance(await chromeAppearanceProvider())
+}
+export async function connectChromeExtension(extensionId: string, instanceId: string) {
+    getAgentControlBroker()
+    return chromePairing!.connectExtension(extensionId, instanceId)
+}
 let broker: AgentControlBroker | null = null
 let chromeDriver: ChromeExtensionDriver | null = null
 let browserDriver: ZyraBrowserDriver | null = null
@@ -38,10 +48,14 @@ export function getAgentControlBroker(): AgentControlBroker {
     const artifactRoot = join(userData, 'agent-control', 'artifacts')
     rmSync(artifactRoot, { recursive: true, force: true })
     const pairing = new ChromePairingServer()
+    chromePairing = pairing
+    void refreshChromeBrowserAppearance().catch(() => undefined)
     browserDriver = new ZyraBrowserDriver(join(artifactRoot, 'browser'))
     chromeDriver = new ChromeExtensionDriver(pairing, join(artifactRoot, 'chrome'))
+    pairing.resolveTabTarget = (pairId, tabId) => chromeDriver?.getTargetId(pairId, tabId)
     const windowsDriver = new WindowsDesktopDriver(join(userData, 'agent-control', 'artifacts', 'windows'))
     broker = new AgentControlBroker({ userDataPath: userData, drivers: [browserDriver, chromeDriver, windowsDriver], pairing })
+    pairing.on('state-changed', () => broker?.emit('changed', broker.state()))
     windowsControlOverlay = new WindowsControlOverlayManager(broker, {
         loadAppearance: () => windowsControlOverlayAppearance?.() || {}
     })
@@ -62,6 +76,7 @@ export function getAgentControlBroker(): AgentControlBroker {
 }
 
 export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string, sessionMode: 'normal' | 'incognito') {
+    if (ownerThreadId.startsWith('accessory:')) throw new Error('Accessory Browser tabs cannot become agent-control targets.')
     const controlBroker = getAgentControlBroker()
     const guestEntry = trustedBrowserGuests.bind(ownerWebContentsId, guestWebContentsId, tabId, ownerThreadId, sessionMode)
     const existingTargetId = browserTargetByGuestIdentity.get(guestEntry.guestIdentity)
@@ -88,17 +103,19 @@ export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebCon
 export function transferTrustedBrowserTargetOwner(
     guestWebContentsId: number,
     previousOwnerWebContentsId: number,
-    ownerWebContentsId: number
+    ownerWebContentsId: number,
+    ownerThreadId?: string | null
 ): void {
     if (previousOwnerWebContentsId === ownerWebContentsId) return
-    const entry = trustedBrowserGuests.transferOwner(guestWebContentsId, previousOwnerWebContentsId, ownerWebContentsId)
+    const previousThreadId = trustedBrowserGuests.findByGuestId(guestWebContentsId)?.ownerThreadId
+    const entry = trustedBrowserGuests.transferOwner(guestWebContentsId, previousOwnerWebContentsId, ownerWebContentsId, ownerThreadId)
     const targetId = browserTargetByGuestIdentity.get(entry.guestIdentity)
     if (!targetId || !broker) return
     try {
         broker.transferTargetOwner(targetId, previousOwnerWebContentsId, ownerWebContentsId)
     } catch (error) {
         try { broker.transferTargetOwner(targetId, ownerWebContentsId, previousOwnerWebContentsId) } catch {}
-        trustedBrowserGuests.transferOwner(guestWebContentsId, ownerWebContentsId, previousOwnerWebContentsId)
+        trustedBrowserGuests.transferOwner(guestWebContentsId, ownerWebContentsId, previousOwnerWebContentsId, previousThreadId)
         throw error
     }
 }

@@ -1,3 +1,4 @@
+import { browserBridgeJsonReplacer } from '../../shared/browser-bridge-json'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -482,6 +483,7 @@ export class BrowserAssistantBridge {
             case 'getStatus': return service.getStatus()
             case 'getAccountOverview': return service.getAccountOverview(args[0] === true)
             case 'redeemAccountReset': return service.redeemAccountReset(args[0] as any)
+            case 'getUsageSummary': return service.getUsageSummary(args[0] as any)
             case 'getSessionTurnUsage': return service.getSessionTurnUsage(args[0] as any)
             case 'listModels': return service.listModels(args[0] === true)
             case 'listProjects': return service.listProjects()
@@ -495,13 +497,13 @@ export class BrowserAssistantBridge {
             }
             case 'refreshChatPluginScope': return service.refreshChatPluginScope(args[0] as any)
             case 'setPluginState': {
-                const input = args[0] as { pluginId: string; state: 'active' | 'disabled' }
-                const result = await service.setPluginState(input.pluginId, input.state)
+                const input = args[0] as { pluginId: string; state: 'active' | 'disabled'; expectedCatalogRevision?: number }
+                const result = await service.setPluginState(input.pluginId, input.state, input.expectedCatalogRevision)
                 return { ...result, catalog: withoutDesktopPluginPaths(result.catalog) }
             }
             case 'rollbackPlugin': {
-                const input = args[0] as { pluginId: string; releaseId: string; confirmed: true }
-                const result = await service.rollbackPlugin(input.pluginId, input.releaseId, input.confirmed)
+                const input = args[0] as { pluginId: string; releaseId: string; confirmed: true; expectedCatalogRevision?: number }
+                const result = await service.rollbackPlugin(input.pluginId, input.releaseId, input.confirmed, input.expectedCatalogRevision)
                 return { ...result, catalog: withoutDesktopPluginPaths(result.catalog) }
             }
             case 'createProject': return service.createProject(args[0] as any, args[1] as string | undefined)
@@ -541,6 +543,7 @@ export class BrowserAssistantBridge {
             case 'deleteSession': return service.deleteSession(args[0] as string)
             case 'deleteMessage': return service.deleteMessage(args[0] as any)
             case 'clearLogs': return service.clearLogs(args[0] as any)
+            case 'updateSessionConfiguration': return service.updateSessionConfiguration(args[0] as any)
             case 'setSessionProject': return service.setSessionProject(args[0] as string, args[1] as any)
             case 'setSessionProjectPath': return service.setSessionProjectPath(args[0] as string, args[1] as string | null)
             case 'setPlaygroundRoot': return service.setPlaygroundRoot(args[0] as any)
@@ -711,7 +714,7 @@ export class BrowserAssistantBridge {
         response.statusCode = statusCode
         response.setHeader('Content-Type', 'application/json; charset=utf-8')
         response.setHeader('Cache-Control', 'no-store')
-        response.end(JSON.stringify(value))
+        response.end(JSON.stringify(value, browserBridgeJsonReplacer))
     }
 
     private async readJsonBody(request: IncomingMessage): Promise<unknown> {

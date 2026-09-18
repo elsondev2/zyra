@@ -9,6 +9,7 @@ import {
     INITIAL_ASSISTANT_HISTORY_TURN_LIMIT,
     INITIAL_ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS,
     INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS,
+    readAssistantActivity,
     readAssistantHistoryPage,
     readAssistantReviewIndex,
     readAssistantThreadDetail,
@@ -20,6 +21,7 @@ import {
     serializeAssistantActivityPayload
 } from '../src/main/assistant/persistence-activity-payload'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
+import { readAssistantPersistenceRecord, readHydratedThreadDetails } from '../src/main/assistant/persistence-read'
 import { CanonicalHistoryRefreshTracker, shouldRefreshCanonicalHistory } from '../src/main/assistant/canonical-history-refresh-policy'
 import { replaceAssistantSnapshot, upsertAssistantCanonicalTimelineProjection } from '../src/main/assistant/persistence-write'
 import { createDefaultSnapshot } from '../src/main/assistant/projector'
@@ -86,11 +88,14 @@ for (let index = 1; index <= 4; index += 1) {
     messages.push({ id: `user-${index}`, role: 'user', text: `Prompt ${index}`, turnId, streaming: false, timelineSequence: index * 10, createdAt: at(index), updatedAt: at(index) })
     activities.push({
         id: `activity-${index}`,
-        kind: index === 2 ? 'file-change' : 'command',
-        tone: 'tool',
-        summary: `Tool ${index}`,
+        kind: index === 2 ? 'file-change' : index === 4 ? 'error' : 'command',
+        tone: index === 4 ? 'warning' : 'tool',
+        summary: index === 4 ? 'Assistant interrupted' : `Tool ${index}`,
+        ...(index === 4 ? { detail: 'Request was aborted' } : {}),
         turnId,
-        timelineSequence: index * 10 + 1,
+        ...(index === 4 ? { turnTerminalOutcome: 'interrupted' as const } : {}),
+        // The interrupted turn ends after its last visible assistant text.
+        timelineSequence: index * 10 + (index === 4 ? 3 : 1),
         createdAt: at(index),
         payload: index === 2 ? {
             category: 'file-change',
@@ -105,6 +110,10 @@ for (let index = 1; index <= 4; index += 1) {
             patch: '--- a/src/review-index.ts\n+++ b/src/review-index.ts\n@@ -1 +1 @@\n-old\n+new',
             fileCount: 1,
             startedAt: at(index),
+            completedAt: at(index)
+        } : index === 4 ? {
+            status: 'cancelled',
+            stopReason: 'error',
             completedAt: at(index)
         } : { status: 'completed' }
     })
@@ -131,6 +140,163 @@ snapshot.selectedSessionId = session.id
 snapshot.sessions = [session]
 
 const SQL = await initSqlJs()
+const legacySchemaDb = new SQL.Database()
+legacySchemaDb.run(`
+    CREATE TABLE assistant_activities (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        tone TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        detail TEXT,
+        turn_id TEXT,
+        timeline_sequence INTEGER,
+        created_at TEXT NOT NULL,
+        payload_json TEXT
+    )
+`)
+initializeAssistantPersistenceSchema(legacySchemaDb)
+assert.equal(
+    legacySchemaDb.exec('PRAGMA table_info(assistant_activities)')[0]?.values.some((row) => row[1] === 'turn_terminal_outcome'),
+    true,
+    'existing Assistant databases add the nullable terminal-outcome column without a reset'
+)
+legacySchemaDb.close()
+
+const recoveredTurnId = 'turn-recovered-after-assistant-error'
+const recoveredErrorActivityId = 'shared-error:synthetic-recovered-attempt'
+const recoveredFinalToolId = 'zyra-tool-synthetic-final-tool'
+const recoveredAt = (second: number) => new Date(Date.parse('2026-07-16T11:00:00.000Z') + second * 1_000).toISOString()
+const recoveredMessages: AssistantMessage[] = [
+    {
+        id: 'synthetic-recovered-user',
+        role: 'user',
+        text: 'Complete this synthetic task.',
+        turnId: recoveredTurnId,
+        streaming: false,
+        timelineSequence: 1,
+        createdAt: recoveredAt(0),
+        updatedAt: recoveredAt(0)
+    },
+    {
+        id: 'synthetic-recovered-assistant',
+        role: 'assistant',
+        text: 'Recovered response.',
+        turnId: recoveredTurnId,
+        streaming: false,
+        timelineSequence: 4,
+        createdAt: recoveredAt(3),
+        updatedAt: recoveredAt(3)
+    }
+]
+const recoveredActivities: AssistantActivity[] = [
+    {
+        id: recoveredErrorActivityId,
+        kind: 'error',
+        tone: 'warning',
+        summary: 'Assistant interrupted',
+        detail: 'Request was aborted',
+        turnId: recoveredTurnId,
+        timelineSequence: 2,
+        createdAt: recoveredAt(1),
+        payload: {
+            status: 'cancelled',
+            stopReason: 'error',
+            canonicalMessageId: 'assistant-message-synthetic-recovered-attempt'
+        }
+    },
+    {
+        id: recoveredFinalToolId,
+        kind: 'command',
+        tone: 'tool',
+        summary: 'Final tool completed',
+        turnId: recoveredTurnId,
+        timelineSequence: 3,
+        createdAt: recoveredAt(2),
+        payload: { status: 'completed', stopReason: 'error' }
+    }
+]
+const recoveredThread: AssistantThread = {
+    ...thread,
+    id: 'recovered-persistence-thread',
+    providerThreadId: 'canonical:synthetic-recovered-persistence',
+    messageCount: recoveredMessages.length,
+    activityCount: recoveredActivities.length,
+    proposedPlanCount: 0,
+    lastSeenCompletedTurnId: recoveredTurnId,
+    createdAt: recoveredAt(0),
+    updatedAt: recoveredAt(3),
+    messages: recoveredMessages,
+    activities: recoveredActivities,
+    proposedPlans: []
+}
+const recoveredSession: AssistantSession = {
+    ...session,
+    id: 'recovered-persistence-session',
+    title: 'Synthetic recovered assistant attempt',
+    createdAt: recoveredAt(0),
+    updatedAt: recoveredAt(3),
+    activeThreadId: recoveredThread.id,
+    threadIds: [recoveredThread.id],
+    threads: [recoveredThread]
+}
+const recoveredSnapshot = createDefaultSnapshot()
+recoveredSnapshot.selectedSessionId = recoveredSession.id
+recoveredSnapshot.sessions = [recoveredSession]
+const recoveredDb = new SQL.Database()
+initializeAssistantPersistenceSchema(recoveredDb)
+replaceAssistantSnapshot(recoveredDb, recoveredSnapshot)
+
+const recoveredPage = readAssistantHistoryPage(recoveredDb, { threadId: recoveredThread.id, turnLimit: 1 })
+assert.equal(
+    recoveredPage.messages.find((message) => message.id === 'synthetic-recovered-assistant')?.turnId,
+    recoveredTurnId,
+    'the persistence regression fixture must include the later successful assistant response in the same turn'
+)
+const recoveredBootstrap = readAssistantThreadDetail(recoveredDb, recoveredThread.id)
+const recoveredTurnDetail = readAssistantTurnDetail(recoveredDb, recoveredThread.id, recoveredTurnId)
+const recoveredDirect = readAssistantActivity(recoveredDb, recoveredThread.id, recoveredErrorActivityId)
+const recoveredShell = readAssistantPersistenceRecord(recoveredDb).snapshot
+const recoveredHydrated = readHydratedThreadDetails(recoveredDb, recoveredShell, recoveredSession.id).get(recoveredThread.id)
+for (const [reader, recoveredError] of [
+    ['page', recoveredPage.activities.find((activity) => activity.id === recoveredErrorActivityId)],
+    ['bootstrap', recoveredBootstrap.history.activities.find((activity) => activity.id === recoveredErrorActivityId)],
+    ['turn detail', recoveredTurnDetail.activities.find((activity) => activity.id === recoveredErrorActivityId)],
+    ['direct', recoveredDirect],
+    ['hydrated', recoveredHydrated?.activities.find((activity) => activity.id === recoveredErrorActivityId)]
+] as const) {
+    assert.ok(recoveredError, `${reader} persistence reader must return the earlier assistant error`)
+    assert.equal(
+        recoveredError.turnTerminalOutcome,
+        undefined,
+        `${reader} persistence reader must keep an earlier assistant error nonterminal after a later successful response in the same turn`
+    )
+}
+const recoveredFinalTool = readAssistantActivity(recoveredDb, recoveredThread.id, recoveredFinalToolId)
+assert.ok(recoveredFinalTool, 'the direct persistence reader must return the final tool')
+assert.equal(
+    recoveredFinalTool.turnTerminalOutcome,
+    undefined,
+    'a final tool never supplies whole-turn terminal metadata'
+)
+assert.notEqual(
+    recoveredDb.exec('SELECT turn_terminal_outcome FROM assistant_activities WHERE id = ?', [recoveredErrorActivityId])[0]?.values?.[0]?.[0],
+    null,
+    'newly projected nonterminal activities must remain distinguishable from legacy rows with missing metadata'
+)
+recoveredDb.run('UPDATE assistant_activities SET turn_terminal_outcome = NULL WHERE id = ?', [recoveredErrorActivityId])
+for (const candidate of [
+    readAssistantHistoryPage(recoveredDb, { threadId: recoveredThread.id, turnLimit: 1 }).activities.find(activity => activity.id === recoveredErrorActivityId),
+    readAssistantThreadDetail(recoveredDb, recoveredThread.id).history.activities.find(activity => activity.id === recoveredErrorActivityId),
+    readAssistantTurnDetail(recoveredDb, recoveredThread.id, recoveredTurnId).activities.find(activity => activity.id === recoveredErrorActivityId),
+    readAssistantActivity(recoveredDb, recoveredThread.id, recoveredErrorActivityId),
+    readHydratedThreadDetails(recoveredDb, recoveredShell, recoveredSession.id).get(recoveredThread.id)?.activities.find(activity => activity.id === recoveredErrorActivityId)
+]) {
+    assert.ok(candidate)
+    assert.equal(candidate.turnTerminalOutcome, undefined, 'a later persisted assistant response also disambiguates a recovered legacy NULL row')
+}
+recoveredDb.close()
+
 const db = new SQL.Database()
 initializeAssistantPersistenceSchema(db)
 const historyOrderPlan = db.exec(`EXPLAIN QUERY PLAN SELECT id FROM assistant_messages WHERE thread_id = ? ORDER BY created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC LIMIT 20`, [thread.id])[0]?.values || []
@@ -146,6 +312,7 @@ assert.deepEqual(newest.messages.filter((message) => message.role === 'user').ma
 assert.equal(newest.pageInfo.turnCount, 2)
 assert.equal(newest.pageInfo.hasOlder, true)
 assert.deepEqual(newest.activities.map((activity) => activity.id), ['activity-3', 'activity-4'])
+assert.equal(newest.activities.find((activity) => activity.id === 'activity-4')?.turnTerminalOutcome, 'interrupted', 'paged history preserves authoritative turn-terminal metadata')
 assert.deepEqual(newest.proposedPlans.map((plan) => plan.id), ['plan-3'])
 
 const older = readAssistantHistoryPage(db, { threadId: thread.id, before: newest.pageInfo.oldestCursor, turnLimit: 2 })
@@ -166,12 +333,43 @@ const detail = readAssistantThreadDetail(db, thread.id)
 assert.equal(INITIAL_ASSISTANT_HISTORY_TURN_LIMIT, 3, 'first paint requests enough recent turns to read as an existing conversation')
 assert.equal(detail.history.pageInfo.turnCount, 3, 'thread bootstrap exposes three recent turns before the first visible frame')
 assert.deepEqual(detail.history.messages.filter((message) => message.role === 'user').map((message) => message.id), ['user-2', 'user-3', 'user-4'])
+assert.equal(detail.history.activities.find((activity) => activity.id === 'activity-4')?.turnTerminalOutcome, 'interrupted', 'thread bootstrap preserves turn-terminal metadata')
 assert.equal(detail.history.fullyLoaded, false, 'older turns remain available to the scroll stream')
+const interruptedTurnDetail = readAssistantTurnDetail(db, thread.id, 'turn-4')
+assert.equal(interruptedTurnDetail.activities.find((activity) => activity.id === 'activity-4')?.turnTerminalOutcome, 'interrupted', 'turn rehydration preserves turn-terminal metadata')
 const turnDetail = readAssistantTurnDetail(db, thread.id, 'turn-2')
 assert.deepEqual(turnDetail.messages.map((message) => message.id), ['user-2', 'assistant-2', 'assistant-2-final'])
 assert.deepEqual(turnDetail.activities.map((activity) => activity.id), ['activity-2'])
 assert.deepEqual(searchAssistantTurns(db, thread.id, 'Prompt 2').turnIds, ['turn-2'])
 assert.deepEqual(searchAssistantTurns(db, thread.id, 'Tool 3').turnIds, ['turn-3'])
+
+db.run(`UPDATE assistant_activities SET turn_terminal_outcome = NULL WHERE id = 'activity-4'`)
+const legacyTerminalPage = readAssistantHistoryPage(db, { threadId: thread.id, turnLimit: 2 })
+assert.equal(
+    legacyTerminalPage.activities.find((activity) => activity.id === 'activity-4')?.turnTerminalOutcome,
+    'interrupted',
+    'legacy canonical error rows recover interruption only from their stored assistant stopReason'
+)
+const legacyFailedActivityId = 'legacy-failed-assistant-error'
+db.run(`
+    INSERT INTO assistant_activities (
+        id, thread_id, kind, tone, summary, detail, turn_id, turn_terminal_outcome, timeline_sequence, created_at, payload_json
+    ) VALUES (?, ?, 'error', 'error', 'Assistant error', 'Provider rejected the request', 'turn-3', NULL, 35, ?, ?)
+`, [
+    legacyFailedActivityId,
+    thread.id,
+    new Date(Date.parse(at(3)) + 30_000).toISOString(),
+    serializeAssistantActivityPayload({
+        status: 'failed',
+        stopReason: 'error',
+        canonicalMessageId: 'assistant-message-legacy-failed'
+    })
+])
+assert.equal(
+    readAssistantActivity(db, thread.id, legacyFailedActivityId)?.turnTerminalOutcome,
+    'failed',
+    'legacy failed assistant rows remain failed when their error detail is not interruption-class'
+)
 
 db.run(`INSERT INTO assistant_turns (id, thread_id, model, state, requested_at, started_at, completed_at, assistant_message_id, effort, service_tier, usage_json, updated_at) VALUES (?, ?, ?, 'completed', ?, ?, ?, 'assistant-2', NULL, NULL, NULL, ?)`, [
     'turn-2-replay-orphan',

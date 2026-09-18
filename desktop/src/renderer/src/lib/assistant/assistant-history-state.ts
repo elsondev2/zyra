@@ -141,7 +141,7 @@ export function mergeAssistantShellSnapshot(
                     proposedPlans: retained?.proposedPlans || [],
                     activities: retained?.activities || [],
                     pendingApprovals: thread.hasPendingApprovals ? retained?.pendingApprovals || [] : [],
-                    pendingUserInputs: thread.hasPendingUserInputs ? retained?.pendingUserInputs || [] : []
+                    pendingUserInputs: thread.hasPendingUserInputs ? retained?.pendingUserInputs || [] : (retained?.pendingUserInputs || []).filter(input => input.status !== 'pending')
                 }
             })
         }))
@@ -246,9 +246,22 @@ export function shouldPreserveAssistantLoadedHistoryRange(
 export function applyAssistantThreadDetail(
     snapshot: AssistantSnapshot,
     detail: AssistantThreadDetail,
-    existingHistory?: AssistantRetainedHistory
+    existingHistory?: AssistantRetainedHistory,
+    validatedPreview?: AssistantThread | null
 ): { snapshot: AssistantSnapshot; history: AssistantRetainedHistory } {
     const now = Date.now()
+    // A warm preview can outlive its paging cache. Keep its older visible rows
+    // through bootstrap, but retain the server cursor to fill any preview gaps.
+    if (!existingHistory && validatedPreview && detail.history.pageInfo.hasOlder) {
+        existingHistory = {
+            ...detail.history,
+            messages: validatedPreview.messages,
+            activities: validatedPreview.activities,
+            proposedPlans: validatedPreview.proposedPlans,
+            lastUsedAt: now,
+            shellRevision: getAssistantThreadHydrationRevision(validatedPreview)
+        }
+    }
     const preserveLoadedRange = shouldPreserveAssistantLoadedHistoryRange(existingHistory, detail.history)
     const pageInfo = preserveLoadedRange ? existingHistory!.pageInfo : detail.history.pageInfo
     const fullyLoaded = preserveLoadedRange ? existingHistory!.fullyLoaded : detail.history.fullyLoaded
@@ -318,6 +331,17 @@ export function applyAssistantRetainedHistory(
         activities: mergeById('activity', thread.activities, history.activities),
         proposedPlans: mergeById('plan', thread.proposedPlans, history.proposedPlans)
     }))
+}
+
+export function getAssistantMaterializedThreadIds(snapshot: AssistantSnapshot): Set<string> {
+    const selected = snapshot.sessions.find(session => session.id === snapshot.selectedSessionId)?.activeThreadId
+    const ids = new Set(snapshot.sessions.flatMap(session => session.threads.filter(thread => (
+        ['starting', 'running', 'waiting', 'background'].includes(thread.state)
+        || thread.hasPendingApprovals || thread.hasPendingUserInputs || thread.hasActivePlan
+        || thread.pendingApprovals.length > 0 || thread.pendingUserInputs.length > 0 || Boolean(thread.activePlan)
+    )).map(thread => thread.id)))
+    if (selected) ids.add(selected)
+    return ids
 }
 
 export function dematerializeAssistantHistories(

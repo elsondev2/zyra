@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { AppWindow, ClipboardPaste, Copy, ExternalLink, FilePlus, FolderOpen, FolderPlus, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { EntryActionTarget, FileActionsMenuItem } from './folderBrowseTypes'
@@ -98,11 +99,11 @@ export function useFolderBrowseContextMenu({
             if (event.key === 'Escape') setContextMenu(null)
         }
 
-        document.addEventListener('pointerdown', handlePointerDown)
-        document.addEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown)
-            document.removeEventListener('keydown', handleEscape)
+            removeOverlayListener1()
+            removeOverlayListener2()
         }
     }, [contextMenu])
 

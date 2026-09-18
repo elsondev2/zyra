@@ -1,4 +1,6 @@
-import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, shell, type IpcMainInvokeEvent } from 'electron'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import {
     AGENT_CONTROL_IPC,
     type BrowserSurfaceClaim,
@@ -41,16 +43,13 @@ async function result<T>(operation: () => T | Promise<T>) {
     }
 }
 
-export function createAgentControlHandlers(mainWindow: BrowserWindow) {
+export function createAgentControlHandlers(mainWindow: BrowserWindow, getMainWindow: () => BrowserWindow | null = () => mainWindow) {
     const broker = getAgentControlBroker()
     const surfaceRequestWindows = new Map<string, BrowserWindow>()
-    const currentMainWindow = () => BrowserWindow.getAllWindows().find((window) => {
-        if (window.isDestroyed()) return false
-        try {
-            const hash = new URL(window.webContents.getURL()).hash
-            return !hash.startsWith('#/assistant-utility/') && !hash.startsWith('#/browser-popup/') && !hash.startsWith('#/quick-open')
-        } catch { return false }
-    }) || (!mainWindow.isDestroyed() ? mainWindow : null)
+    const currentMainWindow = () => {
+        const window = getMainWindow()
+        return window && !window.isDestroyed() && !window.webContents.isDestroyed() ? window : null
+    }
     const browserSurface = new BrowserSurfaceHost({
         send: (request) => {
             const targetOwnerId = request.targetId
@@ -60,7 +59,7 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
                 ? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed() && window.webContents.id === targetOwnerId) || null
                 : null
             const destination = ownerWindow || currentMainWindow()
-            if (!destination) throw new Error('The Zyra Browser window is closed.')
+            if (!destination || destination.webContents.isDestroyed()) throw new Error('Open the requesting chat in Zyra Desktop, then retry its Browser command.')
             surfaceRequestWindows.set(request.requestId, destination)
             destination.webContents.send(AGENT_CONTROL_IPC.browserSurfaceRequested, request)
         },
@@ -69,6 +68,7 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
             surfaceRequestWindows.delete(requestId)
             if (destination && !destination.isDestroyed()) destination.webContents.send(AGENT_CONTROL_IPC.browserSurfaceCancelled, requestId)
         },
+        settled: (requestId) => { queueMicrotask(() => surfaceRequestWindows.delete(requestId)) },
         resolveTarget: (targetId) => broker.targets.get(targetId).target
     })
     broker.setBrowserSurfaceController(browserSurface)
@@ -99,14 +99,20 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
         }),
         acknowledgeBrowserSurfaceRequest: (event: IpcMainInvokeEvent, input: BrowserSurfaceOpenAcknowledgement) => result(() => {
             assertTrustedRenderer(event, mainWindow)
+            const destination = surfaceRequestWindows.get(input.requestId)
+            if (destination && destination.webContents.id !== event.sender.id) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser request belongs to another window.')
             return { accepted: browserSurface.acknowledge(input) }
         }),
         completeBrowserSurfaceRequest: (event: IpcMainInvokeEvent, input: BrowserSurfaceOpenCompletion) => result(() => {
             assertTrustedRenderer(event, mainWindow)
+            const destination = surfaceRequestWindows.get(input.requestId)
+            if (destination && destination.webContents.id !== event.sender.id) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser request belongs to another window.')
             return { completed: browserSurface.complete(input) }
         }),
         claimBrowserSurfaceRequest: (event: IpcMainInvokeEvent, input: BrowserSurfaceClaim) => result(() => {
             assertTrustedRenderer(event, mainWindow)
+            const destination = surfaceRequestWindows.get(input.requestId)
+            if (destination && destination.webContents.id !== event.sender.id) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser request belongs to another window.')
             return { claimed: browserSurface.claim(input) }
         }),
         updateWorkspaceState: (event: IpcMainInvokeEvent, input: unknown) => result(() => {
@@ -146,6 +152,16 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
             assertTrustedRenderer(event, mainWindow)
             broker.clearAudit()
             return { cleared: true }
+        }),
+        openChromeExtensionFolder: (event: IpcMainInvokeEvent) => result(async () => {
+            assertTrustedRenderer(event, mainWindow)
+            const folder = app.isPackaged
+                ? join(process.resourcesPath, 'zyra-browser-control-extension')
+                : join(app.getAppPath(), '..', 'extensions', 'zyra-browser-control', 'dist', 'unpacked')
+            if (!existsSync(join(folder, 'manifest.json'))) throw new Error('The Browser extension is missing from this build. Reinstall Zyra or build the development extension.')
+            const error = await shell.openPath(folder)
+            if (error) throw new Error(error)
+            return { opened: true }
         }),
         startChromePairing: (event: IpcMainInvokeEvent) => result(async () => {
             assertTrustedRenderer(event, mainWindow)

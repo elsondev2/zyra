@@ -1,3 +1,6 @@
+import { readRoleModels } from "../role-model-preferences.mjs";
+import { readDelegationPreferences } from "../delegation-preferences.mjs";
+import { buildDelegationModelOptions } from "../delegation-model-options.mjs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { assertControlCapabilities, assertControlIdentifier, assertControlPrincipal } from "../../agent-control/contracts.mjs";
@@ -5,7 +8,7 @@ import { attenuateAgentCapabilities, assertNoControlCapabilities } from "../capa
 import { normalizeAgentRun, TERMINAL_AGENT_STATES } from "../contracts.mjs";
 import { discoverAgentDefinitions } from "../definition-loader.mjs";
 import { FleetEventStore } from "../event-store.mjs";
-import { buildFleetModelCatalog } from "../model-catalog.mjs";
+import { buildFleetModelCatalog, buildFleetModelCatalogAsync } from "../model-catalog.mjs";
 import { ModelRouter } from "../model-router.mjs";
 import { scanChildOutput } from "../output-scanner.mjs";
 import { AgentRunner } from "./agent-runner.mjs";
@@ -20,6 +23,10 @@ export class AgentFleetController {
   constructor(options = {}) {
     this.project = path.resolve(options.project ?? process.cwd());
     this.rootSession = options.rootSession;
+    this.readRoleModels = options.readRoleModels ?? readRoleModels;
+    this.readDelegationPreferences = options.readDelegationPreferences ?? readDelegationPreferences;
+    this.modelRegistry = options.modelRegistry ?? this.rootSession?.modelRegistry;
+    this.modelCatalogOptions = options.modelCatalogOptions;
     this.rootSessionId = String(options.rootSessionId ?? this.rootSession?.sessionManager?.getSessionId?.() ?? randomUUID());
     this.rootThreadId = String(options.rootThreadId ?? this.rootSessionId);
     this.fleetId = String(options.fleetId ?? randomUUID());
@@ -37,6 +44,7 @@ export class AgentFleetController {
     this.definitions = { active: [], shadowed: [], all: [] };
     this.cancellation = new CancellationTree();
     this.cancellation.create(this.fleetId);
+    this.cancellationRootId = this.fleetId;
     this.workspaceGuard = new WorkspaceGuard({ project: this.project });
     this.worktreeManager = new WorktreeManager({ project: this.project });
     this.transcripts = new ChildTranscriptStore();
@@ -65,8 +73,11 @@ export class AgentFleetController {
 
   async initialize(options = {}) {
     const loaded = await this.eventStore.initialize({ fleetId: this.fleetId });
+    const initialCancellationRootId = this.cancellationRootId;
     this.fleetId = loaded.snapshot.fleetId;
+    if (initialCancellationRootId !== this.fleetId) this.cancellation.remove(initialCancellationRootId);
     if (!this.cancellation.nodes.has(this.fleetId)) this.cancellation.create(this.fleetId);
+    this.cancellationRootId = this.fleetId;
     this.definitions = await discoverAgentDefinitions({
       installRoot: options.installRoot,
       project: this.project,
@@ -106,15 +117,35 @@ export class AgentFleetController {
     return this.definitions;
   }
 
+  async delegationModelOptions(request = {}) {
+    this.assertUsable();
+    if (this.modelRegistry) {
+      this.modelCatalog = await buildFleetModelCatalogAsync(this.modelRegistry, this.modelCatalogOptions);
+      this.modelRouter.setCatalog?.(this.modelCatalog);
+    }
+    return buildDelegationModelOptions(this.modelCatalog, this.readDelegationPreferences(), {
+      provider: request.provider,
+      modelQuery: request.modelQuery,
+      limit: request.limit,
+      inheritModel: this.rootSession?.model,
+    });
+  }
+
   previewRoute(request = {}) {
     return this.modelRouter.route({
       ...request,
+      roleModels: this.readRoleModels(),
       inheritModel: request.inheritModel ?? this.rootSession?.model,
     });
   }
 
   async spawn(request = {}) {
     this.assertUsable();
+    // Capture ownership before any await: a stop must also cancel in-flight spawns.
+    const cancellationParent = request.parentAgentRunId ?? this.cancellationRootId;
+    const cancellationParentNode = this.cancellation.nodes.get(cancellationParent);
+    if (!cancellationParentNode) throw new Error(`Cancellation parent not found: ${cancellationParent}.`);
+    const cancellationParentSignal = cancellationParentNode.controller.signal;
     const definitionEntry = request.agent ? this.definitions.active.find((entry) => entry.name === request.agent) : null;
     if (request.agent && !definitionEntry) throw new Error(`Agent definition not found: ${request.agent}.`);
     if (definitionEntry && !definitionEntry.runnable) throw new Error(`Agent definition is not runnable: ${request.agent}. ${definitionEntry.errors?.join("; ") || "project trust required"}`);
@@ -161,7 +192,8 @@ export class AgentFleetController {
       throw new Error("Writer agents require an explicit writeScope.");
     }
     const route = this.previewRoute({
-      model: request.model ?? definition.model,
+      model: request.model ?? definition.model ?? "role-default",
+      role: request.role ?? definition.role ?? "specialist",
       fallbackModels: request.fallbackModels ?? definition.model?.fallbacks,
       envelope: { ...request, tools: capability.tools },
       policy: request.modelPolicy,
@@ -219,7 +251,12 @@ export class AgentFleetController {
         run.controlLease = summarizeControlGrant(delegatedControl.grant);
       }
       await this.emit("agent.created", { agent: run, warnings: capability.warnings }, { agentRunId });
-      this.cancellation.create(agentRunId, request.parentAgentRunId ?? this.fleetId);
+      if (this.cancellation.nodes.get(cancellationParent) === cancellationParentNode) {
+        this.cancellation.create(agentRunId, cancellationParent);
+      } else {
+        const child = this.cancellation.create(agentRunId);
+        child.controller.abort(cancellationParentSignal.reason);
+      }
       cancellationCreated = true;
       const controlSession = delegatedControl ?? onDemandControl;
       if (controlSession) {
@@ -332,9 +369,24 @@ export class AgentFleetController {
   }
 
   async cancelAll(reason = "root cancelled") {
-    await this.cancellation.cancel(this.fleetId, reason);
-    const snapshot = this.snapshot();
-    await Promise.allSettled(Object.values(snapshot?.agents ?? {}).filter((run) => !TERMINAL_AGENT_STATES.has(run.status)).map((run) => this.stop(run.agentRunId, reason)));
+    const rootId = this.cancellationRootId;
+    const runIds = [];
+    const collect = (id) => {
+      for (const childId of this.cancellation.nodes.get(id)?.children ?? []) {
+        runIds.push(childId);
+        collect(childId);
+      }
+    };
+    collect(rootId);
+    // AbortController is one-shot. New turns need a fresh root while old spawns
+    // retain their cancelled parent, including those not yet in the queue.
+    if (!this.disposed) {
+      this.cancellationRootId = randomUUID();
+      this.cancellation.create(this.cancellationRootId);
+    }
+    await this.cancellation.cancel(rootId, reason);
+    await Promise.allSettled(runIds.map((id) => this.stop(id, reason)));
+    this.cancellation.remove(rootId);
   }
 
   async dispose() {
@@ -382,15 +434,20 @@ export class AgentFleetController {
     let worktree;
     const startedAt = Date.now();
     try {
+      this.throwIfCancelled(agentRunId);
       await this.emit("agent.attempt.started", {
         status: "starting", attempt: run.attempt, attemptId: run.attemptId, retryOfAttemptId: request.retryOfAttemptId, startedAt: new Date(startedAt).toISOString(),
       }, { agentRunId, flush: true });
+      // A late spawn can attach to an already-cancelled root after agent.created.
+      // Do not initialize a worktree, writer lock, or child session for it.
+      this.throwIfCancelled(agentRunId);
       if (run.isolation === "worktree") {
         worktree = await this.worktreeManager.create(agentRunId, { fleetId: this.fleetId });
         run.cwd = worktree.directory;
       } else if (["writer", "full-access"].includes(run.permissionMode)) {
         lock = await this.workspaceGuard.acquire(agentRunId, run.writeScope, { wait: true });
       }
+      this.throwIfCancelled(agentRunId);
       const active = { run, route, request, host: null, lock, worktree };
       this.active.set(agentRunId, active);
       this.launching.delete(agentRunId);
@@ -522,6 +579,15 @@ export class AgentFleetController {
 
   async emit(type, payload, refs = {}) {
     return this.eventStore.append(type, payload, refs);
+  }
+
+  throwIfCancelled(agentRunId) {
+    const signal = this.cancellation.signal(agentRunId);
+    if (signal?.aborted) {
+      const error = new Error(`Child agent cancelled${signal.reason ? `: ${signal.reason}` : ""}.`);
+      error.name = "AbortError";
+      throw error;
+    }
   }
 
   assertUsable() {

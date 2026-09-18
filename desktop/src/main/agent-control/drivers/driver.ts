@@ -16,6 +16,7 @@ export type DriverObservationOptions = {
 }
 
 export type DriverActionContext = {
+    allowWindowFocus?: boolean
     revision: number
     previousObservation: ControlObservation
     signal?: AbortSignal
@@ -34,6 +35,8 @@ export interface AgentControlDriver {
     observe(target: RegisteredControlTarget, options: DriverObservationOptions): Promise<ControlObservation>
     act(target: RegisteredControlTarget, action: ControlAction, context: DriverActionContext): Promise<{ changed: boolean }>
     readScreenshot?(screenshotRef: string): ControlScreenshotPayload | undefined
+    /** Keeps only helper lifetime alive while discovering/selecting a target; grants no authority. */
+    retainAcquisition?(): () => void
     retainTarget?(target: RegisteredControlTarget): void
     release?(target: RegisteredControlTarget): Promise<void> | void
     releaseIdle?(): Promise<void> | void
@@ -42,8 +45,11 @@ export interface AgentControlDriver {
     dispose?(): Promise<void> | void
     health?(): { state: 'ready' | 'degraded' | 'disconnected' | 'unavailable'; lastDisconnectReason?: string }
     isTargetCurrent?(target: RegisteredControlTarget): boolean
+    refreshTargets?(signal?: AbortSignal): Promise<void>
     listWindows?(): Promise<ControlWindowCandidate[]>
     openApp?(application: string, signal?: AbortSignal): Promise<{ applicationName: string }>
     selectWindow?(windowToken: string): Promise<{ trustedIdentity: unknown; target: Omit<Extract<ControlTarget, { kind: 'windows-window' }>, 'targetId'> }>
+    /** Avoid queuing cosmetic polling behind native input/observation. */
+    isTargetBusy?(target: RegisteredControlTarget): boolean
     getWindowBounds?(target: RegisteredControlTarget): Promise<{ x: number; y: number; width: number; height: number }>
 }

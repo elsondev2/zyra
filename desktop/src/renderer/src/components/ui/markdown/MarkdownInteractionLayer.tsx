@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useEffect, type RefObject } from 'react'
 import { hasActiveTextSelection } from './fileReferences'
 import { inspectMarkdownLinkAvailability } from './linkAvailability'
@@ -261,7 +262,7 @@ export function MarkdownInteractionLayer({
             if (imageTarget && /^https?:\/\//i.test(rawHref)) {
                 event.preventDefault()
                 if (hasActiveTextSelection()) return
-                window.open(rawHref, '_blank', 'noopener,noreferrer')
+                void openDesktopLink(rawHref)
                 return
             }
 

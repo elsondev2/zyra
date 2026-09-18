@@ -1,5 +1,7 @@
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { CalendarDays, Check, Clock3, Folders, List, SlidersHorizontal } from 'lucide-react'
 import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import { cn } from '@/lib/utils'
@@ -120,8 +122,8 @@ export function AssistantSessionsRailViewMenu(props: {
 
         const handlePointerDown = (event: PointerEvent) => {
             const target = event.target as Node
-            const isInsideButton = Boolean(rootRef.current?.contains(target))
-            const isInsideMenu = Boolean(menuRef.current?.contains(target))
+            const isInsideButton = Boolean(isOverlayEventInside(event, rootRef.current))
+            const isInsideMenu = Boolean(isOverlayEventInside(event, menuRef.current))
             if (!isInsideButton && !isInsideMenu) setOpen(false)
         }
 
@@ -130,14 +132,14 @@ export function AssistantSessionsRailViewMenu(props: {
         }
 
         const dismissMenu = () => setOpen(false)
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        document.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(dismissMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            document.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         }
     }, [open])

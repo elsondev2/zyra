@@ -1,3 +1,8 @@
+import { AppMenuCommandHost } from './components/layout/AppMenuCommandHost'
+import { isBrowserExtension } from './lib/browser-extension'
+import { ExtensionSidebarHeader } from './components/layout/ExtensionSidebarHeader'
+import { RuntimeActivationNotice } from './components/updates/RuntimeActivationNotice'
+import { AssistantBrowserRecordingHost } from './pages/assistant/AssistantBrowserRecordingHost'
 import { createContext, lazy, Suspense, useContext, useEffect, useState, type ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { migrateLegacyExplorerShellLaunchRoute } from '@shared/assistant/files-shell-launch-route'
@@ -9,6 +14,7 @@ import { SettingsProvider, useSettings } from './lib/settings'
 import { CommandPaletteProvider } from './lib/commandPalette'
 import CommandPalette from './components/CommandPalette'
 import LinkHoverStatus from './components/ui/LinkHoverStatus'
+import { DesktopLinkHost } from './components/ui/DesktopLinkHost'
 import { UpdatePromptCenter } from './components/updates/UpdatePromptCenter'
 import { AppUpdatesProvider } from './lib/app-updates'
 import { ProjectCreationProvider } from './lib/projects/project-creation'
@@ -19,7 +25,6 @@ import { AssistantRouteShell } from './pages/assistant/AssistantRouteShell'
 import { AssistantWorkspaceLifetime } from './pages/assistant/AssistantWorkspaceLifetime'
 import {
     loadAboutSettings,
-    loadAccountSettings,
     loadAppearanceSettings,
     loadArchivedChatsSettings,
     loadAssistantSettings,
@@ -32,20 +37,21 @@ import {
     loadMemorySettings,
     loadProjectsSettings,
     loadProviderSettings,
-    loadSettingsOverview,
+    loadProviderWritingSettings,
     loadSettingsShell,
     loadSkillsSettings,
     loadSourceControlSettings,
     loadTerminalRuntimeSettings,
     loadVoiceSettings
 } from './pages/settings/settings-route-loaders'
+import { SettingsCategoryRedirect, SettingsRedirect } from './pages/settings/SettingsRedirect'
 
 const loadAssistantRoute = () => import('./pages/Assistant')
 const Assistant = lazy(loadAssistantRoute)
 const InstructorVoiceLab = lazy(() => import('./pages/assistant/InstructorVoiceLab'))
 const PluginWorkspace = lazy(() => import('./pages/plugins/PluginWorkspace'))
+const AccessoryWindowPage = lazy(() => import('./pages/accessories/AccessoryWindowPage'))
 const SettingsShell = lazy(loadSettingsShell)
-const SettingsOverview = lazy(loadSettingsOverview)
 const GeneralSettings = lazy(loadGeneralSettings)
 const AppearanceSettings = lazy(loadAppearanceSettings)
 const VoiceSettings = lazy(loadVoiceSettings)
@@ -55,8 +61,8 @@ const FilesEditorSettings = lazy(loadFilesEditorSettings)
 const TerminalRuntimeSettings = lazy(loadTerminalRuntimeSettings)
 const AssistantSettings = lazy(loadAssistantSettings)
 const SkillsSettings = lazy(loadSkillsSettings)
-const AccountSettings = lazy(loadAccountSettings)
-const AISettings = lazy(loadProviderSettings)
+const ProvidersSettings = lazy(loadProviderSettings)
+const ProviderWritingSettings = lazy(loadProviderWritingSettings)
 const GitSettings = lazy(loadSourceControlSettings)
 const ProjectsSettings = lazy(loadProjectsSettings)
 const MemorySettings = lazy(loadMemorySettings)
@@ -144,52 +150,79 @@ function MainContent() {
                     </Route>
                     <Route path="/assistant/instructor" element={<InstructorVoiceLab />} />
                     <Route path="/settings" element={<SettingsShell />}>
-                        <Route index element={<Navigate to="/settings/app" replace />} />
-                        <Route path="app" element={<SettingsOverview />} />
-                        <Route path="account" element={<SettingsOverview />} />
-                        <Route path="assistant" element={<SettingsOverview />} />
-                        <Route path="workspace" element={<SettingsOverview />} />
-                        <Route path="data" element={<SettingsOverview />} />
+                        <Route index element={<SettingsRedirect to="/settings/app/general" />} />
+                        <Route path="app" element={<SettingsCategoryRedirect categoryId="app" />} />
+                        <Route path="account" element={<SettingsCategoryRedirect categoryId="account" />} />
+                        <Route path="assistant" element={<SettingsCategoryRedirect categoryId="assistant" />} />
+                        <Route path="workspace" element={<SettingsCategoryRedirect categoryId="workspace" />} />
+                        <Route path="data" element={<SettingsCategoryRedirect categoryId="data" />} />
                         <Route path="app/general" element={<GeneralSettings />} />
                         <Route path="app/appearance" element={<AppearanceSettings />} />
-                        <Route path="account/openai" element={<AccountSettings />} />
+                        <Route path="app/appearance/typography" element={<AppearanceSettings view="typography" />} />
+                        <Route path="app/appearance/layout" element={<AppearanceSettings view="layout" />} />
+                        <Route path="app/appearance/colors" element={<AppearanceSettings view="colors" />} />
+                        <Route path="providers" element={<ProvidersSettings />} />
+                        <Route path="providers/models" element={<ProvidersSettings view="models" />} />
+                        <Route path="usage" element={<SettingsRedirect to="/settings/providers/usage" />} />
+                        <Route path="providers/limits" element={<ProvidersSettings view="limits" />} />
+                        <Route path="providers/usage" element={<ProvidersSettings view="usage" />} />
+                        <Route path="providers/writing" element={<ProviderWritingSettings />} />
+                        <Route path="account/openai" element={<SettingsRedirect to="/settings/providers/usage" />} />
+                        <Route path="account/providers" element={<SettingsRedirect to="/settings/providers/writing" />} />
+                        <Route path="assistant/providers" element={<SettingsRedirect to="/settings/providers/writing" />} />
                         <Route path="account/devices" element={<ConnectionsSettings />} />
+                        <Route path="account/devices/chrome" element={<ConnectionsSettings view="chrome" />} />
+                        <Route path="account/devices/mobile" element={<ConnectionsSettings view="mobile" />} />
                         <Route path="assistant/defaults" element={<AssistantSettings />} />
+                        <Route path="assistant/display" element={<AssistantSettings view="display" />} />
+                        <Route path="assistant/archived" element={<ArchivedChatsSettings />} />
+                        <Route path="assistant/permissions" element={<SettingsRedirect to="/settings/assistant/defaults" />} />
                         <Route path="assistant/skills" element={<SkillsSettings />} />
                         <Route path="assistant/voice" element={<VoiceSettings />} />
-                        <Route path="assistant/providers" element={<AISettings />} />
+                        <Route path="assistant/voice/conversation" element={<VoiceSettings view="conversation" />} />
+                        <Route path="assistant/memory" element={<MemorySettings />} />
+                        <Route path="assistant/memory/inspect" element={<MemorySettings view="inspect" />} />
                         <Route path="workspace/browser" element={<BrowserControlSettings />} />
+                        <Route path="workspace/browser/privacy" element={<BrowserControlSettings view="privacy" />} />
+                        <Route path="workspace/browser/data" element={<BrowserControlSettings view="data" />} />
                         <Route path="workspace/files" element={<FilesEditorSettings />} />
+                        <Route path="workspace/files/editor" element={<FilesEditorSettings view="editor" />} />
+                        <Route path="workspace/files/run" element={<FilesEditorSettings view="run" />} />
                         <Route path="workspace/terminal" element={<TerminalRuntimeSettings />} />
                         <Route path="workspace/projects" element={<ProjectsSettings />} />
+                        <Route path="workspace/projects/discovery" element={<ProjectsSettings view="discovery" />} />
+                        <Route path="workspace/projects/presentation" element={<ProjectsSettings view="presentation" />} />
                         <Route path="workspace/source-control" element={<GitSettings />} />
+                        <Route path="workspace/source-control/pull-requests" element={<GitSettings view="pull-requests" />} />
+                        <Route path="workspace/source-control/writing" element={<GitSettings view="writing" />} />
+                        <Route path="workspace/source-control/writing/connections" element={<ProviderWritingSettings backTo="/settings/workspace/source-control/writing" backLabel="AI writing" />} />
+                        <Route path="workspace/source-control/writing/logs" element={<LogsSettings context="writing" />} />
                         <Route path="data/privacy" element={<DataPrivacySettings />} />
-                        <Route path="data/memory" element={<MemorySettings />} />
-                        <Route path="data/archived" element={<ArchivedChatsSettings />} />
+                        <Route path="data/memory" element={<SettingsRedirect to="/settings/assistant/memory" />} />
+                        <Route path="data/archived" element={<SettingsRedirect to="/settings/assistant/archived" />} />
                         <Route path="data/diagnostics" element={<LogsSettings />} />
                         <Route path="about" element={<AboutSettings />} />
-                        <Route path="general" element={<Navigate to="/settings/app/general" replace />} />
-                        <Route path="appearance" element={<Navigate to="/settings/app/appearance" replace />} />
-                        <Route path="connections" element={<Navigate to="/settings/account/devices" replace />} />
-                        <Route path="skills" element={<Navigate to="/settings/assistant/skills" replace />} />
-                        <Route path="voice" element={<Navigate to="/settings/assistant/voice" replace />} />
-                        <Route path="browser-control" element={<Navigate to="/settings/workspace/browser" replace />} />
-                        <Route path="files-editor" element={<Navigate to="/settings/workspace/files" replace />} />
-                        <Route path="terminal-runtime" element={<Navigate to="/settings/workspace/terminal" replace />} />
-                        <Route path="providers" element={<Navigate to="/settings/assistant/providers" replace />} />
-                        <Route path="source-control" element={<Navigate to="/settings/workspace/source-control" replace />} />
-                        <Route path="projects" element={<Navigate to="/settings/workspace/projects" replace />} />
-                        <Route path="memory" element={<Navigate to="/settings/data/memory" replace />} />
-                        <Route path="diagnostics" element={<Navigate to="/settings/data/diagnostics" replace />} />
-                        <Route path="archived" element={<Navigate to="/settings/data/archived" replace />} />
-                        <Route path="beta" element={<Navigate to="/settings/workspace/projects" replace />} />
-                        <Route path="chat" element={<Navigate to="/settings/assistant/defaults" replace />} />
-                        <Route path="behavior" element={<Navigate to="/settings/app/general" replace />} />
-                        <Route path="ai" element={<Navigate to="/settings/assistant/providers" replace />} />
-                        <Route path="git" element={<Navigate to="/settings/workspace/source-control" replace />} />
-                        <Route path="explorer" element={<Navigate to="/settings/workspace/projects" replace />} />
-                        <Route path="logs" element={<Navigate to="/settings/data/diagnostics" replace />} />
-                        <Route path="*" element={<Navigate to="/settings" replace />} />
+                        <Route path="general" element={<SettingsRedirect to="/settings/app/general" />} />
+                        <Route path="appearance" element={<SettingsRedirect to="/settings/app/appearance" />} />
+                        <Route path="connections" element={<SettingsRedirect to="/settings/account/devices" />} />
+                        <Route path="skills" element={<SettingsRedirect to="/settings/assistant/skills" />} />
+                        <Route path="voice" element={<SettingsRedirect to="/settings/assistant/voice" />} />
+                        <Route path="browser-control" element={<SettingsRedirect to="/settings/workspace/browser" />} />
+                        <Route path="files-editor" element={<SettingsRedirect to="/settings/workspace/files" />} />
+                        <Route path="terminal-runtime" element={<SettingsRedirect to="/settings/workspace/terminal" />} />
+                        <Route path="source-control" element={<SettingsRedirect to="/settings/workspace/source-control" />} />
+                        <Route path="projects" element={<SettingsRedirect to="/settings/workspace/projects" />} />
+                        <Route path="memory" element={<SettingsRedirect to="/settings/data/memory" />} />
+                        <Route path="diagnostics" element={<SettingsRedirect to="/settings/data/diagnostics" />} />
+                        <Route path="archived" element={<SettingsRedirect to="/settings/data/archived" />} />
+                        <Route path="beta" element={<SettingsRedirect to="/settings/workspace/projects" />} />
+                        <Route path="chat" element={<SettingsRedirect to="/settings/assistant/defaults" />} />
+                        <Route path="behavior" element={<SettingsRedirect to="/settings/app/general" />} />
+                        <Route path="ai" element={<SettingsRedirect to="/settings/providers/writing" />} />
+                        <Route path="git" element={<SettingsRedirect to="/settings/workspace/source-control" />} />
+                        <Route path="explorer" element={<SettingsRedirect to="/settings/workspace/projects" />} />
+                        <Route path="logs" element={<SettingsRedirect to="/settings/data/diagnostics" />} />
+                        <Route path="*" element={<SettingsRedirect to="/settings/app/general" />} />
                     </Route>
 
                     <Route path="/home" element={<Navigate to="/assistant" replace />} />
@@ -271,8 +304,8 @@ function AppContent() {
 
     return (
         <div className={`flex h-screen flex-col overflow-hidden bg-sparkle-bg text-sparkle-text ${settings.compactMode ? 'compact-mode' : ''}`}>
-            <TitleBar />
-            <div className="flex min-h-0 flex-1 pt-[34px]">
+            {isBrowserExtension ? <ExtensionSidebarHeader /> : <TitleBar />}
+            <div className={`flex min-h-0 flex-1 ${isBrowserExtension ? '' : 'pt-[34px]'}`}>
                 <MainContent />
             </div>
             <DevLoadingPreviewOverlay />
@@ -289,9 +322,11 @@ function NormalDesktopApp() {
                     <HashRouter>
                         <AssistantTitleBarProvider>
                             <ProjectCreationProvider>
+                                <AppMenuCommandHost />
                                 <AppContent />
                                 <CommandPalette />
                                 <UpdatePromptCenter />
+            <RuntimeActivationNotice />
                             </ProjectCreationProvider>
                         </AssistantTitleBarProvider>
                     </HashRouter>
@@ -301,7 +336,10 @@ function NormalDesktopApp() {
     )
 }
 
-function App() {
+function AppSurface() {
+    if (/^#\/accessories(?:[/?]|$)/.test(window.location.hash)) {
+        return <SettingsProvider><HashRouter><Suspense fallback={<div className="flex h-screen items-center justify-center bg-sparkle-bg text-sm text-sparkle-text-secondary">Opening Accessories…</div>}><AccessoryWindowPage /></Suspense></HashRouter></SettingsProvider>
+    }
     if (isQuickPreviewRoute(window.location.hash)) return <QuickOpenWindow />
     const assistantUtilityWindow = /^#\/assistant-utility(?:[/?]|$)/.test(window.location.hash)
     if (assistantUtilityWindow) {
@@ -332,6 +370,10 @@ function App() {
             </OnboardingProvider>
         </SettingsProvider>
     )
+}
+
+function App() {
+    return <><AppSurface /><AssistantBrowserRecordingHost /><DesktopLinkHost /></>
 }
 
 export default App

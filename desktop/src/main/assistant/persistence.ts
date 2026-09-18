@@ -60,6 +60,7 @@ import {
     readAssistantLatestUserMessageText,
     readAssistantPersistenceRecord,
     readAssistantSessionTurnUsage,
+    readAssistantUsageOwners,
     readAssistantTimelineProjectionRows
 } from './persistence-read'
 import {
@@ -453,6 +454,23 @@ export class AssistantPersistence {
         this.clearPendingEventTimer()
         await this.processPendingEvents()
         return this.enqueue(() => readAssistantLatestUserMessageText(this.requireDb(), sessionId))
+    }
+
+    async readUsageProjectPaths(): Promise<string[]> {
+        await this.ensureInitialized()
+        return this.enqueue(() => (this.requireDb().exec("SELECT DISTINCT project_path FROM assistant_sessions WHERE project_path IS NOT NULL")[0]?.values || []).map(row => String(row[0])).filter(Boolean))
+    }
+
+    async readUsageOwners(): Promise<string[]> {
+        await this.ensureInitialized()
+        return this.enqueue(() => readAssistantUsageOwners(this.requireDb()))
+    }
+
+    async readUsageTurns(since: string): Promise<AssistantSessionTurnUsageEntry[]> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantSessionTurnUsage(this.requireDb(), undefined, since))
     }
 
     async readSessionTurnUsage(sessionId: string): Promise<AssistantSessionTurnUsageEntry[]> {

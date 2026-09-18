@@ -85,7 +85,7 @@ async function runBrowserPreviewAnnotation(theme: DevScopeBrowserAnnotationTheme
             button{border:0;cursor:pointer} button:disabled{cursor:default;opacity:.4}
             .toolbar{pointer-events:auto;position:fixed;top:10px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:4px;border:1px solid var(--z-border);border-radius:9px;background:color-mix(in srgb,var(--z-card) 96%,transparent);box-shadow:0 10px 28px rgba(0,0,0,.24);backdrop-filter:blur(16px);color:var(--z-fg)}
             .tool,.icon{height:30px;border-radius:6px;background:transparent;color:var(--z-muted)}
-            .tool{padding:0 10px;font-size:12px;font-weight:550}.icon{width:30px;padding:0;font-size:15px}
+            .tool{padding:0 10px;font-size:12px;font-weight:550}.icon{display:inline-flex;align-items:center;justify-content:center;width:30px;flex:0 0 30px;padding:0;font-size:15px}.icon svg{position:static;display:block;width:16px;height:16px;flex:none;pointer-events:none}
             .tool:hover,.icon:hover{background:color-mix(in srgb,var(--z-fg) 7%,transparent);color:var(--z-fg)}
             .tool[data-active=true]{background:color-mix(in srgb,var(--z-primary) 12%,transparent);color:var(--z-primary)}
             .divider{width:1px;height:18px;margin:0 2px;background:var(--z-border)}
@@ -97,12 +97,13 @@ async function runBrowserPreviewAnnotation(theme: DevScopeBrowserAnnotationTheme
             .hover{border-style:dashed;background:color-mix(in srgb,var(--z-primary) 4%,transparent)}
             .marquee{border-style:dashed;background:color-mix(in srgb,var(--z-primary) 6%,transparent)}
             .label{position:fixed;pointer-events:none;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 6px;border-radius:4px;background:var(--z-primary);color:var(--z-primary-fg);font:600 10px/15px ${theme.fontFamily};box-shadow:0 4px 12px rgba(0,0,0,.2)}
-            svg{position:fixed;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+            .drawing-plane{position:fixed;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
         `
         shadow.appendChild(style)
 
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
         svg.setAttribute(UI_ATTRIBUTE, '')
+        svg.classList.add('drawing-plane')
         svg.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`)
         shadow.appendChild(svg)
         const hover = document.createElement('div')
@@ -253,7 +254,10 @@ async function runBrowserPreviewAnnotation(theme: DevScopeBrowserAnnotationTheme
         }
         const divider = document.createElement('span')
         divider.className = 'divider'
-        const clearButton = makeButton('⌫', 'Clear annotation', 'icon')
+        const clearButton = makeButton('', 'Clear annotation', 'icon')
+        clearButton.setAttribute('aria-label', 'Clear annotation')
+        // A recognizable eraser, consistent with the rest of Zyra's tools.
+        clearButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3a2.4 2.4 0 0 1 0-3.4l10.6-10.6a2.4 2.4 0 0 1 3.4 0l4.6 4.6a2.4 2.4 0 0 1 0 3.4L11 21H7Z"/><path d="m5 11 9 9M11 21h10"/></svg>'
         clearButton.addEventListener('click', clear)
         const cancelButton = makeButton('×', 'Cancel annotation', 'icon')
         toolbar.append(divider, clearButton, cancelButton)

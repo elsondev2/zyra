@@ -1,3 +1,5 @@
+import { normalizeSpeakingStyle } from '@shared/assistant/speaking-style'
+import { ACCENT_COLORS, type AccentColor } from '@shared/preferences/accent-presets'
 /**
  * Zyra - Settings Store & Context
  * Main-owned device settings facade with one-time renderer v4 migration.
@@ -96,7 +98,7 @@ export type AssistantDefaultEffort = AssistantReasoningEffort
 export type AssistantReasoningSummary = AssistantReasoningSummaryMode
 export type AssistantTranscriptionEngine = 'browser' | 'codex'
 export type AssistantBusyMessageMode = 'queue' | 'force'
-export type AssistantProductProfile = 'default' | 'builder'
+export type AssistantProductProfile = 'concise' | 'friendly' | 'direct' | 'thoughtful' | 'playful'
 export type AppearanceThemeMode = 'system' | 'light' | 'dark'
 export type AppearanceManagedFont = `managed:${string}`
 export type AppearanceLocalFont = `local:${string}`
@@ -118,11 +120,7 @@ export interface ProjectPullRequestConfig {
     changeSource: PullRequestChangeSource
 }
 
-export interface AccentColor {
-    name: string
-    primary: string
-    secondary: string
-}
+export type { AccentColor } from '@shared/preferences/accent-presets'
 
 export interface AppearanceCustomTheme {
     baseTheme: Theme
@@ -194,24 +192,7 @@ export function getAppearanceCodeFontStack(font: AppearanceCodeFont): string {
     return APPEARANCE_CODE_FONTS.find((entry) => entry.id === font)?.stack || APPEARANCE_CODE_FONTS[0].stack
 }
 
-export const ACCENT_COLORS: AccentColor[] = [
-    { name: 'Blue', primary: '#3b82f6', secondary: '#60a5fa' },
-    { name: 'Purple', primary: '#8b5cf6', secondary: '#a78bfa' },
-    { name: 'Pink', primary: '#ec4899', secondary: '#f472b6' },
-    { name: 'Green', primary: '#22c55e', secondary: '#4ade80' },
-    { name: 'Orange', primary: '#f97316', secondary: '#fb923c' },
-    { name: 'Cyan', primary: '#06b6d4', secondary: '#22d3ee' },
-    { name: 'Red', primary: '#ef4444', secondary: '#f87171' },
-    { name: 'Yellow', primary: '#eab308', secondary: '#facc15' },
-    { name: 'Teal', primary: '#14b8a6', secondary: '#2dd4bf' },
-    { name: 'Indigo', primary: '#6366f1', secondary: '#818cf8' },
-    { name: 'Rose', primary: '#f43f5e', secondary: '#fb7185' },
-    { name: 'Emerald', primary: '#10b981', secondary: '#34d399' },
-    { name: 'Violet', primary: '#7c3aed', secondary: '#a78bfa' },
-    { name: 'Amber', primary: '#f59e0b', secondary: '#fbbf24' },
-    { name: 'Lime', primary: '#84cc16', secondary: '#a3e635' },
-    { name: 'Sky', primary: '#0ea5e9', secondary: '#38bdf8' }
-]
+export { ACCENT_COLORS } from '@shared/preferences/accent-presets'
 
 function accentsEqual(left: AccentColor, right: AccentColor): boolean {
     return left.primary.toLowerCase() === right.primary.toLowerCase()
@@ -298,6 +279,8 @@ export interface Settings {
     assistantUsageDisplayMode: AssistantUsageDisplayMode
     assistantTextStreamingMode: AssistantTextStreamingMode
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
+    assistantAllowCollapseWhileWorking: boolean
+    assistantShowActionStats: boolean
     assistantChatDisplayMode: AssistantChatDisplayMode
     assistantDefaultModel: string
     assistantTitleModel: string
@@ -399,13 +382,15 @@ const DEFAULT_SETTINGS: Settings = {
     assistantUsageDisplayMode: 'remaining',
     assistantTextStreamingMode: 'stream',
     assistantToolOutputDefaultMode: 'minimized',
+    assistantAllowCollapseWhileWorking: false,
+    assistantShowActionStats: false,
     assistantChatDisplayMode: 'minimal',
     assistantDefaultModel: '',
     assistantTitleModel: DEFAULT_ASSISTANT_TITLE_MODEL,
     assistantTitleAutoRegenerate: false,
     assistantTitleAutoRegenerateTurns: DEFAULT_ASSISTANT_AUTO_TITLE_TURNS,
     assistantDefaultPromptTemplate: '',
-    assistantProductProfile: 'default',
+    assistantProductProfile: 'concise',
     assistantDefaultRuntimeMode: 'approval-required',
     assistantDefaultEffort: 'medium',
     assistantDefaultFastMode: false,
@@ -517,10 +502,11 @@ function sanitizeThemeTokens(value: unknown, fallback: ThemeTokens): ThemeTokens
 function sanitizeAppearanceCustomTheme(value: unknown): AppearanceCustomTheme | null {
     if (!value || typeof value !== 'object') return null
     const candidate = value as Partial<AppearanceCustomTheme>
-    if (!isThemeId(candidate.baseTheme)) return null
-    const baseTheme = getThemeDefinition(candidate.baseTheme)
+    const baseId = String(candidate.baseTheme) === 'dark' ? DEFAULT_APPEARANCE_DARK_THEME : candidate.baseTheme
+    if (!isThemeId(baseId)) return null
+    const baseTheme = getThemeDefinition(baseId)
     return {
-        baseTheme: candidate.baseTheme,
+        baseTheme: baseId,
         tokens: sanitizeThemeTokens(candidate.tokens, baseTheme.tokens),
         accentColor: sanitizeAccentColor(candidate.accentColor),
         uiFont: sanitizeAppearanceUiFont(candidate.uiFont),
@@ -653,9 +639,6 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
             const legacyFileDiffRenderMode = useRendererLegacyStorage
                 ? localStorage.getItem('devscope:project-details:diff-render-mode:v1')
                 : null
-            const legacyProductProfile = useRendererLegacyStorage
-                ? localStorage.getItem('zyra-ui:active-profile:v2') || localStorage.getItem('zyra-ui:active-profile:v1')
-                : null
 
             return {
                 settingsSchemaVersion: 4,
@@ -770,17 +753,15 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                     )
                     ? 'expanded'
                     : 'minimized',
+                assistantAllowCollapseWhileWorking: candidate.assistantAllowCollapseWhileWorking === true,
+                assistantShowActionStats: candidate.assistantShowActionStats === true,
                 assistantChatDisplayMode: candidate.assistantChatDisplayMode === 'detailed' ? 'detailed' : 'minimal',
                 assistantDefaultModel: sanitizeString(candidate.assistantDefaultModel, 256),
                 assistantTitleModel: sanitizeString(candidate.assistantTitleModel, 256) || DEFAULT_ASSISTANT_TITLE_MODEL,
                 assistantTitleAutoRegenerate: candidate.assistantTitleAutoRegenerate === true,
                 assistantTitleAutoRegenerateTurns: normalizeAssistantAutoTitleTurnInterval(candidate.assistantTitleAutoRegenerateTurns),
                 assistantDefaultPromptTemplate: sanitizeString(candidate.assistantDefaultPromptTemplate, 32_000, false),
-                assistantProductProfile: parsed.assistantProductProfile === 'builder'
-                    || (parsed.assistantProductProfile === undefined && legacyProductProfile === ['e', 'lson'].join(''))
-                    || (parsed.assistantProductProfile === undefined && legacyProductProfile === 'builder')
-                    ? 'builder'
-                    : 'default',
+                assistantProductProfile: normalizeSpeakingStyle(parsed.assistantProductProfile),
                 assistantDefaultRuntimeMode: sanitizeAssistantDefaultRuntimeMode(candidate.assistantDefaultRuntimeMode),
                 assistantDefaultEffort: sanitizeAssistantDefaultEffort(candidate.assistantDefaultEffort),
                 assistantDefaultFastMode: !!candidate.assistantDefaultFastMode,
@@ -1145,7 +1126,7 @@ function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeToken
         target.classList.remove(...THEME_CLASS_IDS)
         target.classList.toggle('dark', appearance === 'dark')
         target.classList.toggle('light', appearance === 'light')
-        if (theme !== 'dark' && theme !== 'light') target.classList.add(theme)
+        if (theme !== 'light') target.classList.add(theme)
     }
     document.body.classList.add('theme-adaptive')
 

@@ -39,10 +39,11 @@ const oldActivity: AssistantActivity = {
 }
 const currentActivity: AssistantActivity = {
     id: 'activity-current',
-    kind: 'command',
-    tone: 'tool',
-    summary: 'Current command',
+    kind: 'error',
+    tone: 'error',
+    summary: 'Assistant error',
     turnId: 'turn-current',
+    turnTerminalOutcome: 'failed',
     createdAt: '2026-07-15T12:01:00.000Z'
 }
 
@@ -103,6 +104,8 @@ assert.equal(persistedThread?.canonicalHistoryEntryCount, thread.canonicalHistor
 const persistedVoiceMessage = readAssistantTimelineProjectionRows(db, thread.id).messages.find((message) => message.id === currentMessage.id)
 assert.equal(persistedVoiceMessage?.providerItemId, currentMessage.providerItemId, 'Voice provider identity must survive Assistant SQLite hydration')
 assert.equal(persistedVoiceMessage?.modality, 'voice', 'Voice modality must survive Assistant SQLite hydration')
+const persistedTerminalActivity = readAssistantTimelineProjectionRows(db, thread.id).activities.find((activity) => activity.id === currentActivity.id)
+assert.equal(persistedTerminalActivity?.turnTerminalOutcome, 'failed', 'canonical reconciliation reads retain persisted terminal outcomes')
 
 const streamingVoiceMessageId = 'voice_assistant_projector_handoff'
 const streamingVoiceDeltaEvent: AssistantDomainEvent = {

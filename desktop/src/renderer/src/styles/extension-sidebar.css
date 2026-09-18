@@ -1,0 +1,23 @@
+html[data-zyra-extension] { min-width: 280px; }
+.extension-header { flex-shrink:0; border-bottom:1px solid var(--surface-panel-divider); background:var(--color-bg); }
+.extension-header-actions { display:flex; align-items:center; gap:8px; min-height:40px; padding:4px 10px; font-size:13px; }
+.extension-header button { display:inline-flex; align-items:center; justify-content:center; padding:6px; border-radius:5px; cursor:pointer; }
+.extension-header button:hover { background:var(--surface-hover); }
+.extension-header button:focus-visible { outline:2px solid var(--color-primary); }
+.extension-header button:disabled { opacity:.4; cursor:default; }
+.extension-connection-state { flex:1; font-size:10px; color:var(--color-text-muted); }
+.extension-tab-context { display:flex; gap:6px; padding:0 10px 6px; color:var(--color-text-muted); font-size:11px; }
+.extension-tab-context button:first-child { display:block; flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-header p { padding:4px 12px; font-size:11px; color:var(--status-danger); }
+.extension-connection { padding:32px 20px; font:13px system-ui; min-height:100vh; background:#171717; color:#eee; }
+.extension-connection h1 { font-size:20px; margin:14px 0; }
+.extension-connection p { margin:14px 0; line-height:1.6; color:#aaa; }
+.extension-connection button,.extension-connection a { display:inline-block; padding:8px 12px; margin:8px 8px 0 0; border:1px solid #555; border-radius:6px; }
+html[data-zyra-extension] [data-assistant-workspace] { position:relative; }
+html[data-zyra-extension] .extension-chat-drawer { position:absolute; inset:0 auto 0 0; z-index:45; box-shadow:12px 0 36px #0005; }
+html[data-zyra-extension] [data-assistant-route-shell] { height:100%; min-height:0; }
+html[data-zyra-extension] [data-assistant-page] { height:100%; min-height:0; }
+html[data-zyra-extension] [data-assistant-inspector-frame]:not([aria-hidden="true"]) { position:absolute; inset:0; width:100% !important; max-width:100%; z-index:35; background:var(--color-bg); }
+
+.extension-tab-context select { max-width:104px; border:0; border-radius:4px; background:var(--color-bg); color:inherit; font-size:11px; }
+.extension-tab-context button:not(:last-child) { display:block; flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

@@ -1,17 +1,19 @@
 export const AGENT_SERVER_PROTOCOL_VERSION = 5;
-// Prompt images are already bounded to 12 inputs and roughly 28 MiB of base64 each.
-// The local pipe preserves that existing contract; event writes still fail in isolation below.
+// Prompts enforce 12 images, 20 MiB each and 40 MiB aggregate decoded data.
+// This larger local pipe ceiling also preserves legacy history response compatibility.
 export const MAX_AGENT_SERVER_MESSAGE_BYTES = 384 * 1024 * 1024;
 export const MAX_AGENT_SERVER_REPLAY_EVENTS = 512;
 
-const METHOD_NAMES = new Set([
+export const AGENT_SERVER_METHODS = Object.freeze([
   "server.status",
+  "server.retire",
   "runtime.models",
   "runtime.generateText",
   "desktop.workspace.open",
   "auth.refresh",
   "catalog.registerProject",
   "catalog.list",
+  "catalog.projects",
   "catalog.get",
   "catalog.history",
   "catalog.entry.body",
@@ -20,11 +22,13 @@ const METHOD_NAMES = new Set([
   "catalog.message.append",
   "catalog.message.find",
   "session.attach",
+  "session.join",
   "session.pluginAuthority",
   "session.request",
   "session.detach",
   "session.stop",
 ]);
+const METHOD_NAMES = new Set(AGENT_SERVER_METHODS);
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,191}$/;
 

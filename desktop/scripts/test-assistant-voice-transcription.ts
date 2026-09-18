@@ -44,6 +44,29 @@ const baseInput: AssistantTranscribeVoiceInput = {
     durationMs: 1_000
 }
 
+const mobileWav = readFileSync(resolve(import.meta.dirname, '../../mobile/android/app/src/test/resources/recovered-voice.wav'))
+assert.deepEqual(decodeCodexVoiceInput({ audioBase64: mobileWav.toString('base64'), mimeType: 'audio/wav', sampleRateHz: 24000, durationMs: 2000 }), mobileWav, 'native PCM fixture must satisfy the actual PC WAV contract')
+
+const cancelledHeaders = new AbortController()
+const cancelledRequest = requestCodexVoiceTranscription({ audio: wav, accessToken: 'fixture', accountId: 'fixture', signal: cancelledHeaders.signal,
+    fetchImpl: (async (_url, init) => new Promise((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true }) })) as typeof fetch })
+const headerRejection = assert.rejects(cancelledRequest, /cancelled by phone/)
+cancelledHeaders.abort(new Error('cancelled by phone'))
+await headerRejection
+
+const cancelledBody = new AbortController()
+let bodyReady!: () => void, cancelledStream = false
+const bodyWaiting = new Promise<void>(resolve => { bodyReady = resolve })
+const bodyRequest = transcribeCodexVoiceWithDependencies(baseInput, {
+    resolveCredentials: async () => ({ accessToken: 'fixture', accountId: 'fixture' }),
+    requestTranscription: async () => new Response(new ReadableStream({ start() { bodyReady() }, cancel() { cancelledStream = true } }))
+}, cancelledBody.signal)
+const bodyRejection = assert.rejects(bodyRequest, /cancelled by phone/)
+await bodyWaiting
+cancelledBody.abort(new Error('cancelled by phone'))
+await bodyRejection
+assert.equal(cancelledStream, true, 'leaving Voice cancels response-body reads too')
+
 assert.deepEqual(decodeCodexVoiceInput(baseInput), wav, 'valid 24 kHz mono WAV data should pass validation')
 assert.throws(
     () => decodeCodexVoiceInput({ ...baseInput, sampleRateHz: 16_000 as 24_000 }),
@@ -198,7 +221,7 @@ const rendererCssSource = readFileSync(resolve(import.meta.dir, '../src/renderer
 assert.doesNotMatch(transcriptionSource, /\.codex|CodexAppServerRuntime|codex-app-server/u, 'subscription transcription must use Zyra auth rather than the retired Codex CLI')
 assert.doesNotMatch(transcriptionSource, /chatgpt-account\.mjs|pathToFileURL|import\(\/\* @vite-ignore \*\//u, 'transcription must not cold-load Pi auth and OAuth modules on Electron main')
 assert.doesNotMatch(transcriptionSource, /zyra-sdk\.mjs/u, 'subscription transcription must not import the full Pi SDK into Electron')
-assert.match(transcriptionSource, /getSharedOpenAIAuthWorkerClient\(\)\.account\.resolveChatGptAccountAuth\(\)/u, 'ChatGPT transcription must resolve the same Pi account source off the main event loop')
+assert.match(transcriptionSource, /getSharedProviderWorkerClient\(\)\.account\.resolveChatGptAccountAuth\(\)/u, 'ChatGPT transcription must resolve the same Pi account source off the main event loop')
 assert.match(transcriptionSource, /session\.defaultSession\.fetch/u, 'desktop transcription must use Chromium networking so ChatGPT browser checks can reuse the app session')
 assert.match(mainIndexSource, /setupServices\.auth\.prewarm\(\)/u, 'Desktop startup must warm Pi auth before the first ChatGPT recording')
 assert.doesNotMatch(mainIndexSource, /if \(setupServices\.onboarding\.shouldShowOnboarding\(\)\) \{[\s\S]{0,200}auth\.prewarm/u, 'auth warming must not be limited to onboarding')

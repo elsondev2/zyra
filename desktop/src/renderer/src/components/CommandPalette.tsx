@@ -21,6 +21,8 @@ import { createAssistantChatAndNavigate } from '@/pages/assistant/create-assista
 import { findAllSettingsSearchMatches } from '@/pages/settings/settings-search'
 import { preloadSettingsRoute } from '@/pages/settings/settings-route-loaders'
 import { useAssistantChatSearch } from '@/lib/assistant/use-assistant-chat-search'
+import { addOverlayEventListener, getOverlayActiveElement, NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
+import { supportsNativeOverlay } from '@/components/ui/native-overlay-host'
 
 const MAX_RECENT_CHATS = 8
 
@@ -41,18 +43,15 @@ export function CommandPalette() {
 
     useEffect(() => {
         if (isOpen) {
-            previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement
-                ? document.activeElement
-                : null
+            previouslyFocusedElementRef.current = getOverlayActiveElement()
             activationPendingRef.current = false
             setIsClosing(false)
-            window.setTimeout(() => inputRef.current?.focus(), 10)
             return
         }
 
         const previouslyFocusedElement = previouslyFocusedElementRef.current
         previouslyFocusedElementRef.current = null
-        if (previouslyFocusedElement) window.setTimeout(() => previouslyFocusedElement.focus(), 0)
+        if (previouslyFocusedElement && !supportsNativeOverlay()) window.setTimeout(() => previouslyFocusedElement.focus(), 0)
         setIsClosing(false)
         setQuery('')
         setSelectedIndex(0)
@@ -71,7 +70,7 @@ export function CommandPalette() {
             const previouslyFocusedElement = previouslyFocusedElementRef.current
             previouslyFocusedElementRef.current = null
             close()
-            window.setTimeout(() => previouslyFocusedElement?.focus(), 0)
+            if (!supportsNativeOverlay()) window.setTimeout(() => previouslyFocusedElement?.focus(), 0)
         }, 120)
     }, [close, isClosing])
 
@@ -255,8 +254,7 @@ export function CommandPalette() {
             }
         }
 
-        window.addEventListener('keydown', handler)
-        return () => window.removeEventListener('keydown', handler)
+        return addOverlayEventListener('keydown', handler)
     }, [handleClose, isOpen, results, selectedIndex, selectResult])
 
     if (!isOpen) return null
@@ -267,7 +265,7 @@ export function CommandPalette() {
             ? 'Chat history search is unavailable. Recent results remain available.'
             : `${results.length} result${results.length === 1 ? '' : 's'}${chatSearch.indexingOlderChats ? '. Indexing older chats in the background.' : '.'}`
 
-    return (
+    return <NativeOverlayPortal onReady={() => inputRef.current?.focus()}>
         <div
             className={cn(
                 'fixed inset-0 z-[60] flex items-start justify-center bg-sparkle-bg/70 px-3 pt-[18vh] backdrop-blur-sm sm:px-6',
@@ -288,6 +286,7 @@ export function CommandPalette() {
                 <h2 id="command-palette-title" className="sr-only">Search Zyra</h2>
                 <input
                     ref={inputRef}
+                    data-native-overlay-autofocus
                     role="combobox"
                     aria-label="Search chats, actions, or settings"
                     aria-autocomplete="list"
@@ -323,7 +322,7 @@ export function CommandPalette() {
                 </div>
             </div>
         </div>
-    )
+    </NativeOverlayPortal>
 }
 
 export default CommandPalette

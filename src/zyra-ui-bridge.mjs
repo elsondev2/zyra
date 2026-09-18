@@ -1,3 +1,8 @@
+import { normalizePromptImages } from './prompt-images.mjs';
+import { ensureSessionDurable } from './agent-server/session-durability.mjs';
+import { sessionPreferences } from './session-preferences.mjs';
+import { registerSavedProviders } from "./provider-connections.mjs";
+import { createIdleMemoryScheduler } from "./memory/idle-memory-scheduler.mjs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import readline from "node:readline";
@@ -61,6 +66,7 @@ function requestToolPermission(request = {}) {
       command: request.command,
       paths: request.paths,
       toolName: request.toolName,
+      toolCallId: request.toolCallId,
       grantLabel: request.grantLabel,
     },
   });
@@ -184,7 +190,13 @@ async function loadSdk() {
   return sdkPromise;
 }
 
+let idleMemoryScheduler;
+let memoryJobController;
+
 function disposeRuntime() {
+  memoryJobController?.abort();
+  idleMemoryScheduler?.dispose();
+  idleMemoryScheduler = undefined;
   declinePendingPermissions();
   abandonPendingUserInputs();
   stopTemporaryBrowserRelay();
@@ -256,8 +268,23 @@ async function handleConnect(payload) {
   const storedChatConfig = readStoredChatConfig(runtime.session.sessionManager);
   await applyChatConfig(sdk, storedChatConfig || normalizeChatConfig(payload), { emit: false });
   const chatConfig = currentChatConfig(sdk);
+  if (payload.persistNewSession === true) ensureSessionDurable(runtime.session.sessionManager);
   activeActionBatchIntent = undefined;
+  if (payload.memoryQueueOwner !== "server" && payload.surface !== "memory-worker" && !payload.noSession && process.env.ZYRA_MEMORY_BACKGROUND !== "0") {
+    const ownedRuntime = runtime;
+    idleMemoryScheduler = createIdleMemoryScheduler({
+      run: async (signal) => {
+        if (runtime !== ownedRuntime || ownedRuntime.session.isStreaming || ownedRuntime.session.isCompacting) return;
+        const includeCurrent = ownedRuntime.session.state?.messages?.some(message => message.role === "assistant");
+        return sdk.runZyraMemoryConsolidation(ownedRuntime, { signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]), includeCurrent: Boolean(includeCurrent), maxStartupClaims: 1, phase2CooldownSeconds: 900 });
+      },
+      onError: () => process.stderr.write("[memory] Idle consolidation failed; check Memory status.\n"),
+    });
+    idleMemoryScheduler.idle();
+  }
   unsubscribe = runtime.session.subscribe((event) => {
+    if (event.type === "agent_start") { idleMemoryScheduler?.busy(); memoryJobController?.abort(); }
+    if (event.type === "agent_end" && event.willRetry !== true) idleMemoryScheduler?.idle();
     const normalized = normalizeEvent(event, getRuntimeContextWindow(runtime));
     if (!normalized) return;
     if (isActionBatchIntentEvent(normalized)) {
@@ -279,7 +306,7 @@ async function handleConnect(payload) {
       const now = Date.now();
       const shouldPublishLiveContext = event.type !== "message_update" || now - lastLiveContextPublishedAt >= 250;
       if (shouldPublishLiveContext) {
-        const current = sdk.describeRuntime(runtime);
+        const current = sdk.getRuntimeUsageSnapshot(runtime);
         if (event.type === "message_start") {
           liveContextBaselineTokens = Number(current.contextUsage?.tokens) || 0;
         }
@@ -599,28 +626,6 @@ function numberValue(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-const supportedPromptImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const maxPromptImageBase64Chars = 28 * 1024 * 1024;
-
-function normalizePromptImages(value) {
-  if (value == null) return undefined;
-  if (!Array.isArray(value)) throw new Error("Invalid prompt image payload.");
-  if (value.length > 12) throw new Error("Attach at most 12 images per message.");
-
-  const images = value.map((image, index) => {
-    if (!image || typeof image !== "object") throw new Error(`Image ${index + 1} is invalid.`);
-    const data = stringValue(image.data);
-    const mimeType = stringValue(image.mimeType)?.toLowerCase();
-    if (image.type !== "image" || !data || !mimeType || !supportedPromptImageMimeTypes.has(mimeType)) {
-      throw new Error(`Image ${index + 1} is not a supported visual input.`);
-    }
-    if (data.length > maxPromptImageBase64Chars) throw new Error(`Image ${index + 1} is larger than 20 MB.`);
-    return { type: "image", data, mimeType };
-  });
-
-  return images.length > 0 ? images : undefined;
-}
-
 const VALID_THINKING_LEVELS = new Set(["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function normalizeRuntimeMode(value) {
@@ -765,7 +770,7 @@ async function generateAndPersistSessionTitle(targetRuntime, cwd) {
   if (!transcript) return;
   const result = await handleGenerateText({
     cwd: cwd || targetRuntime.project,
-    model: "openai-codex/gpt-5.6-luna",
+    model: targetRuntime.session.model?.provider === "openai-codex" ? "openai-codex/gpt-5.6-luna" : `${targetRuntime.session.model.provider}/${targetRuntime.session.model.id}`,
     thinking: "low",
     prompt: [
       "You write concise titles for coding assistant chat sessions.",
@@ -814,11 +819,14 @@ async function handleGenerateText(payload) {
   if (!prompt) throw new Error('Prompt is required.');
 
   const sdk = await loadSdk();
+  const models = await sdk.listAvailableModels({ skipAvailability: true });
+  const requestedModel = models.some(model => model.id === payload.model) ? payload.model : models[0]?.id;
+  if (!requestedModel) throw new Error('Connect a model provider before generating a title.');
   const titleRuntime = await sdk.createZyraSession({
     project: payload.cwd,
     noSession: true,
     noTools: "all",
-    model: payload.model,
+    model: requestedModel,
     thinking: payload.thinking || 'low',
     reasoningSummary: 'auto',
     skipGuide: true,
@@ -843,7 +851,8 @@ async function handleModels(payload) {
   const sdk = await loadSdk();
   if (runtime?.session?.modelRegistry) {
     if (payload.forceRefresh && typeof runtime.session.modelRegistry.refresh === "function") {
-      runtime.session.modelRegistry.refresh();
+      registerSavedProviders(runtime.session.modelRegistry);
+      await runtime.session.modelRegistry.refresh();
     }
     return {
       models: sdk.getZyraAvailableModels(runtime.session.modelRegistry).map((model) => modelToInfo(model, sdk)),
@@ -875,7 +884,15 @@ async function handleCanonicalMessageOperation(type, payload = {}) {
   const sessionManager = runtime?.session?.sessionManager;
   if (!sessionManager) throw new Error("Zyra canonical session is not connected.");
   if (type === "canonical_message.append") {
-    return { receipt: appendCanonicalMessage(sessionManager, payload) };
+    const receipt = appendCanonicalMessage(sessionManager, payload);
+    const entries = sessionManager.getEntries();
+    const index = entries.findIndex(entry => `pi_entry_${entry.id}` === receipt.receiptId);
+    const entry = entries[index];
+    if (!entry?.message) throw new Error("The committed canonical message could not be read back.");
+    // Publish only after the ledger has durably flushed the exact entry. Every
+    // attached client receives the same message identity as a later history read.
+    send({ type: "event", event: { type: "message_end", canonicalCommit: true, historyEntryIndex: index, message: entry.message } });
+    return { receipt };
   }
   if (type === "canonical_message.find") {
     return { receipt: findCanonicalMessageReceipt(sessionManager, payload.operationId) };
@@ -886,11 +903,11 @@ async function handleCanonicalMessageOperation(type, payload = {}) {
 async function handleSessionOperation(type, payload = {}) {
   if (!runtime?.session) throw new Error("Zyra bridge is not connected.");
   if (type === "steer") {
-    await runtime.session.steer(String(payload.prompt || ""), payload.images);
+    await runtime.session.steer(String(payload.prompt || ""), normalizePromptImages(payload.images));
     return {};
   }
   if (type === "follow_up") {
-    await runtime.session.followUp(String(payload.prompt || ""), payload.images);
+    await runtime.session.followUp(String(payload.prompt || ""), normalizePromptImages(payload.images));
     return {};
   }
   if (type === "compact") return runtime.session.compact(String(payload.instructions || "").trim() || undefined);
@@ -1004,6 +1021,18 @@ function summarizeFleetEvent(event) {
 let pluginRevocationPromise;
 let pendingConnect;
 
+async function consolidateIdleMemory() {
+  if (!runtime || runtime.session.isStreaming || runtime.session.isCompacting || process.env.ZYRA_MEMORY_BACKGROUND === "0") return { skipped: true };
+  if (memoryJobController) return { skipped: true };
+  const controller = new AbortController(); memoryJobController = controller;
+  try {
+    const sdk = await loadSdk();
+    const result = await sdk.runZyraMemoryConsolidation(runtime, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]), includeCurrent: runtime.session.state?.messages?.some(message => message.role === "assistant") === true, maxStartupClaims: 1, phase2CooldownSeconds: 900 });
+    controller.signal.throwIfAborted();
+    return { updated: result.stage1?.succeeded > 0 || result.phase2?.status === "succeeded", failed: result.stage1?.failed > 0 || result.phase2?.status === "failed" };
+  } finally { if (memoryJobController === controller) memoryJobController = undefined; }
+}
+
 async function handleMessage(message) {
   if (message?.type === "control.response") {
     controlBridgeClient.handleResponse(message);
@@ -1011,6 +1040,8 @@ async function handleMessage(message) {
   }
   const id = message?.id;
   try {
+    if (message?.type === "memory.cancel") { memoryJobController?.abort(); sendResponse(id, true, { cancelled: true }); return; }
+    if (message?.type === "memory.consolidate") { sendResponse(id, true, await consolidateIdleMemory()); return; }
     if (message?.type === 'plugin.revoke') {
       pluginRevocationPromise ??= Promise.resolve().then(async () => {
         await pendingConnect?.catch(() => undefined);
@@ -1037,6 +1068,12 @@ async function handleMessage(message) {
     }
     if (message?.type === "configure") {
       sendResponse(id, true, { result: await handleConfigure(message.payload ?? {}) });
+      return;
+    }
+    if (message?.type === 'preferences.get' || message?.type === 'memory.configure') {
+      const result = sessionPreferences(runtime, await loadSdk(), message.type, message.payload ?? {});
+      if (message.type === 'memory.configure') send({ type: 'event', event: { type: 'session_memory', memoryMode: result.memoryMode } });
+      sendResponse(id, true, { result });
       return;
     }
     if (message?.type === "auth.refresh") {

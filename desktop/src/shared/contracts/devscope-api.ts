@@ -1,3 +1,8 @@
+import type { RuntimeActivationStatus } from '../runtime-activation'
+import type { BrowserRecordingOverlayCommand, BrowserRecordingOverlayPresentation, BrowserRecordingOverlayState } from './browser-recording-overlay'
+import type { NativeOverlayApi } from './native-overlay'
+import type { AgentRoleModels, AgentRoleModelInput, DelegationPreferencesUpdate, DelegationSettingsSnapshot } from '../onboarding/contracts'
+import type { ModelProviderInput, ModelProviderConnection } from '../onboarding/contracts'
 import type {
     AssistantApprovalResponseInput,
     AssistantAccountOverviewPayload,
@@ -64,6 +69,7 @@ import type {
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantSessionTurnUsageResultPayload,
     AssistantShellSnapshot,
     AssistantSnapshot,
@@ -133,6 +139,7 @@ import type { BrowserShortcutAction } from '../browser-shortcuts'
 import type { BrowserPopupCommand, BrowserPopupState, BrowserPopupSummary } from '../browser-popup'
 import type { BrowserDownloadAction, BrowserDownloadActionResult, BrowserDownloadPreviewTarget, BrowserDownloadRecord, BrowserDownloadsFolderAction, BrowserDownloadsFolderActionResult, BrowserDownloadsFolderEntry } from '../browser-downloads'
 import type { BrowserViewApi } from '../browser-view'
+import type { AccessoriesApi } from '../accessories'
 import type { AssistantUtilityApi } from '../assistant/utility-window'
 import type {
     ExternalBrowserHistoryImportInput,
@@ -304,6 +311,7 @@ export type DevScopeBrowserCaptureArtifact = {
 }
 
 export type DevScopeBrowserRecordingFrame = {
+    ended?: boolean
     tabId: string
     data: string
     width: number
@@ -384,6 +392,7 @@ export const BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL = 'devscope:browserPreview:
 export type DevScopePreviewTerminalWorkspaceOwner =
     | { kind: 'main-workspace'; runtimeId: string }
     | { kind: 'utility-tab'; tabId: string }
+    | { kind: 'accessory-window'; workspaceId: string }
 
 export type DevScopePreviewTerminalAccess = {
     workspaceCapability?: string
@@ -495,6 +504,7 @@ export type DevScopeWindowRuntimeInfo = {
 }
 
 export type DevScopeTerminalCommandStatus = {
+    canManage?: boolean
     path: string
     installed: boolean
     managed: boolean
@@ -544,6 +554,13 @@ export interface DevScopeSecretsApi {
 
 export interface DevScopeOnboardingApi {
     getState: () => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
+    connectModelProvider: (input: ModelProviderInput) => Promise<DevScopeResult<{ connection: ModelProviderConnection }>>
+    disconnectModelProvider: (provider: string) => Promise<DevScopeResult<{ provider: string }>>
+    getDelegationPreferences: () => Promise<DevScopeResult<DelegationSettingsSnapshot>>
+    saveDelegationPreferences: (input: DelegationPreferencesUpdate) => Promise<DevScopeResult<DelegationSettingsSnapshot>>
+    getAgentRoleModels: () => Promise<DevScopeResult<{ models: AgentRoleModels }>>
+    setAgentRoleModel: (input: AgentRoleModelInput) => Promise<DevScopeResult<{ models: AgentRoleModels }>>
+    listModelProviders: () => Promise<DevScopeResult<{ connections: ModelProviderConnection[] }>>
     getAuthStatus: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     getConnectionsStatus: (input?: AccountConnectionStatusInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
     connectChatGpt: (input?: AccountConnectionAnalyticsInput) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
@@ -587,6 +604,7 @@ export interface DevScopeAgentControlApi {
     revokeGrant: (grantId: string) => Promise<DevScopeResult<{ revoked: boolean }>>
     emergencyStop: () => Promise<DevScopeResult<{ stopped: boolean }>>
     clearAudit: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    openChromeExtensionFolder: () => Promise<DevScopeResult<{ opened: boolean }>>
     startChromePairing: () => Promise<DevScopeResult<{ pairing: ControlStateSnapshot['pairing'] }>>
     stopChromePairing: () => Promise<DevScopeResult<{ pairing: ControlStateSnapshot['pairing'] }>>
     listWindows: () => Promise<DevScopeResult<{ windows: ControlWindowCandidate[] }>>
@@ -608,6 +626,7 @@ export interface DevScopeAssistantApi {
     getStatus: () => Promise<AssistantRuntimeStatus>
     getAccountOverview: (forceRefresh?: boolean) => Promise<DevScopeResult<AssistantAccountOverviewPayload>>
     redeemAccountReset: (input: AssistantRedeemAccountResetInput) => Promise<DevScopeResult<AssistantRedeemAccountResetPayload>>
+    getUsageSummary: (input?: import('../assistant/usage-summary').UsageSummaryInput) => Promise<DevScopeResult<{ summary: import('../assistant/usage-summary').UsageSummary }>>
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>
     listModels: (forceRefresh?: boolean) => Promise<DevScopeResult<{ models: AssistantModelInfo[] }>>
     listProjects: () => Promise<DevScopeResult<{ catalog: AssistantProjectCatalog }>>
@@ -652,6 +671,7 @@ export interface DevScopeAssistantApi {
     deleteSession: (sessionId: string) => Promise<DevScopeResult>
     deleteMessage: (input: AssistantDeleteMessageInput) => Promise<DevScopeResult>
     clearLogs: (input?: AssistantClearLogsInput) => Promise<DevScopeResult>
+    updateSessionConfiguration: (input: AssistantUpdateSessionConfigurationInput) => Promise<DevScopeResult>
     setSessionProject: (sessionId: string, input: AssistantSetSessionProjectInput) => Promise<DevScopeResult>
     setSessionProjectPath: (sessionId: string, projectPath: string | null) => Promise<DevScopeResult>
     setPlaygroundRoot: (input: AssistantSetPlaygroundRootInput) => Promise<DevScopeResult<AssistantPlaygroundResultPayload>>
@@ -688,6 +708,9 @@ export interface DevScopeAssistantApi {
 }
 
 export interface DevScopeApi {
+    openDesktopSettings: () => Promise<DevScopeResult>
+    mobileAccess?: import('../mobile-access').MobileAccessApi
+    runtimeActivation: { getState: () => Promise<RuntimeActivationStatus>; onStateChange: (listener: (state: RuntimeActivationStatus) => void) => () => void }
     // Settings + AI
     setStartupSettings: (settings: { openAtLogin: boolean; openAsHidden: boolean }) => Promise<DevScopeResult>
     getStartupSettings: () => Promise<DevScopeResult>
@@ -938,10 +961,19 @@ export interface DevScopeApi {
     copyBrowserPreviewArtifact: (input: { artifactId: string; mode: 'image' | 'path' }) => Promise<DevScopeResult>
     startBrowserPreviewAnnotation: (input: DevScopeBrowserAnnotationInput) => Promise<DevScopeResult<{ annotation: DevScopeBrowserAnnotationPayload | null; artifact: DevScopeBrowserCaptureArtifact | null }>>
     cancelBrowserPreviewAnnotation: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
-    startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ startedAt: string }>>
+    startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ startedAt: string; tabAudioSupported: boolean; systemAudioSupported: boolean }>>
+    prepareBrowserPreviewRecordingAudio: (input: DevScopeBrowserGuestTargetInput & { source: 'tab' | 'system' }) => Promise<DevScopeResult>
     stopBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
     saveBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput & { mimeType: string; data: Uint8Array }) => Promise<DevScopeResult<{ artifact: DevScopeBrowserCaptureArtifact }>>
     onBrowserPreviewRecordingFrame: (callback: (frame: DevScopeBrowserRecordingFrame) => void) => () => void
+    setBrowserRecordingOverlay: (state: BrowserRecordingOverlayState | null) => Promise<DevScopeResult>
+    prepareNativeOverlay: NativeOverlayApi['prepareNativeOverlay']
+    recoverNativeOverlay: NativeOverlayApi['recoverNativeOverlay']
+    setNativeOverlayVisible: NativeOverlayApi['setNativeOverlayVisible']
+    onNativeOverlayDismiss: NativeOverlayApi['onNativeOverlayDismiss']
+    onNativeOverlayLinkActivated: NativeOverlayApi['onNativeOverlayLinkActivated']
+    onBrowserRecordingOverlayCommand: (callback: (command: BrowserRecordingOverlayCommand) => void) => () => void
+    onBrowserRecordingOverlayPresentation: (callback: (presentation: BrowserRecordingOverlayPresentation) => void) => () => void
     getBrowserLinkPreview: (input: { url: string }) => Promise<DevScopeResult<{ preview: DevScopeBrowserLinkPreview | null }>>
     openBrowserPreviewExternal: (url: string) => Promise<DevScopeResult>
     openFile: (filePath: string) => Promise<DevScopeResult>
@@ -980,6 +1012,7 @@ export interface DevScopeApi {
     window: DevScopeWindowApi
     browserPopup: DevScopeBrowserPopupApi
     browserView: BrowserViewApi
+    accessories: AccessoriesApi
     assistantUtility: AssistantUtilityApi
 }
 

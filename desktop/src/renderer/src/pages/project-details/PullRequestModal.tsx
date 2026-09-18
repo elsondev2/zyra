@@ -1,4 +1,5 @@
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { type ReactNode, useCallback, useEffect } from 'react'
 import { ArrowUpRight, GitPullRequest, Loader2, Settings2, X } from 'lucide-react'
 import { Checkbox, Select, Textarea } from '@/components/ui/FormControls'
@@ -44,8 +45,8 @@ export function PullRequestModal(props: PullRequestModalProps) {
             }
         }
 
-        document.addEventListener('keydown', handleEscape)
-        return () => document.removeEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleEscape)
+        return () => removeOverlayListener1()
     }, [props.isOpen, controller.isAdvancedOpen, handleClose])
 
     if (!props.isOpen || typeof document === 'undefined') {

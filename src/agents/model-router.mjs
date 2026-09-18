@@ -37,7 +37,11 @@ export class ModelRouter {
     const envelope = normalizeTaskEnvelope(request.envelope ?? request);
     const policy = mergePolicy(this.policy, request.policy);
     const requested = selector.requested;
-    const selectors = candidateSelectors(selector, envelope, request.fallbackModels);
+    const inheritedKey = typeof request.inheritModel === "string" ? request.inheritModel : modelKey(request.inheritModel);
+    const provider = inheritedKey.split("/")[0];
+    const roleChoice = request.roleModels?.[provider]?.[request.role];
+    const routedSelector = requested === "role-default" ? normalizeModelSelector(roleChoice || "inherit") : selector;
+    const selectors = candidateSelectors(routedSelector, envelope, request.fallbackModels);
     const considered = [];
     const candidates = [];
 
@@ -61,20 +65,24 @@ export class ModelRouter {
     }
 
     candidates.sort((left, right) => {
+      if (left.selector === routedSelector.prefer || right.selector === routedSelector.prefer) {
+        if (left.selector !== right.selector) return left.selector === routedSelector.prefer ? -1 : 1;
+      }
       const availability = availabilityRank(left.model.availability) - availabilityRank(right.model.availability);
       if (availability !== 0) return availability;
       return selectors.indexOf(left.selector) - selectors.indexOf(right.selector);
     });
     const selected = candidates[0];
     if (!selected) {
-      throw new FleetModelRouteError("No live compatible Codex fleet model is available.", { requested, envelope, considered });
+      throw new FleetModelRouteError("No authenticated compatible fleet model is available.", { requested, envelope, considered });
     }
 
+    const preferred = routedSelector.requested;
     const firstResolvedKey = considered.find((item) => item.accepted)?.key;
-    const fallback = selected.key !== exactSelectorKey(requested) && selected.key !== firstResolvedKey
-      || requested !== selected.selector && !selectorMatchesKey(requested, selected.key);
+    const fallback = selected.key !== exactSelectorKey(preferred) && selected.key !== firstResolvedKey
+      || preferred !== selected.selector && !selectorMatchesKey(preferred, selected.key);
     const fallbackReason = fallback
-      ? explainFallback(requested, selected, considered)
+      ? explainFallback(preferred, selected, considered)
       : null;
 
     return {
@@ -139,7 +147,7 @@ export function normalizeTaskEnvelope(input = {}) {
 
 function candidateSelectors(selector, envelope, fallbackModels = []) {
   const route = DEFAULT_ROUTES[envelope.task] ?? DEFAULT_ROUTES.implementation;
-  const defaults = selector.prefer === "inherit" ? route : [selector.prefer, ...route];
+  const defaults = selector.prefer === "inherit" ? ["inherit", ...route] : [selector.prefer, ...route];
   const previousAllowed = selector.allowPreviousGenerations && envelope.allowPreviousGenerations;
   return unique([
     ...defaults,
@@ -151,10 +159,10 @@ function candidateSelectors(selector, envelope, fallbackModels = []) {
 function resolveSelector(selector, catalog, inheritModel) {
   if (selector === "inherit") {
     const key = typeof inheritModel === "string" ? inheritModel : modelKey(inheritModel);
-    return catalog.filter((entry) => entry.key === key && entry.provider === FLEET_MODEL_PROVIDER);
+    return catalog.filter((entry) => entry.key === key);
   }
   if (FLEET_MODEL_ALIASES[selector]) {
-    return catalog.filter((entry) => entry.id === FLEET_MODEL_ALIASES[selector]);
+    return catalog.filter((entry) => entry.key === `${FLEET_MODEL_PROVIDER}/${FLEET_MODEL_ALIASES[selector]}`);
   }
   const key = selector.includes("/") ? selector : `${FLEET_MODEL_PROVIDER}/${selector}`;
   return catalog.filter((entry) => entry.key === key);
@@ -162,7 +170,6 @@ function resolveSelector(selector, catalog, inheritModel) {
 
 function rejectionReasons(entry, envelope, policy) {
   const reasons = [...(entry.rejectionReasons ?? [])];
-  if (entry.provider !== FLEET_MODEL_PROVIDER) reasons.push("non_codex_provider");
   if (!entry.eligible) reasons.push("not_eligible");
   if (policy.deny.has(entry.key) || policy.deny.has(entry.id)) reasons.push("denied_by_policy");
   if (policy.allow.size && !policy.allow.has(entry.key) && !policy.allow.has(entry.id)) reasons.push("not_in_policy_allowlist");
@@ -180,19 +187,20 @@ function mergePolicy(base = {}, override = {}) {
 }
 
 function normalizeSelectorString(value) {
-  const text = String(value ?? "").trim().toLowerCase();
+  const raw = String(value ?? "").trim();
+  const text = raw.toLowerCase();
   if (text === "tera") throw new FleetModelRouteError("Unknown model alias 'tera'. Did you mean 'terra'?", { requested: text });
   if (["opus", "sonnet", "haiku", "quality", "balanced"].includes(text)) {
-    throw new FleetModelRouteError(`Provider-neutral or Anthropic selector '${text}' is not executable in the Codex-only fleet.`, { requested: text });
+    throw new FleetModelRouteError(`Use inherit or a full provider/model ID instead of '${text}'.`, { requested: text });
   }
-  if (["inherit", "sol", "terra", "luna"].includes(text)) return text;
-  if (text.startsWith(`${FLEET_MODEL_PROVIDER}/`)) return text;
+  if (["inherit", "role-default", "sol", "terra", "luna"].includes(text)) return text;
+  if (/^[a-z0-9_-]+\/[^\s]+$/i.test(raw)) return raw.slice(0, raw.indexOf("/")).toLowerCase() + raw.slice(raw.indexOf("/"));
   if (/^gpt-[a-z0-9.-]+$/i.test(text)) return `${FLEET_MODEL_PROVIDER}/${text}`;
   throw new FleetModelRouteError(`Unsupported fleet model selector: ${value}.`, { requested: text });
 }
 
 function exactSelectorKey(selector) {
-  return selector.startsWith(`${FLEET_MODEL_PROVIDER}/`) ? selector : undefined;
+  return selector.includes("/") ? selector : undefined;
 }
 
 function selectorMatchesKey(selector, key) {

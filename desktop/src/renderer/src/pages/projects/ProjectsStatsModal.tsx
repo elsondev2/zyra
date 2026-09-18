@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { ExternalLink, Pencil, Search, Trash2 } from 'lucide-react'
 import ProjectIcon from '@/components/ui/ProjectIcon'
 
@@ -52,7 +53,7 @@ export function ProjectsStatsModal({
     if (!statsModal) return null
 
     return (
-        <div
+        <NativeOverlayPortal><div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn p-4"
             onClick={onClose}
         >
@@ -191,6 +192,6 @@ export function ProjectsStatsModal({
                     )}
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

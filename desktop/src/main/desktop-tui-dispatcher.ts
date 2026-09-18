@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
+import { resolveDesktopAgentServerNamespace } from './assistant/agent-server-namespace'
 
 export function isDesktopTuiDispatch(argv = process.argv): boolean {
     return argv.includes('--tui')
@@ -15,6 +16,7 @@ export async function dispatchDesktopTui(argv = process.argv): Promise<number> {
     const entry = join(runtimeRoot, 'bin', 'zyra.mjs')
     if (!existsSync(entry)) throw new Error(`Bundled Zyra TUI was not found at ${entry}.`)
     const packagedNode = join(process.resourcesPath, 'zyra-node', process.platform === 'win32' ? 'node.exe' : 'node')
+    const namespace = resolveDesktopAgentServerNamespace(app.getPath('userData'))
     const usePackagedNode = existsSync(packagedNode)
     const executable = usePackagedNode ? packagedNode : process.execPath
     return new Promise<number>((resolve, reject) => {
@@ -28,6 +30,8 @@ export async function dispatchDesktopTui(argv = process.argv): Promise<number> {
                 ZYRA_DATA_ROOT: os.homedir(),
                 ZYRA_CALLER_CWD: process.cwd(),
                 ZYRA_DISTRIBUTION: 'desktop-bundle',
+                ZYRA_STATE_DIR: process.env.ZYRA_STATE_DIR || namespace.stateDirectory,
+                ZYRA_AGENT_SERVER_CHANNEL: process.env.ZYRA_AGENT_SERVER_CHANNEL || (process.env.ZYRA_STATE_DIR ? 'default' : namespace.channel),
                 ...(!usePackagedNode && process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {})
             }
         })

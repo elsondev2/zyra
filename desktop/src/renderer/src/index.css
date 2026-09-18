@@ -565,6 +565,11 @@ body:not(.light) .framework-badge {
   animation: assistantTextShimmer 2.8s linear infinite;
 }
 
+.assistant-compaction-shimmer {
+  animation-duration: 6.5s;
+  animation-timing-function: ease-in-out;
+}
+
 .assistant-title-reveal {
   animation: assistantTitleReveal 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -870,6 +875,64 @@ body:not(.light) .framework-badge {
 
 .compact-mode .rounded-xl {
   border-radius: 0.625rem;
+}
+
+/* Match the actual Settings rows and navigation, not only generic p-4 tiles. */
+.compact-mode .zyra-settings-row {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.compact-mode .zyra-settings-page-container {
+  padding-top: 24px;
+}
+
+.compact-mode .zyra-settings-page-column > [data-settings-page-content] {
+  gap: 20px;
+}
+
+.compact-mode .zyra-settings-nav-link {
+  min-height: 26px;
+}
+
+/* Native disclosure state stays immediate, including privacy and keyboard behavior. */
+@supports (interpolate-size: allow-keywords) and selector(details::details-content) {
+  :is(.zyra-settings-page-container, .zyra-settings-dialog, .plugin-source-settings) details {
+    interpolate-size: allow-keywords;
+  }
+
+  :is(.zyra-settings-page-container, .zyra-settings-dialog, .plugin-source-settings) details::details-content {
+    block-size: 0;
+    opacity: 0;
+    overflow: clip;
+    pointer-events: none;
+    transition: block-size 220ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 160ms ease, content-visibility 220ms allow-discrete;
+  }
+
+  :is(.zyra-settings-page-container, .zyra-settings-dialog, .plugin-source-settings) details[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  :is(.zyra-settings-page-container, .zyra-settings-dialog, .plugin-source-settings) details[data-settings-search-opening]::details-content,
+  body.zyra-reduce-motion :is(.zyra-settings-page-container, .zyra-settings-dialog, .plugin-source-settings) details::details-content {
+    transition: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :is(.zyra-settings-page-container, .zyra-settings-dialog, .plugin-source-settings) details::details-content {
+      transition: none;
+    }
+  }
+}
+
+.zyra-settings-dialog :has(+ .zyra-settings-expander) {
+  margin-block-end: 0;
+}
+
+body.zyra-reduce-motion .zyra-settings-expander {
+  transition: none !important;
 }
 
 /* ============================================================================
@@ -1525,6 +1588,53 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
   }
 }
 
+.file-actions-menu-row {
+  position: relative;
+  border-radius: 4px;
+  transition: background-color 150ms ease-out;
+}
+
+.file-actions-menu-row::before {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--file-actions-menu-accent, var(--accent-primary));
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.file-actions-menu-row:hover,
+.file-actions-menu-row:focus-within,
+.file-actions-menu-row[data-expanded='true'] {
+  background-color: color-mix(in srgb, var(--file-actions-menu-accent, var(--accent-primary)) 9%, transparent);
+}
+
+.file-actions-menu-row:hover::before,
+.file-actions-menu-row:focus-within::before,
+.file-actions-menu-row[data-expanded='true']::before {
+  opacity: 1;
+}
+
+@keyframes fileActionsFlyoutIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.file-actions-menu-flyout {
+  animation: fileActionsFlyoutIn 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-actions-menu-row,
+  .file-actions-menu-row::before { transition: none; }
+  .file-actions-menu-flyout { animation: none; }
+}
+
 .assistant-menu-in-down {
   transform-origin: top right;
   animation: assistantMenuInDown 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -2051,6 +2161,37 @@ select option:checked {
   to { transform: translateX(0); }
 }
 
+.assistant-header-actions {
+  flex: 0 0 auto;
+  width: 0;
+  margin-inline-start: 2px;
+  overflow: hidden;
+  opacity: 0;
+  transition: width 180ms cubic-bezier(0.22, 1, 0.36, 1), margin-inline-start 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease-out;
+}
+
+[data-assistant-conversation-header="minimal"]:is(:hover, :focus-within) .assistant-header-actions,
+.assistant-header-actions:has(> button[data-state="open"]) {
+  width: 28px;
+  margin-inline-start: 0;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-header-actions { transition: none; }
+}
+
+.inspector-tab-preview {
+  animation: inspector-tab-preview-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: none;
+  transform-origin: top center;
+}
+
+@keyframes inspector-tab-preview-in {
+  from { opacity: 0; transform: translate3d(0, -6px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
 @keyframes inspector-tab-in {
   from {
     opacity: 0;
@@ -2196,6 +2337,7 @@ body.zyra-reduce-motion .assistant-browser-viewport-frame {
 }
 
 /* Settings keep theme identity while reserving accent color for real signals. */
+.settings-sidebar-scrollbar,
 .settings-content-scrollbar {
   scrollbar-gutter: stable;
 }
@@ -2386,6 +2528,10 @@ body.zyra-reduce-motion .zyra-settings-switch-thumb {
 
 [data-assistant-chat-display='minimal'] [data-assistant-message-role='assistant'] {
   padding-bottom: 1rem;
+}
+
+[data-assistant-chat-display='minimal'] [data-assistant-work-sequence] > [data-assistant-message-role='assistant'] {
+  padding-bottom: 0.5rem;
 }
 
 [data-assistant-chat-display='minimal'] [data-assistant-message-role='user'] {

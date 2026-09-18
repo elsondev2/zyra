@@ -255,22 +255,24 @@ export function useFilePreviewPython({
     useEffect(() => {
         if (!isResizingPythonOutput) return
 
+        const ownerDocument = pythonOutputScrollRef.current?.ownerDocument ?? document
+        const ownerWindow = ownerDocument.defaultView ?? window
         const applyDragState = (active: boolean) => {
             if (active) {
-                document.documentElement.style.setProperty('cursor', 'row-resize', 'important')
-                document.documentElement.style.setProperty('user-select', 'none', 'important')
-                document.body.style.setProperty('cursor', 'row-resize', 'important')
-                document.body.style.setProperty('user-select', 'none', 'important')
+                ownerDocument.documentElement.style.setProperty('cursor', 'row-resize', 'important')
+                ownerDocument.documentElement.style.setProperty('user-select', 'none', 'important')
+                ownerDocument.body.style.setProperty('cursor', 'row-resize', 'important')
+                ownerDocument.body.style.setProperty('user-select', 'none', 'important')
                 return
             }
 
-            document.documentElement.style.removeProperty('cursor')
-            document.documentElement.style.removeProperty('user-select')
-            document.body.style.removeProperty('cursor')
-            document.body.style.removeProperty('user-select')
+            ownerDocument.documentElement.style.removeProperty('cursor')
+            ownerDocument.documentElement.style.removeProperty('user-select')
+            ownerDocument.body.style.removeProperty('cursor')
+            ownerDocument.body.style.removeProperty('user-select')
         }
 
-        const maxHeight = Math.max(180, Math.floor(window.innerHeight * 0.7))
+        const maxHeight = Math.max(180, Math.floor(ownerWindow.innerHeight * 0.7))
         const clamp = (value: number) => Math.min(maxHeight, Math.max(PYTHON_OUTPUT_MIN_HEIGHT, value))
         const onMove = (event: MouseEvent) => {
             const resize = outputResizeRef.current
@@ -283,13 +285,13 @@ export function useFilePreviewPython({
             outputResizeRef.current = null
             setIsResizingPythonOutput(false)
             applyDragState(false)
-            window.removeEventListener('mousemove', onMove)
-            window.removeEventListener('mouseup', stop)
+            ownerWindow.removeEventListener('mousemove', onMove)
+            ownerWindow.removeEventListener('mouseup', stop)
         }
 
         applyDragState(true)
-        window.addEventListener('mousemove', onMove)
-        window.addEventListener('mouseup', stop)
+        ownerWindow.addEventListener('mousemove', onMove)
+        ownerWindow.addEventListener('mouseup', stop)
         return stop
     }, [isResizingPythonOutput])
 

@@ -1,11 +1,10 @@
+/** Menus live above the guest; only the selected page/slot controls visibility. */
 export function shouldShowAssistantBrowserNativeView({
     hasPage,
-    requestedVisible,
-    nativeViewOccluded
+    requestedVisible
 }: {
     hasPage: boolean
     requestedVisible: boolean
-    nativeViewOccluded: boolean
 }): boolean {
-    return hasPage && requestedVisible && !nativeViewOccluded
+    return hasPage && requestedVisible
 }

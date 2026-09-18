@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { Bot, ChevronDown, Copy, Folder, MoreHorizontal, PanelLeftOpen, Pin, Plug, Plus, Search, SquarePen, Trash2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { AssistantMessage, AssistantProject, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
@@ -14,7 +15,7 @@ import { AssistantAgentInboxSidebar } from './AssistantAgentInboxSidebar'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
-import { hasAssistantTuiPresence, isAssistantSessionOpenInTui } from './assistant-tui-presence'
+import { assistantMobileDevices, assistantSessionMobileDevices, hasAssistantTuiPresence, isAssistantSessionOpenInTui } from './assistant-tui-presence'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
 import { ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolveAssistantLeftSidebarWidth } from './assistant-pane-layout'
 import {
@@ -25,6 +26,7 @@ import {
 import { createSessionActionMenuItems } from './assistant-sessions-rail-menus'
 import { isAssistantDraftSession, resolveAssistantProjectPresentation, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import { useAssistantRailContextMenu } from './useAssistantRailContextMenu'
+import { useAssistantRailTitleRegeneration } from './useAssistantRailTitleRegeneration'
 
 const PINNED_SESSION_IDS_KEY = 'assistant:pinned-session-ids:v1'
 const EXPANDED_PROJECT_PATH_KEYS_KEY = 'assistant:expanded-project-path-keys:v1'
@@ -248,6 +250,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     const navigate = useNavigate()
     const { open } = useCommandPalette()
     const { openContextMenu, contextMenuPortal } = useAssistantRailContextMenu()
+    const regenerateTitle = useAssistantRailTitleRegeneration(onShowToast)
     const resizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number; width: number } | null>(null)
     const resizeFrameRef = useRef(0)
     const layoutShellRef = useRef<HTMLDivElement | null>(null)
@@ -372,8 +375,8 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             void onCreateChat()
         }
 
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
+        return () => removeOverlayListener1()
     }, [commandPending, onCreateChat, onCreateProjectChat])
 
     const publishLiveSidebarWidth = useCallback((nextWidth: number) => {
@@ -506,6 +509,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             session,
             pinned: pinnedSessionIds.has(session.id),
             onOpenRename: (target) => { void renameSession(target) },
+            onRegenerateTitle: regenerateTitle,
             onTogglePinned: () => togglePinnedSession(session),
             onArchiveSession: () => { void archiveSession(session) },
             onDeleteRequest: (target) => { void deleteSession(target) }
@@ -1098,6 +1102,7 @@ function ChatRow(props: {
     const showStatusPill = Boolean(!hasPendingControlApproval && statusPill && statusPill.showLabel !== false)
     const timeLabel = formatRelativeTime(getSessionLastActivityAt(session))
     const tuiOpen = isAssistantSessionOpenInTui(session)
+    const mobileDevices = assistantSessionMobileDevices(session)
 
     return (
         <div>
@@ -1147,6 +1152,7 @@ function ChatRow(props: {
                         </span>
                     ) : null}
                     {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
+                    {mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} compact mobileDevices={mobileDevices} /> : null}
                     <span className="shrink-0 transition-opacity duration-150 ease-out group-hover:opacity-0 motion-reduce:transition-none">
                         <span className="mr-0.5 block whitespace-nowrap text-right text-[11px] leading-none tabular-nums text-sparkle-text-secondary/60">
                             {timeLabel}
@@ -1177,7 +1183,8 @@ function ChatRow(props: {
                 <div className="ml-5 mt-0.5 space-y-0.5">
                     {sessionThreads.map((thread, index) => {
                         const isActiveThread = thread.id === activeThreadId
-                        const tuiOpen = hasAssistantTuiPresence(thread.canonicalPresence)
+                const tuiOpen = hasAssistantTuiPresence(thread.canonicalPresence)
+                const mobileDevices = assistantMobileDevices(thread.canonicalPresence)
                         return (
                             <button
                                 key={thread.id}
@@ -1193,6 +1200,7 @@ function ChatRow(props: {
                                 <Bot size={12} className="shrink-0" />
                                 <span className="min-w-0 flex-1 truncate">{getThreadDisplayTitle(thread, index)}</span>
                                 {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
+                                {mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} compact mobileDevices={mobileDevices} /> : null}
                             </button>
                         )
                     })}

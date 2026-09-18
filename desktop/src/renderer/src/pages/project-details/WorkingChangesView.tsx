@@ -1,3 +1,5 @@
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUpRight, ChevronDown, RefreshCw, Sparkles } from 'lucide-react'
 import { resolvePreferredGitTextProvider } from '@/lib/gitAi'
@@ -270,7 +272,7 @@ export function WorkingChangesView({
 
         const handlePointerDown = (event: MouseEvent) => {
             const target = event.target as Node | null
-            if (target && dangerMenuRef.current?.contains(target)) return
+            if (target && isOverlayEventInside(event, dangerMenuRef.current)) return
             setShowDangerMenu(false)
         }
         const handleEscape = (event: KeyboardEvent) => {
@@ -279,11 +281,11 @@ export function WorkingChangesView({
             }
         }
 
-        document.addEventListener('pointerdown', handlePointerDown)
-        document.addEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown)
-            document.removeEventListener('keydown', handleEscape)
+            removeOverlayListener1()
+            removeOverlayListener2()
         }
     }, [showDangerMenu])
 

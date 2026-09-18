@@ -1,6 +1,9 @@
 import path from "node:path";
 import { realpathSync, statSync } from "node:fs";
 import { canonicalPermissionPath, resolvePermissionPath } from "./permission-paths.mjs";
+import { createFilesystemAccessController, FILESYSTEM_ACCESS_TOOL } from "./filesystem-access-tool.mjs";
+import { isDefinitelyCriticalZyraToolPermission, isPotentiallyCriticalZyraToolPermission } from "./permission-command-policy.mjs";
+export { isDefinitelyCriticalZyraToolPermission, isPotentiallyCriticalZyraToolPermission } from "./permission-command-policy.mjs";
 
 const SAFE_TOOL_NAMES = new Set([
   "read",
@@ -12,17 +15,6 @@ const SAFE_TOOL_NAMES = new Set([
   "request_user_input",
   "begin_action_batch",
 ]);
-const CRITICAL_TOOL_NAME_PATTERN = /(?:^|[._-])(delete|remove|publish|deploy|release|purchase|payment|billing|account|security|credential|password|secret|upload|install|message|email|send)(?:[._-]|$)/;
-const DEFINITE_CRITICAL_COMMAND_PATTERNS = [
-  /\bgit\s+(?:push|reset\s+--hard|clean\s+-[^\r\n]*f|rebase|filter-(?:repo|branch)|branch\s+-D)\b/i,
-  /\b(?:npm|pnpm|yarn|bun)\s+publish\b/i,
-  /\b(?:gh\s+release|docker\s+push|terraform\s+(?:apply|destroy)|kubectl\s+(?:apply|delete)|vercel\s+(?:deploy|--prod)|railway\s+up)\b/i,
-  /\b(?:rm\s+-[^\r\n]*r[^\r\n]*f|remove-item\b[^\r\n]*(?:-recurse[^\r\n]*-force|-force[^\r\n]*-recurse)|rmdir\s+\/s|del\s+\/s|format\b|diskpart\b)/i,
-  /\b(?:drop\s+(?:database|schema|table)|truncate\s+table)\b/i,
-  /\b(?:winget|choco|scoop|apt(?:-get)?|brew)\s+(?:install|upgrade|uninstall|remove)\b/i,
-  /\b(?:set-executionpolicy|reg(?:\.exe)?\s+(?:add|delete)|sc(?:\.exe)?\s+(?:create|delete|config)|net\s+user)\b/i,
-];
-const AMBIGUOUS_CRITICAL_WORD_PATTERN = /\b(?:login|logout|password|credential|secret|token|billing|payment|purchase|production|prod|deploy|publish|release)\b/i;
 
 function asRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -130,6 +122,8 @@ export function collectCommandPathHints(command, platform = process.platform) {
       || /^\\\\[^\\]/.test(token)
       || /^~[\\/]/.test(token)
       || (platform !== "win32" && token.startsWith("/"))
+      || (platform === "win32" && (/^\/(?:mnt\/|cygdrive\/)?[a-z]\//i.test(token)
+        || (/^\/(?:mnt\/|cygdrive\/)?[a-z]$/i.test(token) && /^(?:ls|cat|head|tail|find|grep|rg|stat|du|df)\s/i.test(command.trim()))))
     ) values.push(token);
   }
   return [...new Set(values)];
@@ -140,7 +134,11 @@ function commandHasUnboundedPathExpansion(command) {
 }
 
 function isConservativelyReadOnlyCommand(command) {
-  const normalized = String(command || "").trim().toLowerCase();
+  // Git's uppercase -C selects a working directory; lowercase -c changes
+  // configuration and must not inherit this read-only classification.
+  const normalized = String(command || "").trim()
+    .replace(/^git\s+(?:-C\s+(?:"[^"]*"|'[^']*'|[^\s"']+)\s+)+/, "git ")
+    .toLowerCase();
   if (!normalized || /(?:^|[^<])>(?:>|&)?/.test(normalized) || /[;&|\r\n]|\$\(|`/.test(normalized)) return false;
   return /^(?:git\s+(?:status|diff|log|show|branch(?:\s+--show-current)?|rev-parse|ls-files)\b|(?:rg|grep|find|ls|dir|cat|type|more|head|tail|where|which|pwd|echo)\b|(?:get-content|get-childitem|get-item|select-string|test-path)\b)/i.test(normalized);
 }
@@ -151,7 +149,7 @@ export function describeZyraToolPermission(event, options = {}) {
 
 function describeToolPermission(event, options, scopedRoots) {
   const toolName = normalizeToolName(event?.toolName || event?.name);
-  if (!toolName || isSeparatelySupervisedControlTool(toolName)) return null;
+  if (!toolName || toolName === FILESYSTEM_ACCESS_TOOL || isSeparatelySupervisedControlTool(toolName)) return null;
 
   const input = asRecord(event?.input);
   const project = path.resolve(options.project || process.cwd());
@@ -194,19 +192,6 @@ function describeToolPermission(event, options, scopedRoots) {
   };
 }
 
-export function isDefinitelyCriticalZyraToolPermission(request = {}) {
-  const toolName = normalizeToolName(request.toolName);
-  if (CRITICAL_TOOL_NAME_PATTERN.test(toolName)) return true;
-  const text = [request.command, request.detail].map(stringValue).filter(Boolean).join("\n");
-  return Boolean(text && DEFINITE_CRITICAL_COMMAND_PATTERNS.some((pattern) => pattern.test(text)));
-}
-
-export function isPotentiallyCriticalZyraToolPermission(request = {}) {
-  if (request.outsideProject || isDefinitelyCriticalZyraToolPermission(request)) return true;
-  const text = [request.command, request.detail].map(stringValue).filter(Boolean).join("\n");
-  return Boolean(text && AMBIGUOUS_CRITICAL_WORD_PATTERN.test(text));
-}
-
 function isPathOutsideProject(value, project) {
   const candidate = path.resolve(project, value);
   const relative = path.relative(project, candidate);
@@ -244,15 +229,24 @@ export function createZyraPermissionGateExtension(options = {}) {
   const getPermissionMode = typeof options.getPermissionMode === "function"
     ? options.getPermissionMode
     : () => "approval-required";
+  const access = scopedRoots && requestPermission ? createFilesystemAccessController({
+    project: path.resolve(options.project || process.cwd()), roots: scopedRoots,
+    requestPermission, getPermissionMode,
+  }) : null;
+  const consumeAccess = (event) => {
+    const input = asRecord(event?.input);
+    access?.consume([...collectPaths(input, true), ...collectCommandPathHints(input.command || input.cmd || input.script)], normalizeToolName(event?.toolName || event?.name));
+  };
   const handleToolCall = async (event) => {
     const permissionMode = getPermissionMode();
     if (isLoadedSkillRead(event, options)) return undefined;
-    const request = describeToolPermission(event, options, scopedRoots);
-    if (!request) return undefined;
+    const effectiveRoots = access?.currentRoots() || scopedRoots;
+    const request = describeToolPermission(event, options, effectiveRoots);
+    if (!request) { consumeAccess(event); return undefined; }
     if (request.scopeViolation) {
       return {
         block: true,
-        reason: `${request.toolName || "This tool"} requested a path outside this chat's filesystem scope.`,
+        reason: `${request.toolName || "This tool"} requested a path outside this chat's filesystem scope. Full access controls approvals; it does not add folders. ${access ? 'Call filesystem_access with operation inspect to see scope, then request the needed folder through approval and retry this same tool. Do not bypass a denial with Bash. ' : ''}For permanent access, associate the folder in Settings > Projects, then open Thread Details > Folder access and apply folder changes. Allowed folders: ${effectiveRoots?.map((root) => `${root.path} (${root.access})`).join("; ") || "project folder only"}.`,
       };
     }
     if (request.readOnlyViolation) {
@@ -261,6 +255,7 @@ export function createZyraPermissionGateExtension(options = {}) {
         reason: `${request.toolName || "This tool"} requested a write inside a read-only Project folder.`,
       };
     }
+    consumeAccess(event);
     if (sessionGrants.has(request.grantKey)) return undefined;
 
     if (permissionMode === "full-access") {
@@ -292,7 +287,7 @@ export function createZyraPermissionGateExtension(options = {}) {
       };
     }
 
-    const decision = await requestPermission(request);
+    const decision = await requestPermission({ ...request, toolCallId: event?.toolCallId });
     if (decision === "acceptForSession") {
       sessionGrants.add(request.grantKey);
       return undefined;
@@ -309,7 +304,7 @@ export function createZyraPermissionGateExtension(options = {}) {
     resolvedPath: "<zyra:permission-gate>",
     sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra permission gate" },
     handlers: new Map([["tool_call", [handleToolCall]]]),
-    tools: new Map(),
+    tools: access ? new Map([[FILESYSTEM_ACCESS_TOOL, { definition: access.tool, sourceInfo: { source: "builtin", scope: "temporary", label: "Folder access" } }]]) : new Map(),
     messageRenderers: new Map(),
     commands: new Map(),
     flags: new Map(),

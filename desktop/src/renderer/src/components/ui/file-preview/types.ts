@@ -2,6 +2,8 @@ export type PreviewMediaType = 'image' | 'video' | 'audio'
 export type PreviewOfficeType = 'docx' | 'xlsx' | 'pptx'
 export type PreviewFileType = 'directory' | 'md' | 'html' | 'pdf' | PreviewOfficeType | PreviewMediaType | 'text' | 'code' | 'json' | 'csv'
 
+export interface PreviewHtmlLocation { search: string; hash: string }
+
 export interface PreviewFile {
     name: string
     path: string
@@ -12,6 +14,7 @@ export interface PreviewFile {
     focusLineRequestId?: number | null
     openNavigator?: boolean
     navigatorRevealRequestId?: string | null
+    htmlLocation?: PreviewHtmlLocation
 }
 
 export interface PreviewTab {
@@ -37,6 +40,7 @@ export interface PreviewOpenOptions {
     targetKind?: 'file' | 'directory'
     openNavigator?: boolean
     revealNavigatorTarget?: boolean
+    htmlLocation?: PreviewHtmlLocation
 }
 
 export interface PreviewMeta {

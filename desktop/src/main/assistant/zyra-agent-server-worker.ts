@@ -1,3 +1,7 @@
+import { recoverAttachmentReplay } from './agent-server-attachment-recovery'
+import { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
+export { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
+import { publishRuntimeActivation } from './runtime-activation'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -50,7 +54,7 @@ type ReplayEntry = {
 export type CanonicalAgentChatPresence = {
     state: 'detached' | 'ready' | 'running' | 'background'
     activeTurnId: string | null
-    clients: Array<{ clientId: string; surface: string }>
+    clients: Array<{ clientId: string; surface: string; displayName?: string }>
     backgroundWorkActive: boolean
     attention?: 'approval' | 'input' | 'user-input' | null
     latestTurn?: {
@@ -269,9 +273,11 @@ export class DesktopAgentServerConnection {
         const attachedWorkers = this.workers.get(sessionKey) || new Set<ZyraAgentServerWorker>()
         attachedWorkers.add(worker)
         this.workers.set(sessionKey, attachedWorkers)
+        const recovery = recoverAttachmentReplay(result, worker.latestSequence)
+        if (recovery.resetWatermark) worker.latestSequence = 0
         const replay = [
             ...this.takePendingEvents(sessionKey),
-            ...(Array.isArray(result['replay']) ? result['replay'] as ReplayEntry[] : [])
+            ...recovery.entries
         ]
         worker.queueReplay(replay)
         const connected = asRecord(result['connected']) || {}
@@ -446,6 +452,7 @@ export class DesktopAgentServerConnection {
             this.controlWorkers.get(requestId)?.cancelControlRequest(requestId)
             this.detachedControlAbortControllers.get(requestId)?.abort(new Error('Detached Browser control was cancelled.'))
         })
+        client.on('runtime-status', publishRuntimeActivation)
         client.on('session-event', (message: Record<string, unknown>) => this.handleSessionEvent(message))
         client.on('disconnect', () => this.handleClientDisconnect())
         client.on('catalog-changed', (message: Record<string, unknown>) => {
@@ -537,7 +544,7 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
 
     queueReplay(entries: ReplayEntry[]): void {
         this.replay.push(...entries)
-        this.replay.sort((left, right) => (Number(left.sequence) || 0) - (Number(right.sequence) || 0))
+        this.replay.sort((left, right) => (Number(left.sequence) || Number.MAX_SAFE_INTEGER) - (Number(right.sequence) || Number.MAX_SAFE_INTEGER))
     }
 
     flushReplay(): void {
@@ -581,16 +588,6 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
         this.controlAbortControllers.clear()
         this.connection.detach(this)
         this.eventListeners.clear()
-    }
-}
-
-export function resolveDesktopAgentServerNamespace(
-    userDataPath: string,
-    options: Pick<DesktopAgentServerConnectionOptions, 'stateDirectory' | 'channel'> = {}
-): { stateDirectory: string; channel: string } {
-    return {
-        stateDirectory: resolve(options.stateDirectory || join(userDataPath, 'assistant', 'agent-server')),
-        channel: String(options.channel || 'desktop').trim().toLowerCase()
     }
 }
 

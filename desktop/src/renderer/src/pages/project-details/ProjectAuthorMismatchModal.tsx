@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { AlertCircle } from 'lucide-react'
 
 type ProjectAuthorMismatchModalProps = {
@@ -18,7 +19,7 @@ export function ProjectAuthorMismatchModal({
     setDontShowAgain
 }: ProjectAuthorMismatchModalProps) {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onCancel}>
+        <NativeOverlayPortal><div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onCancel}>
             <div
                 className="bg-sparkle-card border border-yellow-500/30 rounded-2xl shadow-2xl w-full max-w-md m-4 overflow-hidden"
                 onClick={(event) => event.stopPropagation()}
@@ -78,6 +79,6 @@ export function ProjectAuthorMismatchModal({
                     </div>
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

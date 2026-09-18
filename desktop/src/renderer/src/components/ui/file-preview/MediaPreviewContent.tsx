@@ -1,3 +1,4 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Film, Image as ImageIcon, Music4 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -179,8 +180,7 @@ export default function MediaPreviewContent({
             }
         }
 
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        return addOverlayEventListener('keydown', handleKeyDown)
     }, [nextItem, onSelectMedia, previousItem])
 
     useLayoutEffect(() => {

@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { Check, ChevronDown, Link2, RotateCw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
@@ -38,20 +41,20 @@ export function AssistantBrowserDeviceToolbar({
         if (!deviceMenuOpen) return
         const dismissDeviceMenu = () => setDeviceMenuOpen(false)
         const closeOnOutsidePointer = (event: PointerEvent) => {
-            if (event.target instanceof Node && deviceMenuRef.current?.contains(event.target)) return
+            if (isOverlayEventInside(event, deviceMenuRef.current)) return
             dismissDeviceMenu()
         }
         const closeOnEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') dismissDeviceMenu()
         }
-        document.addEventListener('pointerdown', closeOnOutsidePointer, true)
-        window.addEventListener('keydown', closeOnEscape)
-        window.addEventListener('blur', dismissDeviceMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', closeOnOutsidePointer, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', closeOnEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(dismissDeviceMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissDeviceMenu)
         return () => {
-            document.removeEventListener('pointerdown', closeOnOutsidePointer, true)
-            window.removeEventListener('keydown', closeOnEscape)
-            window.removeEventListener('blur', dismissDeviceMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissDeviceMenu)
         }
     }, [deviceMenuOpen])
@@ -98,7 +101,7 @@ export function AssistantBrowserDeviceToolbar({
                     <ChevronDown size={11} className="shrink-0 text-sparkle-text-muted/55" />
                 </button>
                 {deviceMenuOpen ? (
-                    <div className="absolute left-0 top-7 z-[420] max-h-72 w-64 overflow-y-auto rounded-lg border border-[var(--surface-divider)] bg-sparkle-card p-1 shadow-xl shadow-black/30" role="listbox" aria-label="Standard Browser devices">
+                    <AnchoredNativeOverlay><div className="absolute left-0 top-7 z-[420] max-h-72 w-64 overflow-y-auto rounded-lg border border-[var(--surface-divider)] bg-sparkle-card p-1 shadow-xl shadow-black/30" role="listbox" aria-label="Standard Browser devices">
                         <button
                             type="button"
                             role="option"
@@ -140,11 +143,11 @@ export function AssistantBrowserDeviceToolbar({
                                 ))}
                             </div>
                         ))}
-                    </div>
+                    </div></AnchoredNativeOverlay>
                 ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-0.5" onBlur={(event) => {
-                if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+                if (event.relatedTarget !== null && 'nodeType' in event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return
                 commitDimensions()
             }}>
                 {(['width', 'height'] as const).map((axis, index) => (

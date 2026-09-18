@@ -36,6 +36,7 @@ export function toAssistantThreadShell(thread: AssistantThread): AssistantThread
         state: thread.state,
         canonicalHistoryModifiedAt: thread.canonicalHistoryModifiedAt ?? null,
         canonicalHistoryEntryCount: thread.canonicalHistoryEntryCount ?? null,
+        mobileVoice: thread.mobileVoice ? { ...thread.mobileVoice } : null,
         canonicalPresence: thread.canonicalPresence ? {
             ...thread.canonicalPresence,
             clients: thread.canonicalPresence.clients.map((client) => ({ ...client }))

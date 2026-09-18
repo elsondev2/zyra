@@ -1,3 +1,6 @@
+import { stripSidebarBrowserContext } from "../browser-context.mjs";
+import { mobileHistoryStart } from './mobile-history-window.mjs';
+import { normalizeChatModel } from './chat-model.mjs';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getProjectSessionsDir } from "../project-paths.mjs";
@@ -61,12 +64,16 @@ export class CanonicalChatCatalog {
     return this.record.aliases[normalized] || normalized;
   }
 
+  projectPaths() { return this.record.projects.map(entry => entry.path); }
+
   async list(options = {}) {
     const requestedProject = options.project ? this.registerProject(options.project) : null;
     const knownProjects = this.record.projects.map((entry) => entry.path);
-    const projects = requestedProject && options.allProjects !== true
+    const scopedProjects = Array.isArray(options.projects) ? options.projects.slice(0, MAX_KNOWN_PROJECTS).map(normalizeProject) : null;
+    const excluded = new Set((Array.isArray(options.excludedProjects) ? options.excludedProjects : []).map(pathKey));
+    const projects = (scopedProjects || (requestedProject && options.allProjects !== true
       ? [requestedProject]
-      : [...new Set([...(requestedProject ? [requestedProject] : []), ...knownProjects])];
+      : [...new Set([...(requestedProject ? [requestedProject] : []), ...knownProjects])])).filter(project => !excluded.has(pathKey(project)));
     const indexed = this.loadSessionManager
       ? await this.listInjectedSessions(projects)
       : await this.index.listProjects(projects);
@@ -76,12 +83,18 @@ export class CanonicalChatCatalog {
       const current = byId.get(chat.canonicalChatId);
       if (!current || Date.parse(chat.modifiedAt) > Date.parse(current.modifiedAt)) byId.set(chat.canonicalChatId, chat);
     }
-    let chats = [...byId.values()].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+    let chats = [...byId.values()].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt) || left.canonicalChatId.localeCompare(right.canonicalChatId));
     if (options.includeDeleted !== true) chats = chats.filter((chat) => !chat.deleted);
     if (options.includeArchived !== true) chats = chats.filter((chat) => !chat.archived);
     const query = String(options.query || "").trim().toLowerCase();
     if (query) {
       chats = chats.filter((chat) => `${chat.title} ${chat.project} ${chat.cwd} ${chat.canonicalChatId}`.toLowerCase().includes(query));
+    }
+    if (options.beforeChat && typeof options.beforeChat === 'object') {
+      const time = Date.parse(options.beforeChat.modifiedAt);
+      const id = String(options.beforeChat.canonicalChatId || '');
+      if (!Number.isFinite(time) || !id) throw new Error('Invalid chat cursor.');
+      chats = chats.filter(chat => Date.parse(chat.modifiedAt) < time || (Date.parse(chat.modifiedAt) === time && chat.canonicalChatId.localeCompare(id) > 0));
     }
     const limit = Math.max(1, Math.min(2000, Number(options.limit) || 500));
     return chats.slice(0, limit);
@@ -99,6 +112,12 @@ export class CanonicalChatCatalog {
       let start = Math.max(0, end - limit);
       if (options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY) {
         while (start > 0 && entries[start]?.type === "message" && entries[start].message?.role === "toolResult") start -= 1;
+      }
+      if (options.toolResultBodies === "lazy-mobile-v1" && options.before == null) {
+        start = mobileHistoryStart({ start, end,
+          bytesAt: index => Buffer.byteLength(JSON.stringify(entries[index]), "utf8"),
+          isDeferredTool: index => entries[index]?.message?.role === "toolResult" && Boolean(entries[index]?.id && entries[index]?.message?.toolCallId && chat.canonicalChatId),
+          readEntry: index => entries[index] });
       }
       const toolResultEntryIndexes = [];
       for (let entryIndex = entries.length - 1; entryIndex >= 0 && toolResultEntryIndexes.length < EAGER_HISTORY_TOOL_RESULTS; entryIndex -= 1) {
@@ -278,6 +297,7 @@ function projectInjectedSession(project, session) {
     project: normalizeProject(project),
     cwd: normalizeProject(session.cwd || project),
     title: normalizeTitle(session.name || session.firstMessage),
+    model: normalizeChatModel(session.model, session.provider),
     createdAt: toIso(session.created),
     modifiedAt: toIso(session.modified),
     messageCount: Math.max(0, Number(session.messageCount) || 0),
@@ -294,7 +314,7 @@ function applyMetadata(chat, metadata = {}, record = {}) {
   const canonicalChatId = String(chat.canonicalChatId || "");
   return {
     ...chat,
-    title: metadata.title || chat.title || "New chat",
+    title: normalizeTitle(metadata.title || chat.title),
     project: metadata.project || chat.project || chat.storageProject || chat.cwd,
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,
@@ -307,7 +327,7 @@ function applyMetadata(chat, metadata = {}, record = {}) {
 }
 
 function normalizeTitle(value) {
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 240) || "New chat";
+  return stripSidebarBrowserContext(value).replace(/\s+/g, " ").trim().slice(0, 240) || "New chat";
 }
 
 function normalizeProject(value) {

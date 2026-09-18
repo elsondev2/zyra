@@ -1,0 +1,3 @@
+.usage-chart-view { animation: usage-chart-reveal 180ms cubic-bezier(.22,1,.36,1); }
+@keyframes usage-chart-reveal { from { opacity: .4; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .usage-chart-view { animation: none; } }

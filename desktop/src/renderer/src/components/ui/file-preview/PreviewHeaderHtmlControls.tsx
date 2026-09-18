@@ -1,6 +1,8 @@
+import { getOverlayActiveElement, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { ChevronDown } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { VIEWPORT_PRESETS, type ViewportPreset } from './viewport'
@@ -116,20 +118,18 @@ export function PreviewHeaderHtmlControls({
         if (!menuVisible) return
 
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target as Node | null
-            if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, menuRef.current) || isOverlayEventInside(event, triggerRef.current)) return
             closeMenu()
         }
 
         const handleFocusIn = (event: FocusEvent) => {
-            const target = event.target as Node | null
-            if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, menuRef.current) || isOverlayEventInside(event, triggerRef.current)) return
             closeMenu()
         }
 
         const handleWindowBlur = () => {
             window.requestAnimationFrame(() => {
-                const activeElement = document.activeElement
+                const activeElement = getOverlayActiveElement()
                 if (!activeElement) return
                 if (menuRef.current?.contains(activeElement) || triggerRef.current?.contains(activeElement)) return
                 closeMenu()
@@ -143,18 +143,18 @@ export function PreviewHeaderHtmlControls({
             if (event.key === 'Escape') closeMenu()
         }
 
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        document.addEventListener('focusin', handleFocusIn, true)
-        window.addEventListener('blur', handleWindowBlur)
-        window.addEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('focusin', handleFocusIn, true)
+        const removeOverlayBlurListener4 = addOverlayWindowBlurListener(handleWindowBlur)
+        const removeOverlayListener3 = addOverlayEventListener('keydown', handleEscape)
         iframeElements.forEach((iframeElement) => {
             iframeElement.addEventListener('pointerdown', handleIframePointerDown)
         })
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            document.removeEventListener('focusin', handleFocusIn, true)
-            window.removeEventListener('blur', handleWindowBlur)
-            window.removeEventListener('keydown', handleEscape)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener4()
+            removeOverlayListener3()
             iframeElements.forEach((iframeElement) => {
                 iframeElement.removeEventListener('pointerdown', handleIframePointerDown)
             })
@@ -186,6 +186,7 @@ export function PreviewHeaderHtmlControls({
         }
     }, [])
 
+    const SelectedIcon = VIEWPORT_PRESETS[viewport].icon
     const selectedLabel = viewport === 'responsive'
         ? 'Full Width'
         : `${VIEWPORT_PRESETS[viewport].label} (${VIEWPORT_PRESETS[viewport].width}x${VIEWPORT_PRESETS[viewport].height})`
@@ -193,17 +194,17 @@ export function PreviewHeaderHtmlControls({
     return (
         <div
             className={cn(
-                'flex items-center gap-2',
+                'flex items-center gap-1',
                 isCompactHtmlHeader ? 'order-3 w-full flex-wrap' : '',
                 isVeryCompactHtmlHeader ? 'justify-start' : isCompactHtmlHeader ? 'justify-between' : ''
             )}
         >
             <div
                 className={cn(
-                    'relative z-40 flex items-center gap-2',
+                    'relative z-40 flex h-7 items-center gap-1',
                     isIdeChrome
-                        ? 'rounded-md border border-white/[0.06] bg-white/[0.025] px-1.5 py-0.5'
-                        : 'rounded-lg bg-white/5 p-1.5',
+                        ? 'rounded-md border border-white/[0.06] bg-white/[0.025] px-1.5'
+                        : 'rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-1',
                     isUltraCompactHtmlHeader ? 'w-full' : ''
                 )}
             >
@@ -219,13 +220,14 @@ export function PreviewHeaderHtmlControls({
                                 ? 'rounded-b-none border-b-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
                                 : 'rounded-t-none border-t-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
                         ),
-                        isIdeChrome ? 'h-5 min-w-[170px]' : 'h-7 min-w-[220px]'
+                        isIdeChrome ? 'h-5 min-w-[170px]' : 'h-6 min-w-[168px]'
                     )}
                     title="Choose preview viewport size"
                     aria-label="Choose preview viewport size"
                     aria-haspopup="menu"
                     aria-expanded={menuVisible && menuOpen}
                 >
+                    <SelectedIcon size={14} className="shrink-0" aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{selectedLabel}</span>
                     <ChevronDown className={cn('size-3.5 shrink-0 text-white/45 transition-transform', menuVisible && menuOpen && 'rotate-180')} />
                 </button>
@@ -268,7 +270,7 @@ export function PreviewHeaderHtmlControls({
                                             )}
                                         >
                                             <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/[0.03]">
-                                                {OptionIcon ? <OptionIcon size={12} /> : <span className="block size-2 rounded-full bg-current/70" />}
+                                                <OptionIcon size={12} aria-hidden="true" />
                                             </span>
                                             <span className="min-w-0 flex-1 truncate">{optionLabel}</span>
                                             {isSelected ? <span className="text-[10px] uppercase tracking-[0.12em] text-sky-200/80">On</span> : null}

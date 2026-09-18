@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { RefreshCw } from 'lucide-react'
 import { useAppUpdates } from '@/lib/app-updates'
 import './update-install-confirmation.css'
@@ -9,18 +9,17 @@ function RestartDialog({ version, onCancel, onConfirm }: { version: string; onCa
     const titleId = useId()
     const descriptionId = useId()
     useEffect(() => {
-        const dialog = ref.current
-        const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
         const overflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
-        dialog?.showModal()
+        const removeEscape = addOverlayEventListener('keydown', event => {
+            if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); onCancel() }
+        })
         return () => {
-            dialog?.close()
+            removeEscape()
             document.body.style.overflow = overflow
-            if (previous?.isConnected) previous.focus()
         }
-    }, [])
-    return createPortal(<dialog ref={ref} className="update-install-confirmation" aria-labelledby={titleId} aria-describedby={descriptionId}
+    }, [onCancel])
+    return <NativeOverlayPortal onReady={() => { if (ref.current && !ref.current.open) ref.current.showModal() }}><dialog ref={ref} className="update-install-confirmation" aria-labelledby={titleId} aria-describedby={descriptionId}
         onCancel={(event) => { event.preventDefault(); onCancel() }}
         onClick={(event) => {
             if (event.target !== event.currentTarget) return
@@ -35,7 +34,7 @@ function RestartDialog({ version, onCancel, onConfirm }: { version: string; onCa
             <button type="button" onClick={onCancel} autoFocus>Not now</button>
             <button type="button" className="update-install-confirm" onClick={onConfirm}><RefreshCw size={14} aria-hidden="true" />Restart and install</button>
         </footer>
-    </dialog>, document.body)
+    </dialog></NativeOverlayPortal>
 }
 
 export function UpdateInstallConfirmation() {

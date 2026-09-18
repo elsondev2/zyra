@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, unlinkSync } from 'node:fs'
 import { mock } from 'bun:test'
 import type {
     AssistantDomainEvent,
@@ -23,6 +23,14 @@ import {
 } from '../src/shared/assistant/reasoning-efforts'
 
 const electronNoop = (): undefined => undefined
+// Lifecycle fixtures exercise projection, not real logging, browser pairing or
+// computer-control drivers. Keep those services and user-profile writes cold.
+mock.module('electron-log', () => ({ default: { info: electronNoop, warn: electronNoop, error: electronNoop, debug: electronNoop } }))
+mock.module('../src/main/agent-control', () => ({ getAgentControlBroker: () => ({
+    materializeUserAuthorizedBrowserGrant: electronNoop,
+    revokePrincipal: electronNoop,
+    grants: { list: () => [], listPending: () => [] }
+}) }))
 mock.module('electron', () => ({
     app: {
         getPath: () => process.env.TEMP || process.cwd(),
@@ -320,7 +328,7 @@ const canonicalAbortedProjection = projectCanonicalTimeline([
             role: 'assistant',
             timestamp: canonicalAssistantTimestamp + 100,
             content: [{ type: 'thinking', thinking: '' }],
-            stopReason: 'aborted',
+            stopReason: 'error',
             errorMessage: 'Request was aborted'
         }
     }
@@ -329,7 +337,7 @@ const canonicalInterruptedActivity = canonicalAbortedProjection.activities.find(
 assert.equal(canonicalInterruptedActivity?.tone, 'warning', 'a canonical TUI abort must project as an intentional interruption rather than an Assistant error')
 assert.equal(canonicalInterruptedActivity?.summary, 'Assistant interrupted')
 assert.equal(canonicalInterruptedActivity?.payload?.['status'], 'cancelled')
-assert.equal(canonicalInterruptedActivity?.payload?.['stopReason'], 'aborted')
+assert.equal(canonicalInterruptedActivity?.payload?.['stopReason'], 'error', 'Pi can encode an intentional abort as an error stopReason with interruption-class terminal detail')
 assert.equal(canonicalInterruptedActivity?.turnTerminalOutcome, 'interrupted', 'canonical replay marks a certain end-of-turn interruption explicitly')
 
 const canonicalRecoveredProjection = projectCanonicalTimeline([
@@ -707,6 +715,19 @@ assert.equal(
     'the server echo for a Desktop-originated prompt must not create a duplicate user bubble'
 )
 
+const remoteImageBytes = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHh0AAAAASUVORK5CYII='
+const remoteImageId = `remote-image-${process.pid}`
+handleEvent({ type: 'message_start', message: { id: remoteImageId, role: 'user', content: [
+    { type: 'text', text: 'Look at this image.' }, { type: 'image', mimeType: 'image/png', data: remoteImageBytes }
+] } }, { turnId, localThreadId: 'mobile-device:fixture' })
+const externalImageEvent = runtimeEvents.findLast(event => event.type === 'user.message.received')
+assert.match(externalImageEvent?.type === 'user.message.received' ? externalImageEvent.payload.text : '', /\[IMAGE\]/, 'live phone images must reach the same attachment renderer before history reload')
+handleEvent({ type: 'message_start', message: { id: remoteImageId + '-only', role: 'user', content: [
+    { type: 'image', mimeType: 'image/png', data: remoteImageBytes }
+] } }, { turnId, localThreadId: 'mobile-device:fixture' })
+const externalImageOnlyEvent = runtimeEvents.findLast(event => event.type === 'user.message.received')
+assert.equal(externalImageOnlyEvent?.type === 'user.message.received' ? externalImageOnlyEvent.payload.messageId : '', 'assistant-message-user-' + remoteImageId + '-only', 'image-only user turns must not disappear')
+
 const emitAssistantMessage = (
     type: 'message_start' | 'message_update' | 'message_end',
     text: string,
@@ -976,13 +997,15 @@ assert.equal(
 
 replayGuardEvents.length = 0
 replayGuardContext.completedTurnIds.clear()
+const liveAbortedTimestamp = canonicalAssistantTimestamp + 500
 replayGuardHandler.handleZyraEvent(replayGuardContext, {
     type: 'message_end',
+    timestamp: new Date(liveAbortedTimestamp).toISOString(),
     message: {
-        id: 'live-aborted-response',
         role: 'assistant',
+        timestamp: liveAbortedTimestamp,
         content: [{ type: 'thinking', thinking: '' }],
-        stopReason: 'aborted',
+        stopReason: 'error',
         errorMessage: 'Request was aborted'
     }
 }, { turnId: 'turn-live-aborted', replay: false })
@@ -995,6 +1018,8 @@ assert.equal(
     'interrupted',
     'agent_end must preserve the aborted assistant response as an interrupted TUI turn'
 )
+assert.equal(liveAbortedCompletion?.itemId, `pi-message:assistant:${liveAbortedTimestamp}`, 'live terminal metadata keeps the canonical assistant message identity')
+assert.equal(liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.errorMessage : null, 'Request was aborted')
 assert.equal(replayGuardContext.activeTurnId, null)
 
 replayGuardEvents.length = 0
@@ -1571,6 +1596,14 @@ const projectedDeps = {
     },
     updateLatestTurnAssistantMessage: () => {}
 }
+if (!liveAbortedCompletion) throw new Error('Expected an interrupted live completion event')
+handleAssistantRuntimeEvent(liveAbortedCompletion, projectedDeps)
+const liveInterruptedActivities = findProjectedRecord(projectedThread.id)?.thread.activities.filter((activity) => (
+    activity.turnId === 'turn-live-aborted' && activity.turnTerminalOutcome === 'interrupted'
+)) || []
+assert.equal(liveInterruptedActivities.length, 1, 'live interrupted completion projects one authoritative terminal activity')
+assert.equal(liveInterruptedActivities[0]?.id, `shared-error:pi-message:assistant:${liveAbortedTimestamp}`)
+
 const recoveredTurnEvents = replayGuardEvents.filter((event) => event.turnId === 'turn-live-recovered')
 const recoveredTurnCompletionIndex = recoveredTurnEvents.findIndex((event) => event.type === 'turn.completed')
 assert.ok(recoveredTurnCompletionIndex > 0)
@@ -1586,6 +1619,11 @@ const recoveredProjectedThread = findProjectedRecord(projectedThread.id)?.thread
 assert.equal(recoveredProjectedThread?.state, 'ready')
 assert.equal(recoveredProjectedThread?.latestTurn?.state, 'completed')
 assert.equal(recoveredProjectedThread?.lastError, null)
+assert.equal(
+    recoveredProjectedThread?.activities.some((activity) => activity.turnId === 'turn-live-recovered' && activity.turnTerminalOutcome !== undefined),
+    false,
+    'a failed assistant attempt followed by a successful assistant response must not become terminal metadata'
+)
 
 const stalePreviousTurnStartedAt = '2026-07-10T15:00:00.000Z'
 projectedDeps.appendEvent('thread.latest-turn.updated', stalePreviousTurnStartedAt, {
@@ -1639,6 +1677,19 @@ const projectedExternalUserMessages = findProjectedRecord(context.localThreadId)
 assert.equal(projectedExternalUserMessages.length, 1, 'external user-message replay must remain idempotent')
 assert.equal(projectedExternalUserMessages[0]?.text, externalPrompt)
 assert.equal(projectedExternalUserMessages[0]?.turnId, turnId)
+const { parseSerializedAssistantMessage } = await import('../src/shared/assistant/message-attachments')
+for (const event of [externalImageEvent, externalImageOnlyEvent]) {
+    if (event?.type !== 'user.message.received') throw new Error('Expected an image user event')
+    handleAssistantRuntimeEvent(event, projectedDeps)
+    handleAssistantRuntimeEvent(event, projectedDeps)
+    const rows = findProjectedRecord(context.localThreadId)?.thread.messages.filter(message => message.id === event.payload.messageId) || []
+    assert.equal(rows.length, 1, 'live image event replay must produce one bubble')
+    const attachments = parseSerializedAssistantMessage(rows[0].text).attachments
+    assert.equal(attachments.length, 1, 'the actual renderer parser must see the image immediately')
+    assert.equal(readFileSync(attachments[0].path!).toString('base64'), remoteImageBytes)
+    unlinkSync(attachments[0].path!) // Only this synthetic test's newly materialized image.
+}
+
 
 if (runningCompactionEvent?.type === 'activity' && completedCompactionEvent?.type === 'activity') {
     handleAssistantRuntimeEvent(runningCompactionEvent, projectedDeps)
@@ -1795,6 +1846,20 @@ if (piEditStart?.type === 'activity') handleAssistantRuntimeEvent(piEditStart, p
 const projectedRunningEdit = findProjectedRecord(context.localThreadId)?.thread.activities.find((activity) => activity.id === `zyra-tool-${piEditFixture.toolCallId}`)
 assert.equal(projectedRunningEdit?.payload?.['status'], 'running', 'Pi edit start must become a visible running activity before completion')
 assert.equal(projectedRunningEdit?.payload?.['toolLifecyclePhase'], 'start', 'service normalization must preserve the urgent start boundary')
+
+handleFileChangeEvent({ type: 'approval_requested', requestId: 'fixture-edit-approval', requestType: 'file-change', toolCallId: piEditFixture.toolCallId, grantLabel: 'Allow file changes for this chat' })
+const editApprovalEvent = fileChangeEvents.findLast((event) => event.type === 'approval.requested')
+assert.ok(editApprovalEvent?.type === 'approval.requested')
+assert.equal(editApprovalEvent.payload.toolCallId, piEditFixture.toolCallId, 'Pi preserves exact approval correlation')
+handleAssistantRuntimeEvent(editApprovalEvent, projectedDeps)
+const waitingEditThread = findProjectedRecord(context.localThreadId)?.thread
+assert.equal(waitingEditThread?.pendingApprovals.find((approval) => approval.requestId === 'fixture-edit-approval')?.grantLabel, 'Allow file changes for this chat')
+assert.equal(waitingEditThread?.activities.find((activity) => activity.id === `zyra-tool-${piEditFixture.toolCallId}`)?.payload?.approvalPending, true, 'runtime -> service -> store keeps unapproved actions out of execution UI')
+handleFileChangeEvent({ type: 'approval_resolved', requestId: 'fixture-edit-approval', decision: 'acceptOnce' })
+const editApprovalResolved = fileChangeEvents.findLast((event) => event.type === 'approval.resolved')
+assert.ok(editApprovalResolved?.type === 'approval.resolved')
+handleAssistantRuntimeEvent(editApprovalResolved, projectedDeps)
+assert.equal(findProjectedRecord(context.localThreadId)?.thread.activities.find((activity) => activity.id === `zyra-tool-${piEditFixture.toolCallId}`)?.payload?.approvalPending, false)
 
 handleFileChangeEvent(piEditFixture.update)
 handleFileChangeEvent(piEditFixture.end)
@@ -2158,5 +2223,49 @@ assert.equal(
 const transportRecoveryIssue = getAssistantRecoveryIssue({ threadLastError: 'fetch failed' })
 assert.equal(transportRecoveryIssue?.key, 'connection-lost')
 assert.equal(transportRecoveryIssue?.recoverable, true)
+
+// Feed the actual mobile gateway envelope through runtime -> domain projector.
+// This catches a missing user-turn boundary even when assistant streaming works.
+const { HostRouter } = await import('../../mobile/gateway/src/router.mjs')
+const { BodyCache } = await import('../../mobile/gateway/src/projection.mjs')
+const phoneRuntime = new ZyraPiRuntime()
+const phoneContext = {
+    ...context, activeTurnId: null, completedTurnIds: new Set<string>(),
+    assistantMessageSequence: 0, activeAssistantItemId: null, lastAssistantItemId: null,
+    toolArgsByCallId: new Map(), toolStartedAtByCallId: new Map(),
+    assistantTextByItemId: new Map(), assistantCompletedItemIds: new Set(),
+    internalTextByItemId: new Map(), internalCompletedItemIds: new Set()
+}
+phoneRuntime.on('runtime', (event: AssistantRuntimeEvent) => handleAssistantRuntimeEvent(event, projectedDeps))
+const previousMessageIds = findProjectedRecord(projectedThread.id)!.thread.messages.map(message => message.id)
+let phoneTurn = 0
+const phoneRouter = new HostRouter({ owner: 'paired-phone', projects: ['/shared'], cache: new BodyCache(), client: {
+    request: async (method: string, params: any) => {
+        assert.equal(method, 'session.request')
+        const metadata = params.requestContext
+        const text = params.payload.prompt
+        const emit = (event: Record<string, unknown>) => (phoneRuntime as any).handleZyraEvent(phoneContext, event, metadata)
+        const user = { type: 'message_start', message: { id: `phone-user-${phoneTurn}`, role: 'user', content: [{ type: 'text', text }] } }
+        emit(user)
+        assert.equal(findProjectedRecord(projectedThread.id)!.thread.messages.filter(message => message.text === text).length, 1,
+            'a phone prompt must append its user bubble before the assistant starts')
+        const reply = { id: `phone-reply-${phoneTurn}`, role: 'assistant', content: [{ type: 'text', text: `Reply to ${text}` }] }
+        emit({ type: 'message_start', message: { ...reply, content: [] } })
+        emit({ type: 'message_end', message: reply })
+        emit({ type: 'agent_end' })
+        ;(phoneRuntime as any).handleZyraEvent(phoneContext, user, { ...metadata, replay: true })
+        return {}
+    }
+} })
+phoneRouter.attached.add('shared-chat')
+for (const prompt of ['First phone turn', 'Second phone turn']) {
+    phoneTurn++
+    await phoneRouter.dispatch('session.request', { sessionKey: 'shared-chat', type: 'prompt', payload: { prompt } }, `review-${phoneTurn}`)
+}
+const phoneMessages = findProjectedRecord(projectedThread.id)!.thread.messages
+assert.ok(previousMessageIds.every(id => phoneMessages.some(message => message.id === id)), 'phone turns preserve the existing conversation')
+for (const text of ['First phone turn', 'Reply to First phone turn', 'Second phone turn', 'Reply to Second phone turn']) {
+    assert.equal(phoneMessages.filter(message => message.text === text).length, 1, 'successive phone turns remain visible and replay-idempotent without refresh')
+}
 
 console.log('Pi assistant lifecycle capture: ok')

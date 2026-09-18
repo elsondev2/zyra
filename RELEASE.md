@@ -185,6 +185,16 @@ The tag path requires all of the following before any public release exists:
 
 Matrix jobs have read-only repository permissions and cannot race publication. The final publication job alone receives `contents: write`. Releases use `master`, never `main`.
 
+## Approved exception for 0.6.2
+
+The maintainer explicitly approved a patch bump to 0.6.2 and a one-release continuation of 0.6.1's unsigned, unnotarized distribution, including its disclosed browser security patch gap. See [0.6.2 candidate notes](docs/releases/0.6.2.md). This does not authorize fake signing evidence or a general bypass of the tagged release workflow.
+
+Use the existing unsigned `workflow_dispatch` rehearsal on the exact candidate commit. An approved build-helper fork may supply native evidence when the owner repository cannot start hosted jobs. Its `master`, the final owner `master`, production tag and release target must all identify the same tested SHA. Do not force-push or mix assets across commits or runs.
+
+After every native build and non-signing gate passes, revalidate the complete draft upload set, download it again and verify checksums and metadata. Only then may the maintainer-approved 0.6.2 draft be assigned the matching production tag, given the explicit unsigned/security warning notes, and published. Preserve the exact validated asset bytes. Do not publish an incomplete matrix or install a candidate as though it were the published release.
+
+All later versions retain the normal signing/notarization gates unless separately reviewed. Runner unavailability never waives native build evidence.
+
 ## Signing and notarization gates
 
 The repository contains no signing credentials. Configure these GitHub Actions secrets without committing their values:

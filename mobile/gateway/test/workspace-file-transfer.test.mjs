@@ -1,0 +1,22 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {WorkspaceFiles} from '../src/workspace-files.mjs';
+test('file transfer accepts bounded adaptive lengths and refuses stale or hidden references',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'zyra-file-transfer-')); t.after(()=>rm(root,{recursive:true,force:true}));
+ const hidden=path.join(root,'private'); await mkdir(hidden);
+ await writeFile(path.join(root,'large.bin'),Buffer.alloc(90*1024,2)); await writeFile(path.join(hidden,'data.bin'),Buffer.alloc(9000,1));
+ const files=new WorkspaceFiles({projects:[root],hiddenProjects:[hidden]}),chat={canonicalChatId:'chat',project:root};
+ const [{id:rootId}]=await files.roots(chat);
+ const call=(method,params)=>files.dispatch(method,{rootId,...params},chat);
+ const metadata=await call('workspace.file.read',{path:'large.bin'});
+ const part=await call('workspace.file.chunk',{path:'large.bin',etag:metadata.etag,offset:0,length:8192});
+ assert.equal(part.next,8192); assert.equal(Buffer.from(part.base64,'base64').length,8192);
+ const legacy=await call('workspace.file.chunk',{path:'large.bin',etag:metadata.etag,offset:8192}); assert.equal(legacy.next,8192+49152);
+ for(const length of [0,8191,49153,8.5,'8192']) await assert.rejects(call('workspace.file.chunk',{path:'large.bin',etag:metadata.etag,offset:0,length}));
+ await assert.rejects(call('workspace.file.chunk',{path:'private/data.bin',etag:'unknown',offset:0,length:8192}));
+ await writeFile(path.join(root,'large.bin'),Buffer.alloc(9001,3));
+ await assert.rejects(call('workspace.file.chunk',{path:'large.bin',etag:metadata.etag,offset:0,length:8192}));
+});

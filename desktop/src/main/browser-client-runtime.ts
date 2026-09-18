@@ -1,3 +1,7 @@
+import { app } from 'electron'
+import { readRuntimeActivation, subscribeRuntimeActivation } from './assistant/runtime-activation'
+import { CHROME_EXTENSION_STORE_ID, CHROME_EXTENSION_DEVELOPMENT_ID, chromeExtensionOrigins } from '../shared/chrome-extension-identity'
+import { connectChromeExtension } from './agent-control'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { WebContents } from 'electron'
@@ -58,11 +62,11 @@ export class BrowserClientRuntime {
         this.clientHost = null
         this.bridge = null
         this.devscopeRelay = null
+        devscopeRelay?.dispose()
         await Promise.all([
             clientHost?.stop().catch(() => undefined),
             bridge?.stop().catch(() => undefined)
         ])
-        devscopeRelay?.dispose()
     }
 
     private async startGeneration(generation: number): Promise<{ host: string; port: number; origin: string }> {
@@ -78,8 +82,13 @@ export class BrowserClientRuntime {
             allowedOrigins,
             capability,
             descriptorPath: join(this.dependencies.userDataPath, BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME),
-            invokeDevscope: (path, args) => devscopeRelay.invoke(path, args),
-            subscribeDevscopeEvents: (listener) => devscopeRelay.subscribeEvents(listener),
+            invokeDevscope: (path, args) => path.length === 2 && path[0] === 'runtimeActivation' && path[1] === 'getState'
+                ? Promise.resolve(readRuntimeActivation()) : devscopeRelay.invoke(path, args),
+            subscribeDevscopeEvents: (listener) => {
+                const stopRelay = devscopeRelay.subscribeEvents(listener)
+                const stopRuntime = subscribeRuntimeActivation(payload => listener({ event: 'runtimeActivationChanged', payload }))
+                return () => { stopRelay(); stopRuntime() }
+            },
             onAssistantClientCountChanged: setActiveBrowserAssistantClientCount,
             persistClipboardImage: this.dependencies.persistClipboardImage,
             resolveClipboardAttachment: this.dependencies.resolveClipboardAttachment,
@@ -94,6 +103,12 @@ export class BrowserClientRuntime {
         if (generation !== this.generation) throw new Error('The local browser runtime stopped during startup.')
 
         const clientHost = new BrowserClientHost({
+            extensionOrigins: chromeExtensionOrigins([
+                CHROME_EXTENSION_STORE_ID,
+                ...(!app.isPackaged ? [CHROME_EXTENSION_DEVELOPMENT_ID] : [])
+            ]),
+            connectExtension: connectChromeExtension,
+            getRuntimeStatus: readRuntimeActivation,
             bridge: { ...bridgeAddress, capability },
             ...(this.dependencies.clientPort ? { port: this.dependencies.clientPort } : {}),
             ...(this.dependencies.rendererUrl

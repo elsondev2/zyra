@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import { FolderTree } from 'lucide-react'
 import { PreviewNavigationSidebar, type PreviewNavigationWorkspaceState } from '@/components/ui/file-preview/PreviewNavigationSidebar'
 import type { PreviewFile, PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -13,9 +13,11 @@ export const AssistantExplorerWorkspace = memo(function AssistantExplorerWorkspa
     onOpenPreview,
     onOpenPreviewInNewTab,
     initialWorkspaceState,
-    onWorkspaceStateChange
+    onWorkspaceStateChange,
+    workspaceHeaderActions
 }: {
     projectPath: string | null
+    workspaceHeaderActions?: ReactNode
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onOpenPreviewInNewTab: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     initialWorkspaceState?: PreviewNavigationWorkspaceState
@@ -52,6 +54,7 @@ export const AssistantExplorerWorkspace = memo(function AssistantExplorerWorkspa
                 onOpenLinkedPreview={onOpenPreview}
                 onOpenLinkedPreviewInNewTab={onOpenPreviewInNewTab}
                 variant="workspace"
+                workspaceHeaderActions={workspaceHeaderActions}
                 initialWorkspaceState={initialWorkspaceState}
                 onWorkspaceStateChange={onWorkspaceStateChange}
             />

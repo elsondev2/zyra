@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { CalendarDays, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -50,18 +51,18 @@ export function AssistantDatePicker({ value, max, onChange }: { value: string; m
             if (focusable.length === 0) return
             const first = focusable[0]
             const last = focusable[focusable.length - 1]
-            if (event.shiftKey && document.activeElement === first) {
+            if (event.shiftKey && dialogRef.current.ownerDocument.activeElement === first) {
                 event.preventDefault()
                 last.focus()
-            } else if (!event.shiftKey && document.activeElement === last) {
+            } else if (!event.shiftKey && dialogRef.current.ownerDocument.activeElement === last) {
                 event.preventDefault()
                 first.focus()
             }
         }
-        window.addEventListener('keydown', handleKeyDown, true)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown, true)
         return () => {
             window.cancelAnimationFrame(frame)
-            window.removeEventListener('keydown', handleKeyDown, true)
+            removeOverlayListener1()
         }
     }, [open])
 

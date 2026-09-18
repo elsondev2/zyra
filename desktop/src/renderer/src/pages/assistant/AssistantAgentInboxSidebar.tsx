@@ -1,12 +1,15 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { Check, CheckCircle2, ChevronDown, CircleDashed, Folder, FolderPlus, MessageSquare, MoreHorizontal, Undo2 } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDown, CircleDashed, Folder, FolderPlus, MessageSquare, MoreHorizontal, Search, Undo2, X } from 'lucide-react'
 import type { AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { cn } from '@/lib/utils'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
-import { isAssistantSessionOpenInTui } from './assistant-tui-presence'
+import { assistantSessionMobileDevices, isAssistantSessionOpenInTui } from './assistant-tui-presence'
 import { resolveAssistantAgentInboxSettledInitialCount } from './assistant-agent-inbox-settled-window'
 import {
     formatAssistantSidebarRelativeTime,
@@ -39,6 +42,7 @@ type SidebarItem = {
     active: boolean
     settled: boolean
     tuiOpen: boolean
+    mobileDevices: string[]
 }
 
 type Props = {
@@ -173,7 +177,7 @@ function InboxRowActions({ item, action, onAction, props, showLabel = false }: {
     const menuItems = getAgentInboxMenuItems(item, onAction, props)
     return (
         <div className={cn(
-            'pointer-events-none absolute right-0 top-1/2 z-[1] translate-x-1 -translate-y-1/2 opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:pointer-events-auto group-hover/agent-inbox-row:translate-x-0 group-hover/agent-inbox-row:opacity-100 focus-within:pointer-events-auto focus-within:translate-x-0 focus-within:opacity-100 motion-reduce:transition-none',
+            'pointer-events-none absolute right-0 top-1/2 z-[1] translate-x-1 -translate-y-1/2 opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:pointer-events-auto group-focus-within/agent-inbox-row:pointer-events-auto group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:pointer-events-auto group-hover/agent-inbox-row:translate-x-0 group-focus-within/agent-inbox-row:translate-x-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-0 group-hover/agent-inbox-row:opacity-100 group-focus-within/agent-inbox-row:opacity-100 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-100 focus-within:pointer-events-auto focus-within:translate-x-0 focus-within:opacity-100 motion-reduce:transition-none',
             showLabel ? 'w-[4.75rem]' : 'w-[3.25rem]'
         )}>
             <div className="relative flex items-center justify-end gap-0.5">
@@ -217,18 +221,19 @@ function AgentInboxCard({ item, onSettle, props }: { item: SidebarItem; onSettle
                         <ProjectMark group={item.project} />
                         <span className={cn('min-w-0 flex-1 truncate text-xs text-sparkle-text-secondary/85', receded ? 'font-normal' : 'font-medium')}>{item.project.label}</span>
                         <div className="relative ml-auto flex h-6 min-w-[5.75rem] shrink-0 items-center justify-end gap-1 pl-1 text-xs">
-                            <span className="shrink-0 transition-opacity duration-150 ease-out group-hover/agent-inbox-row:opacity-0 motion-reduce:transition-none">
+                            <span className="shrink-0 transition-opacity duration-150 ease-out group-hover/agent-inbox-row:opacity-0 group-focus-within/agent-inbox-row:opacity-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-0 motion-reduce:transition-none">
                                 <span className="whitespace-nowrap tabular-nums text-sparkle-text-muted/65">{topStatus(item)}</span>
                             </span>
                             <InboxRowActions item={item} action="settle" onAction={onSettle} props={props} showLabel />
                         </div>
                     </div>
-                    <div className={cn('mt-1 flex min-w-0', item.tuiOpen && 'pr-6')}>
+                    <div className={cn('mt-1 flex min-w-0', item.tuiOpen && item.mobileDevices.length > 0 ? 'pr-12' : (item.tuiOpen || item.mobileDevices.length > 0) && 'pr-6')}>
                         <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm', receded ? 'font-normal text-sparkle-text-secondary/80' : 'font-medium text-sparkle-text')} />
                     </div>
-                    {item.tuiOpen ? (
+                    {item.tuiOpen || item.mobileDevices.length > 0 ? (
                         <span className="absolute bottom-1.5 right-2 inline-flex">
-                            <AssistantTuiPresenceIndicator focusable={false} />
+                            {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
+                            {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
                         </span>
                     ) : null}
                     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-sparkle-text-muted/75">
@@ -250,12 +255,13 @@ function AgentInboxSlimRow({ item, action, onAction, props }: { item: SidebarIte
                 <ProjectMark group={item.project} dimmed={!item.active} />
                 <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm group-hover/agent-inbox-row:text-sparkle-text', item.active ? 'text-sparkle-text' : 'text-sparkle-text-muted/70')} />
                 <div className="relative ml-auto flex h-6 min-w-[4.5rem] shrink-0 items-center justify-end gap-1.5">
-                    {item.tuiOpen ? (
-                        <span className="inline-flex shrink-0 transition-transform duration-150 ease-out group-hover/agent-inbox-row:-translate-x-9 motion-reduce:transition-none">
-                            <AssistantTuiPresenceIndicator focusable={false} />
+                    {item.tuiOpen || item.mobileDevices.length > 0 ? (
+                        <span className="inline-flex shrink-0 transition-transform duration-150 ease-out group-hover/agent-inbox-row:-translate-x-6 group-focus-within/agent-inbox-row:-translate-x-6 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:-translate-x-6 motion-reduce:transition-none">
+                            {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
+                            {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
                         </span>
                     ) : null}
-                    <span className="shrink-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:translate-x-1 group-hover/agent-inbox-row:opacity-0 motion-reduce:transition-none">
+                    <span className="shrink-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:translate-x-1 group-focus-within/agent-inbox-row:translate-x-1 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-1 group-hover/agent-inbox-row:opacity-0 group-focus-within/agent-inbox-row:opacity-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-0 motion-reduce:transition-none">
                         <span className="whitespace-nowrap text-xs tabular-nums text-sparkle-text-muted/55">{formatAssistantSidebarRelativeTime(item.activityAt)}</span>
                     </span>
                     <InboxRowActions item={item} action={action} onAction={onAction} props={props} />
@@ -268,11 +274,14 @@ function AgentInboxSlimRow({ item, action, onAction, props }: { item: SidebarIte
 export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSidebar(props: Props) {
     const [scope, setScope] = useState(ALL_PROJECTS)
     const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+    const [projectSearch, setProjectSearch] = useState('')
     const [settledExpanded, setSettledExpanded] = useState(true)
     const [settledInitialCount, setSettledInitialCount] = useState(1)
     const [settledAdditionalCount, setSettledAdditionalCount] = useState(0)
     const [settlementOverrides, setSettlementOverrides] = useState<SettlementOverrides>(readSettlementOverrides)
     const menuRef = useRef<HTMLDivElement | null>(null)
+    const projectTriggerRef = useRef<HTMLButtonElement | null>(null)
+    const projectSearchRef = useRef<HTMLInputElement | null>(null)
     const scrollRef = useRef<HTMLDivElement | null>(null)
     const listRef = useRef<HTMLUListElement | null>(null)
     const settledHeaderRef = useRef<HTMLLIElement | null>(null)
@@ -281,16 +290,27 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
 
     const visibleSessions = useMemo(() => props.sessions.filter((session) => !session.archived && !isAssistantDraftSession(session)), [props.sessions])
     const projectGroups = useMemo(() => groupSessionsByProject(visibleSessions, props.projectIconOverrides), [props.projectIconOverrides, visibleSessions])
+    const projectQuery = projectSearch.trim().toLocaleLowerCase()
+    const filteredProjectGroups = projectGroups.filter((group) => !projectQuery || [group.label, group.path].join(' ')
+        .toLocaleLowerCase().includes(projectQuery))
     const projectByPath = useMemo(() => new Map(projectGroups.map((group) => [group.path, group])), [projectGroups])
     useEffect(() => { if (scope !== ALL_PROJECTS && !projectByPath.has(scope)) setScope(ALL_PROJECTS) }, [projectByPath, scope])
     useEffect(() => setSettledAdditionalCount(0), [scope])
     useEffect(() => {
-        if (!projectMenuOpen) return
-        const close = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) setProjectMenuOpen(false) }
-        const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setProjectMenuOpen(false) }
-        document.addEventListener('pointerdown', close)
-        window.addEventListener('keydown', escape)
-        return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape) }
+        if (!projectMenuOpen) {
+            setProjectSearch('')
+            return
+        }
+        const close = (event: PointerEvent) => { if (!isOverlayEventInside(event, menuRef.current)) setProjectMenuOpen(false) }
+        const escape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setProjectMenuOpen(false)
+                projectTriggerRef.current?.focus()
+            }
+        }
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', close)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', escape)
+        return () => { removeOverlayListener1(); removeOverlayListener2() }
     }, [projectMenuOpen])
 
     const items = useMemo(() => visibleSessions
@@ -305,6 +325,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 active,
                 activityAt,
                 tuiOpen: isAssistantSessionOpenInTui(session),
+                mobileDevices: assistantSessionMobileDevices(session),
                 projectPath: resolveSessionProjectPath(session),
                 project: projectByPath.get(resolveSessionProjectPath(session))!
             }
@@ -453,12 +474,34 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
             {props.headerActions}
             {projectGroups.length > 0 ? (
                 <div ref={menuRef} className="relative mx-0.5">
-                    <button type="button" aria-label="Filter chats by project" aria-expanded={projectMenuOpen} onClick={() => setProjectMenuOpen((open) => !open)} className="flex h-7 w-full min-w-0 items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] leading-none text-sparkle-text-secondary outline-none hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35">{scopedProject ? <ProjectMark group={scopedProject} /> : <Folder size={16} className="shrink-0 text-sparkle-text-muted/80" />}<span className="min-w-0 flex-1 truncate">{scopedProject?.label || 'All projects'}</span><ChevronDown size={16} className="shrink-0 text-sparkle-text-muted/70" /></button>
+                    <button ref={projectTriggerRef} type="button" aria-label="Filter chats by project" aria-expanded={projectMenuOpen} onClick={() => setProjectMenuOpen((open) => !open)} className="flex h-7 w-full min-w-0 items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] leading-none text-sparkle-text-secondary outline-none hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35">{scopedProject ? <ProjectMark group={scopedProject} /> : <Folder size={16} className="shrink-0 text-sparkle-text-muted/80" />}<span className="min-w-0 flex-1 truncate">{scopedProject?.label || 'All projects'}</span><ChevronDown size={16} className="shrink-0 text-sparkle-text-muted/70" /></button>
                     {projectMenuOpen ? (
-                        <div className="absolute left-0 right-0 top-[34px] z-50 max-h-72 overflow-y-auto rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_16px_48px_rgba(0,0,0,0.34)]">
-                            <button type="button" onClick={() => { setScope(ALL_PROJECTS); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><Folder size={16} /><span className="min-w-0 flex-1 truncate">All projects</span>{scope === ALL_PROJECTS ? <Check size={13} /> : null}</button>
-                            {projectGroups.map((group) => <button key={group.key} type="button" onClick={() => { setScope(group.path); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><ProjectMark group={group} /><span className="min-w-0 flex-1 truncate">{group.label}</span>{scope === group.path ? <Check size={13} /> : null}</button>)}
-                        </div>
+                        <AnchoredNativeOverlay><div className="absolute left-0 right-0 top-[34px] z-50 flex max-h-72 flex-col overflow-hidden rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_16px_48px_rgba(0,0,0,0.34)]">
+                            <div className="mb-1 flex h-9 shrink-0 items-center gap-2 border-b border-[var(--surface-divider)] px-2 text-sparkle-text-muted">
+                                <Search size={14} className="shrink-0 opacity-70" aria-hidden="true" />
+                                <input
+                                    ref={projectSearchRef}
+                                    autoFocus
+                                    type="text"
+                                    role="searchbox"
+                                    aria-label="Search projects"
+                                    placeholder="Search projects…"
+                                    value={projectSearch}
+                                    onChange={(event) => setProjectSearch(event.target.value)}
+                                    className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted/60"
+                                />
+                                {projectSearch ? (
+                                    <button type="button" aria-label="Clear project search" onClick={() => { setProjectSearch(''); projectSearchRef.current?.focus() }} className="flex size-5 shrink-0 items-center justify-center rounded-sm text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35">
+                                        <X size={12} />
+                                    </button>
+                                ) : null}
+                            </div>
+                            <div className="assistant-chat-scrollbar min-h-0 overflow-y-auto">
+                                <button type="button" onClick={() => { setScope(ALL_PROJECTS); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><Folder size={16} /><span className="min-w-0 flex-1 truncate">All projects</span>{scope === ALL_PROJECTS ? <Check size={13} /> : null}</button>
+                                {filteredProjectGroups.map((group) => <button key={group.key} type="button" onClick={() => { setScope(group.path); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><ProjectMark group={group} /><span className="min-w-0 flex-1 truncate">{group.label}</span>{scope === group.path ? <Check size={13} /> : null}</button>)}
+                                {filteredProjectGroups.length === 0 ? <p role="status" className="px-2 py-3 text-center text-xs text-sparkle-text-muted/70">No projects found</p> : null}
+                            </div>
+                        </div></AnchoredNativeOverlay>
                     ) : null}
                 </div>
             ) : null}

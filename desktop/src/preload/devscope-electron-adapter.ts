@@ -1,8 +1,13 @@
+import { createMobileAccessAdapter } from './adapters/mobile-access-adapter'
+import { createRuntimeActivationAdapter } from './adapters/runtime-activation-adapter'
+import { createBrowserRecordingOverlayAdapter } from './adapters/browser-recording-overlay-adapter'
+import { createNativeOverlayAdapter } from './adapters/native-overlay-adapter'
 /**
  * Zyra - Electron Adapter
  */
 
 import type { DevScopeApi } from '../shared/contracts/devscope-api'
+import { createAccessoriesAdapter } from './adapters/accessories-adapter'
 import { createAssistantAdapter } from './adapters/assistant-adapter'
 import { createAssistantUtilityAdapter } from './adapters/assistant-utility-adapter'
 import { createBrowserPopupAdapter } from './adapters/browser-popup-adapter'
@@ -19,6 +24,9 @@ import { createWindowAdapter } from './adapters/window-adapter'
 
 export function createDevScopeElectronAdapter(): DevScopeApi {
     const api: DevScopeApi = {
+        runtimeActivation: createRuntimeActivationAdapter(),
+        mobileAccess: createMobileAccessAdapter(),
+        ...createAccessoriesAdapter(),
         ...createSettingsAndAiAdapter(),
         ...createSetupAdapter(),
         ...createMemoryAdapter(),
@@ -28,6 +36,8 @@ export function createDevScopeElectronAdapter(): DevScopeApi {
         ...createAssistantAdapter(),
         ...createAssistantUtilityAdapter(),
         ...createBrowserViewAdapter(),
+        ...createBrowserRecordingOverlayAdapter(),
+        ...createNativeOverlayAdapter(),
         agentControl: createAgentControlAdapter(),
         ...createUpdatesAdapter(),
         ...createWindowAdapter(),

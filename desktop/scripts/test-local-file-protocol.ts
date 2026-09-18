@@ -135,28 +135,38 @@ await Bun.write(htmlPath, htmlSource)
 nextFetchResponse = new Response(htmlSource, { status: 200, headers: { 'Content-Type': 'text/html' } })
 const htmlResponse = await handler!(new Request(pathToFileURL(htmlPath).href.replace(/^file:/, 'zyra:')))
 const htmlPolicy = htmlResponse.headers.get('content-security-policy') || ''
+assert.doesNotMatch(htmlPolicy, /localhost:\*|127\.0\.0\.1:\*/, 'preview ancestors must not trust every loopback server')
 for (const directive of [
     'sandbox',
     "default-src 'none'",
-    "frame-ancestors 'none'",
+    'frame-ancestors file:',
     "script-src 'none'",
     "connect-src 'none'",
     "frame-src 'none'",
     "form-action 'none'",
-    'img-src data: blob:'
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:"
 ]) assert.equal(htmlPolicy.includes(directive), true, `HTML policy includes ${directive}`)
-assert.equal(htmlPolicy.includes('http:'), false, 'HTML cannot request remote network resources')
-assert.equal(htmlPolicy.includes('file:'), false, 'HTML cannot read arbitrary file URLs')
-assert.equal(htmlPolicy.includes('zyra:'), false, 'HTML cannot pivot the local protocol into another file')
+assert.equal(/(?:script|connect|frame|child|style|img|media|font)-src[^;]*\bhttps?:/u.test(htmlPolicy), false, 'HTML cannot request remote network resources')
+assert.equal(/(?:style|img|media|font)-src[^;]*\bfile:/u.test(htmlPolicy), false, 'HTML subresources cannot read file URLs')
+assert.equal(htmlPolicy.includes('zyra:'), false, 'HTML cannot name the local protocol as an unrestricted subresource source')
 assert.equal(htmlPolicy.includes("'unsafe-eval'"), false)
 
 const protocolSource = await Bun.file(new URL('../src/main/file-protocol.ts', import.meta.url)).text()
 const htmlPreviewSource = await Bun.file(new URL('../src/renderer/src/components/ui/file-preview/HtmlRenderedPreview.tsx', import.meta.url)).text()
 assert.doesNotMatch(protocolSource, /registerBufferProtocol|\breadFile\b/)
-assert.match(htmlPreviewSource, /sandbox=""/, 'untrusted HTML receives every iframe sandbox restriction')
+assert.match(htmlPreviewSource, /sandbox="allow-scripts allow-same-origin"/, 'approved interactive previews run on the separate local-document origin')
 assert.match(htmlPreviewSource, /allow=""/, 'untrusted HTML receives no delegated permissions')
 assert.match(htmlPreviewSource, /referrerPolicy="no-referrer"/)
-assert.doesNotMatch(htmlPreviewSource, /allow-scripts|allow-same-origin|allow-popups|allow-top-navigation|allow-forms/)
+assert.doesNotMatch(htmlPreviewSource, /allow-popups|allow-top-navigation|allow-forms|allow-downloads/)
+nextFetchResponse = new Response(htmlSource, { status: 200 })
+const interactiveResponse = await handler!(new Request(pathToFileURL(htmlPath).href.replace(/^file:/, 'zyra:') + '?devscope-preview=abc123'))
+const interactivePolicy = interactiveResponse.headers.get('content-security-policy') || ''
+assert.ok(interactivePolicy.includes("script-src 'self' 'unsafe-inline'"))
+for (const directive of ["connect-src 'none'", "form-action 'none'", "frame-src 'none'", "worker-src 'none'"]) assert.ok(interactivePolicy.includes(directive))
+nextFetchResponse = new Response(htmlSource, { status: 200 })
+const invalidPreview = await handler!(new Request(pathToFileURL(htmlPath).href.replace(/^file:/, 'zyra:') + '?devscope-preview=bad%20stamp'))
+assert.ok(invalidPreview.headers.get('content-security-policy')?.includes("script-src 'none'"))
 
 const projectIconSource = await Bun.file(new URL('../src/renderer/src/components/ui/ProjectIcon.tsx', import.meta.url)).text()
 assert.match(projectIconSource, /failedCustomIconPaths/, 'failed custom project icons are not requested repeatedly during the same app session')

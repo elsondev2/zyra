@@ -55,11 +55,15 @@ class TrustedGuestRegistry {
         return entry
     }
 
-    transferOwner(guestWebContentsId: number, previousOwnerWebContentsId: number, ownerWebContentsId: number): TrustedBrowserGuest {
+    transferOwner(guestWebContentsId: number, previousOwnerWebContentsId: number, ownerWebContentsId: number, ownerThreadId?: string | null): TrustedBrowserGuest {
         const entry = this.byGuestId.get(guestWebContentsId)
         if (!entry || entry.guest.isDestroyed()) throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The Browser guest is no longer available.')
         if (entry.ownerWebContentsId !== previousOwnerWebContentsId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest owner changed during transfer.')
+        if (ownerThreadId !== undefined && ownerThreadId !== null && !/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,191}$/.test(ownerThreadId)) {
+            throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser owner thread identity is invalid.')
+        }
         entry.ownerWebContentsId = ownerWebContentsId
+        if (ownerThreadId !== undefined) entry.ownerThreadId = ownerThreadId
         return entry
     }
 

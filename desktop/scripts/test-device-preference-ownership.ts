@@ -28,6 +28,7 @@ try {
         assistantContextCompactionThresholdTokens: 256_000,
         assistantChatDisplayMode: 'detailed',
         browserViewMode: 'grid',
+        assistantShowActionStats: true,
         startWithWindows: true,
         groqApiKey: 'must-not-migrate',
         theme: 'midnight',
@@ -41,13 +42,16 @@ try {
         assistantReasoningSummary: 'detailed',
         assistantContextCompactionThresholdTokens: 256_000
     })
-    assert.deepEqual(partitioned.surface, { assistantChatDisplayMode: 'detailed', browserViewMode: 'grid' })
+    assert.deepEqual(partitioned.surface, { assistantChatDisplayMode: 'detailed', browserViewMode: 'grid', assistantShowActionStats: true })
+    assert.deepEqual(partitionDevicePreferencePatch({ assistantAllowCollapseWhileWorking: true }, 'desktop').surface, { assistantAllowCollapseWhileWorking: true })
+    assert.equal(sanitizeDevicePreferenceValue('assistantAllowCollapseWhileWorking', 'true'), undefined)
     assert.equal(getDevicePreferenceOwnership('startWithWindows'), 'os')
     assert.equal(getDevicePreferenceOwnership('groqApiKey'), 'secret')
     assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'forest'), undefined, 'dark themes cannot enter the light half')
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'paper-light'), undefined, 'light themes cannot enter the dark half')
     assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'paper-light'), 'paper-light')
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'forest'), 'forest')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'dark'), 'vercel', 'retired blue Dark preferences migrate consistently across surfaces')
     assert.equal(sanitizeDevicePreferenceValue('assistantTitleModel', 56), undefined, 'the title model rejects malformed non-string values')
     assert.equal(sanitizeDevicePreferenceValue('assistantReasoningSummary', 'raw'), undefined, 'raw chain-of-thought cannot become a reasoning-summary mode')
     assert.equal(sanitizeDevicePreferenceValue('assistantReasoningSummary', 'detailed'), 'detailed')
@@ -188,6 +192,10 @@ try {
         service.update({ surface: 'desktop', expectedRevision: desktop.revision, patch: { compactMode: true } }),
         /expected revision/
     )
+    const stats = await service.updateSurfaceFromMain('desktop', { assistantShowActionStats: true })
+    assert.equal(stats.settings.assistantShowActionStats, true)
+    assert.equal((await new DevicePreferencesService(path, now).get({ surface: 'desktop' })).settings.assistantShowActionStats, true, 'action statistics survive a restart')
+    assert.equal((await service.get({ surface: 'browser' })).settings.assistantShowActionStats, undefined, 'action statistics remain local to the surface')
     const persisted = await readFile(path, 'utf8')
     assert.equal(persisted.includes('secret-groq'), false)
     assert.equal(persisted.includes('secret-gemini'), false)

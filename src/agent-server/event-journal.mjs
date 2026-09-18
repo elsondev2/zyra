@@ -1,5 +1,6 @@
+import { ReplayWindow } from './replay-window.mjs';
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, openSync, closeSync, fstatSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_AGENT_SERVER_REPLAY_EVENTS } from "./protocol.mjs";
 
@@ -10,21 +11,20 @@ const MAX_DURABLE_EVENT_BYTES = 1024 * 1024;
 const TRANSIENT_EVENT_TYPES = new Set(["message_update", "tool_execution_update"]);
 
 export class AgentEventJournal {
+  get entries() { return this.window.entries; }
   constructor(directory, canonicalChatId) {
     this.directory = path.resolve(directory);
     this.canonicalChatId = String(canonicalChatId || "");
     this.file = journalFile(this.directory, this.canonicalChatId);
-    this.entries = readEntries(this.file);
+    this.window = new ReplayWindow({ maxBytes: MAX_JOURNAL_BYTES - MAX_AGENT_SERVER_REPLAY_EVENTS });
+    this.window.reset(readEntries(this.file));
   }
 
   append(entry) {
     if (TRANSIENT_EVENT_TYPES.has(entry?.event?.type)) return;
     mkdirSync(this.directory, { recursive: true });
     const durableEntry = toDurableEntry(entry);
-    this.entries.push(durableEntry);
-    if (this.entries.length > MAX_AGENT_SERVER_REPLAY_EVENTS) {
-      this.entries.splice(0, this.entries.length - MAX_AGENT_SERVER_REPLAY_EVENTS);
-    }
+    this.window.append(durableEntry);
     appendFileSync(this.file, `${JSON.stringify(durableEntry)}\n`, { encoding: "utf8", mode: 0o600 });
     if (fileSize(this.file) > MAX_JOURNAL_BYTES) this.compact();
   }
@@ -64,7 +64,17 @@ function journalFile(directory, canonicalChatId) {
 
 function readEntries(file) {
   try {
-    const entries = readFileSync(file, "utf8")
+    const fd = openSync(file, 'r');
+    let content;
+    try {
+      const size = fstatSync(fd).size;
+      const length = Math.min(size, MAX_JOURNAL_BYTES + MAX_DURABLE_EVENT_BYTES);
+      const bytes = Buffer.alloc(length);
+      readSync(fd, bytes, 0, length, size - length);
+      content = bytes.toString('utf8');
+      if (size > length) content = content.slice(content.indexOf('\n') + 1);
+    } finally { closeSync(fd); }
+    const entries = content
       .split(/\r?\n/)
       .filter(Boolean)
       .flatMap((line) => {

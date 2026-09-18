@@ -29,7 +29,6 @@ export const LIGHT_THEME_IDS = [
 ] as const
 
 export const DARK_THEME_IDS = [
-    'dark',
     'midnight',
     'purple',
     'green',

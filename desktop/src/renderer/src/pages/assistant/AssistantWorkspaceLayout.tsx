@@ -1,4 +1,5 @@
-import { createContext, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { isBrowserExtension } from '@/lib/browser-extension'
+import { createContext, Suspense, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAssistantStoreSelector } from '@/lib/assistant/store'
 import { ConnectedAssistantSessionsRail } from './AssistantConnectedSessionsRail'
@@ -22,13 +23,14 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
     const chatActive = pathname === '/assistant' || pathname.startsWith('/assistant/')
     const selectedSessionId = useAssistantStoreSelector((state) => state.snapshot.selectedSessionId)
     const sidebar = useAssistantPageSidebarState(selectedSessionId)
-    const { leftSidebarCollapsed, setLeftSidebarCollapsed, leftSidebarWidth, rightPanelMode, setRightPanelMode, rightSidebarWidth } = sidebar
+    const { leftSidebarCollapsed, setLeftSidebarCollapsed, leftSidebarWidth, rightPanelMode, rightSidebarWidth } = sidebar
     const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
+    const [extensionDrawerOpen, setExtensionDrawerOpen] = useState(false)
     const autoCollapsedLeftSidebarRef = useRef(false)
     const { toast, showToast } = useAssistantTransientToast()
     const paneLayout = resolveAssistantPaneLayout({
         viewportWidth,
-        leftSidebarCollapsed: leftSidebarCollapsed || (!chatActive && viewportWidth < 760),
+        leftSidebarCollapsed: isBrowserExtension || leftSidebarCollapsed || (!chatActive && viewportWidth < 760),
         leftSidebarWidth,
         inspectorOpen: chatActive && rightPanelMode === 'review',
         inspectorWidth: rightSidebarWidth
@@ -39,10 +41,6 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
         window.addEventListener('resize', resize)
         return () => window.removeEventListener('resize', resize)
     }, [])
-    useLayoutEffect(() => {
-        // The Inspector still closes when its Chat page unmounts.
-        if (!chatActive) setRightPanelMode('none')
-    }, [chatActive, setRightPanelMode])
     useEffect(() => {
         if (paneLayout.autoCollapseLeftSidebar && !leftSidebarCollapsed) {
             autoCollapsedLeftSidebarRef.current = true
@@ -55,7 +53,7 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
         }
     }, [leftSidebarCollapsed, paneLayout.autoCollapseLeftSidebar, setLeftSidebarCollapsed])
     useEffect(() => {
-        const toggle = () => setLeftSidebarCollapsed((current) => !current)
+        const toggle = () => isBrowserExtension ? setExtensionDrawerOpen(current => !current) : setLeftSidebarCollapsed((current) => !current)
         window.addEventListener('zyra:toggle-assistant-sidebar', toggle)
         return () => window.removeEventListener('zyra:toggle-assistant-sidebar', toggle)
     }, [setLeftSidebarCollapsed])
@@ -65,11 +63,15 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
         }))
     }, [leftSidebarWidth, paneLayout.leftSidebarCollapsed, paneLayout.leftSidebarWidth])
 
+    useEffect(() => { setExtensionDrawerOpen(false) }, [selectedSessionId, pathname])
+
     return <WorkspaceLayoutContext.Provider value={{ ...sidebar, paneLayout }}>
         <div className="flex h-full min-h-0 overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]" data-assistant-workspace="true">
+            {isBrowserExtension && extensionDrawerOpen && <button className="absolute inset-0 z-40 bg-black/25" aria-label="Close chats" onClick={() => setExtensionDrawerOpen(false)} />}
+            <div className={isBrowserExtension && extensionDrawerOpen ? 'extension-chat-drawer h-full' : 'contents'}>
             <ConnectedAssistantSessionsRail
-                collapsed={paneLayout.leftSidebarCollapsed}
-                width={leftSidebarWidth}
+                collapsed={isBrowserExtension ? !extensionDrawerOpen : paneLayout.leftSidebarCollapsed}
+                width={isBrowserExtension ? Math.min(320, viewportWidth - 32) : leftSidebarWidth}
                 maxWidth={paneLayout.maxLeftSidebarWidth}
                 previewPinned={sidebar.bubblePreviewPinned}
                 railMode={sidebar.railMode}
@@ -84,6 +86,7 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
                 onPreviewPinnedChange={sidebar.setBubblePreviewPinned}
                 onShowToast={showToast}
             />
+            </div>
             <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--color-text-muted)]" role="status">Loading…</div>}>
                     {children}

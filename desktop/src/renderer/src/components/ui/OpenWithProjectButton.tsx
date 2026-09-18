@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, createOverlayPortal as createPortal, isOverlayEventInside } from './native-overlay-portal'
+import { supportsNativeOverlay } from './native-overlay-host'
 import { Bot, ChevronDown, Folder, FolderOpen, LoaderCircle, Terminal } from 'lucide-react'
 import type { DevScopeInstalledIde } from '@shared/contracts/devscope-project-contracts'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
@@ -31,9 +32,10 @@ export function OpenWithProjectButton(props: {
         menuOpen: controlledMenuOpen,
         onMenuOpenChange,
         menuWidthMode = 'content',
-        menuPresentation = 'portal',
+        menuPresentation: requestedPresentation = 'portal',
         contextActions = []
     } = props
+    const menuPresentation = supportsNativeOverlay() ? 'portal' : requestedPresentation
     const triggerRef = useRef<HTMLDivElement | null>(null)
     const menuRef = useRef<HTMLDivElement | null>(null)
     const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false)
@@ -101,8 +103,7 @@ export function OpenWithProjectButton(props: {
         if (!menuOpen) return
 
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target as Node
-            if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return
+            if (isOverlayEventInside(event, triggerRef.current, menuRef.current)) return
             setMenuOpen(false)
             setErrorMessage(null)
         }
@@ -114,11 +115,11 @@ export function OpenWithProjectButton(props: {
             }
         }
 
-        document.addEventListener('pointerdown', handlePointerDown)
-        document.addEventListener('keydown', handleEscape)
+        const removePointer = addOverlayEventListener('pointerdown', handlePointerDown)
+        const removeEscape = addOverlayEventListener('keydown', handleEscape)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown)
-            document.removeEventListener('keydown', handleEscape)
+            removePointer()
+            removeEscape()
         }
     }, [menuOpen])
 

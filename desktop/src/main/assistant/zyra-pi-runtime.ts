@@ -1,3 +1,6 @@
+import { canonicalImageAttachmentSection } from './canonical-media-cache'
+import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
+import { assistantTextUpdate } from '../../shared/assistant/stream-text-update'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
@@ -18,7 +21,6 @@ import type {
     AssistantRuntimeMode,
     AssistantSessionUsageTotals,
     AssistantThread,
-    AssistantTurnOutcome,
     AssistantTurnUsage,
     AssistantUserInputAnswer,
     AssistantUserInputQuestion,
@@ -40,6 +42,11 @@ import {
     hasAssistantContentText,
     hasAssistantThinkingText
 } from './assistant-message-content'
+import {
+    readTerminalAssistantMessageOutcome,
+    resolveZyraTerminalOutcome,
+    type TerminalAssistantMessageOutcome
+} from './assistant-terminal-outcome'
 import { getAgentControlBroker } from '../agent-control'
 import { revokePluginChatControl } from './assistant-plugin-control'
 import { AgentControlError, toAgentControlError } from '../agent-control/control-errors'
@@ -67,12 +74,6 @@ type ActiveRetryLifecycle = {
     recoveryKind: 'network' | 'provider'
     attempt: number
     maxAttempts: number
-}
-
-type TerminalAssistantMessageOutcome = {
-    turnId: string
-    outcome: 'interrupted' | 'failed'
-    errorMessage: string | null
 }
 
 export type PrivateVoiceTaskInput = {
@@ -216,38 +217,6 @@ function readUserInputAnswers(value: unknown): Record<string, AssistantUserInput
     ]))
 }
 
-function readTerminalAssistantMessageOutcome(message: Record<string, unknown> | null): Omit<TerminalAssistantMessageOutcome, 'turnId'> | null {
-    const stopReason = String(message?.['stopReason'] || '').trim().toLowerCase()
-    const errorMessage = asString(message?.['errorMessage'])
-    if (
-        stopReason === 'aborted'
-        || stopReason === 'cancelled'
-        || stopReason === 'canceled'
-        || stopReason === 'interrupted'
-        || stopReason === 'stopped'
-    ) return { outcome: 'interrupted', errorMessage }
-    if (stopReason === 'error' || errorMessage) return { outcome: 'failed', errorMessage }
-    return null
-}
-
-function resolveZyraTerminalOutcome(
-    type: string,
-    event: Record<string, unknown>,
-    messageOutcome: TerminalAssistantMessageOutcome | null
-): AssistantTurnOutcome {
-    if (messageOutcome) return messageOutcome.outcome
-    if (type === 'agent_end') return 'completed'
-    const outcome = String(event['outcome'] || '').trim().toLowerCase()
-    if (outcome === 'interrupted' || outcome === 'cancelled' || outcome === 'canceled') return 'interrupted'
-    if (outcome === 'failed') {
-        const errorMessage = asString(event['errorMessage']) || ''
-        return /\b(?:abort(?:ed)?|cancel(?:led|ed)?|interrupt(?:ed)?|stopp?ed)\b/i.test(errorMessage)
-            ? 'interrupted'
-            : 'failed'
-    }
-    return 'completed'
-}
-
 function nowIso(): string {
     return new Date().toISOString()
 }
@@ -331,6 +300,7 @@ function readUsage(value: unknown): AssistantTurnUsage | null {
     const cost = asRecord(usage['cost'])
     const costTotal = cost?.['total']
     return {
+        inputIncludesCachedTokens: false,
         inputTokens: numberValue('input'),
         outputTokens: numberValue('output'),
         cachedInputTokens: numberValue('cacheRead'),
@@ -397,6 +367,9 @@ export function mergeAssistantTurnUsage(
     next: AssistantTurnUsage
 ): AssistantTurnUsage {
     return {
+        ...(typeof next.inputIncludesCachedTokens === 'boolean' || typeof current?.inputIncludesCachedTokens === 'boolean'
+            ? { inputIncludesCachedTokens: next.inputIncludesCachedTokens ?? current?.inputIncludesCachedTokens }
+            : {}),
         inputTokens: sumAssistantUsageMetric(current?.inputTokens, next.inputTokens),
         outputTokens: sumAssistantUsageMetric(current?.outputTokens, next.outputTokens),
         cachedInputTokens: sumAssistantUsageMetric(current?.cachedInputTokens, next.cachedInputTokens),
@@ -1773,32 +1746,31 @@ export class ZyraPiRuntime extends EventEmitter {
     async configureSession(
         threadId: string,
         configuration: {
-            model: string
-            effort: AssistantReasoningEffort
-            runtimeMode: AssistantRuntimeMode
-            interactionMode: AssistantInteractionMode
-            profile: string
+            model?: string
+            effort?: AssistantReasoningEffort
+            runtimeMode?: AssistantRuntimeMode
+            interactionMode?: AssistantInteractionMode
+            profile?: string
         }
     ): Promise<void> {
         const context = this.requireSession(threadId)
-        const model = normalizeZyraModel(configuration.model)
-        if (!model) throw new Error('Assistant configuration requires a model.')
-        const profile = normalizeZyraProfile(configuration.profile)
+        const model = configuration.model === undefined ? undefined : normalizeZyraModel(configuration.model)
+        if (configuration.model !== undefined && !model) throw new Error('Assistant configuration requires a model.')
+        const profile = configuration.profile === undefined ? undefined : normalizeZyraProfile(configuration.profile)
+        // Configure is a patch: never resend stale sibling fields from another surface.
         const result = await context.worker.request('configure', {
-            model,
-            thinking: configuration.effort,
-            runtimeMode: configuration.runtimeMode,
-            interactionMode: 'default',
-            profile
+            ...(model ? { model } : {}),
+            ...(configuration.effort !== undefined ? { thinking: configuration.effort } : {}),
+            ...(configuration.runtimeMode !== undefined ? { runtimeMode: configuration.runtimeMode } : {}),
+            ...(configuration.interactionMode !== undefined ? { interactionMode: 'default' } : {}),
+            ...(profile !== undefined ? { profile } : {})
         })
         const config = asRecord(result['config']) || result
-        context.model = normalizeZyraModel(asString(config['model']) || undefined) || model
-        context.thinking = isAssistantReasoningEffort(config['thinking']) ? config['thinking'] : configuration.effort
-        context.runtimeMode = isAssistantRuntimeMode(config['runtimeMode'])
-            ? config['runtimeMode']
-            : configuration.runtimeMode
-        context.interactionMode = 'default'
-        context.profile = normalizeZyraProfile(config['profile'] || profile)
+        context.model = normalizeZyraModel(asString(config['model']) || undefined) || model || context.model
+        context.thinking = isAssistantReasoningEffort(config['thinking']) ? config['thinking'] : configuration.effort ?? context.thinking
+        context.runtimeMode = isAssistantRuntimeMode(config['runtimeMode']) ? config['runtimeMode'] : configuration.runtimeMode ?? context.runtimeMode
+        if (configuration.interactionMode !== undefined) context.interactionMode = 'default'
+        context.profile = normalizeZyraProfile(config['profile'] || profile || context.profile)
     }
 
     async sendPrompt(
@@ -2762,12 +2734,15 @@ export class ZyraPiRuntime extends EventEmitter {
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId,
+                itemId: terminalMessageOutcome?.sourceMessageId || undefined,
                 sourceSequence: metadata?.sequence,
                 payload: {
                     outcome,
-                    ...(outcome === 'failed' ? {
-                        errorMessage: terminalMessageOutcome?.errorMessage || asString(event['errorMessage']) || 'Zyra prompt failed.'
-                    } : {}),
+                    ...(outcome === 'completed' ? {} : {
+                        errorMessage: terminalMessageOutcome?.errorMessage
+                            || asString(event['errorMessage'])
+                            || (outcome === 'interrupted' ? 'The assistant turn was interrupted.' : 'Zyra prompt failed.')
+                    }),
                     usage: buildCompletedTurnUsage(context)
                 }
             })
@@ -2824,6 +2799,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 requestId,
                 payload: {
                     requestType,
+                    toolCallId: asString(event['toolCallId']) || undefined,
+                    grantLabel: asString(event['grantLabel']) || undefined,
                     title: asString(event['title']) || undefined,
                     detail: asString(event['detail']) || undefined,
                     command: asString(event['command']) || undefined,
@@ -2899,8 +2876,17 @@ export class ZyraPiRuntime extends EventEmitter {
                 )
                 if (type !== 'message_start' || !turnId || !originatedOutsideThisDesktopThread) return
                 const content = extractAssistantEventContentParts(event, emptyAssistantContentParts(), type)
-                if (!content.text.trim()) return
                 const sourceMessageId = asString(message?.['id'])
+                const messageId = `assistant-message-user-${sourceMessageId || turnId}`
+                const parts = Array.isArray(message?.['content']) ? message['content'] : []
+                const imageSections = parts.flatMap((part, index) => {
+                    const image = asRecord(part)
+                    if (image?.['type'] !== 'image') return []
+                    try { const section = canonicalImageAttachmentSection(context.providerThreadId, messageId, index, image); return section ? [section] : [] }
+                    catch { log.warn('[ZyraPiRuntime] Could not cache a remote user image'); return [] }
+                })
+                const text = imageSections.length ? replaceSerializedAssistantImageAttachments(content.text, imageSections) : content.text
+                if (!text.trim()) return
                 this.emitRuntime({
                     eventId: randomUUID(),
                     type: 'user.message.received',
@@ -2910,8 +2896,8 @@ export class ZyraPiRuntime extends EventEmitter {
                     turnId,
                     itemId: sourceMessageId || undefined,
                     payload: {
-                        messageId: `assistant-message-user-${sourceMessageId || turnId}`,
-                        text: content.text
+                        messageId,
+                        text
                     }
                 })
                 return
@@ -2961,7 +2947,7 @@ export class ZyraPiRuntime extends EventEmitter {
             if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
                 this.streamInternalText(context, turnId, content.thinking || content.text, itemId)
             }
-            if (hasAssistantContentText(content) && !isReasoningOnlyAssistantEvent(event)) {
+            if ((hasAssistantContentText(content) || currentContent.text) && !isReasoningOnlyAssistantEvent(event)) {
                 this.streamAssistantText(context, turnId, content.text, itemId)
             }
             if (type === 'message_end') {
@@ -2971,7 +2957,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 if (hasAssistantContentText(content) && !isReasoningOnlyAssistantEvent(event)) {
                     this.completeAssistantText(context, turnId, content.text, itemId)
                 }
-                const terminalOutcome = readTerminalAssistantMessageOutcome(message)
+                const terminalOutcome = readTerminalAssistantMessageOutcome(message, itemId)
                 if (terminalOutcome) {
                     context.terminalAssistantMessageOutcome = { turnId, ...terminalOutcome }
                 } else if (context.terminalAssistantMessageOutcome?.turnId === turnId) {
@@ -3189,10 +3175,10 @@ export class ZyraPiRuntime extends EventEmitter {
     private streamAssistantText(context: ZyraSessionContext, turnId: string, text: string, itemId = `zyra-assistant-${turnId}`): void {
         const previousText = context.assistantTextByItemId.get(itemId) || ''
         const nextText = text
-        const delta = deltaFromMergedText(previousText, nextText)
+        const update = assistantTextUpdate(previousText, nextText)
         context.lastAssistantItemId = itemId
         context.assistantTextByItemId.set(itemId, nextText)
-        if (!delta || (previousText && !nextText.startsWith(previousText))) return
+        if (!update) return
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'content.delta',
@@ -3203,7 +3189,7 @@ export class ZyraPiRuntime extends EventEmitter {
             itemId,
             payload: {
                 streamKind: 'assistant_text',
-                delta
+                ...update
             }
         })
     }

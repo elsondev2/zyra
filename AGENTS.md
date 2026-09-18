@@ -23,7 +23,8 @@ This project is Zyra, a local CLI built on top of the Pi SDK.
 
 - `AGENTS.md` is the shared repository instruction file and stays public.
 - `AGENTS.override.md` is the ignored local override recognized by Codex. It must explicitly retain this shared contract because an override replaces `AGENTS.md` during discovery.
-- Keep durable contributor guidance, architecture, security policy, and implementation contracts under `docs/`.
+- Keep durable contributor guidance, the maintained public roadmap, architecture, security policy, and implementation contracts under `docs/`.
+- Read `docs/roadmap.md` when planning releases or prioritizing fixes. Add sanitized issue notes and update status, verification references, and release targets as related work progresses; keep raw diagnostics and one-off execution plans private.
 - Keep one-off prompts, plans, handoffs, research snapshots, QA evidence, and personal working notes under ignored `docs.local/`.
 - Keep public automation inputs next to their owners under `scripts/automation/`; do not hide files that automation needs in `docs.local/`.
 - Keep machine agent configuration under ignored `.agents/` or `.codex/` unless a specific shared configuration is intentionally added to the public repository.
@@ -92,15 +93,19 @@ This project is Zyra, a local CLI built on top of the Pi SDK.
 ## Validation
 
 - Read `docs/development/fast-validation.md` before choosing broad checks. It is the canonical command map for quick, scoped, full, watch, and build validation.
-- Keep a scoped TypeScript watcher running during desktop iteration; do not repeatedly restart the full graph after every edit.
+- Targeted tests are mandatory as the first validation step for a scoped fix. Name the owning test file/target, reproduce there, and rerun it after the change. Do not make whole-Desktop checks an early blocker.
+- Keep pure helper tests on leaf modules; do not load the SDK or application to test one policy, parser, formatter, or selector. Keep runtime-backed integration tests separate and add direct package targets.
+- Use one scoped TypeScript watcher only for sustained edits when it is useful and memory allows. Do not start a watcher for every small change or repeatedly restart the full graph.
+- Keep heavyweight local checks serial. Do not repeatedly ask the user to close apps for routine verification; narrow the check/import graph first. Leave truly required resource-blocked gates pending or use CI, without weakening assertions. Never close or restart user apps without approval.
 - Do not run production builds unless the user explicitly asks for one or the change is massive enough that build-level verification is necessary. For normal scoped changes, use the narrowest relevant test, typecheck, syntax check, or lint check instead.
 - Minor renderer, styling, and CSS changes must not trigger `npm run build`, packaging, or a full-app typecheck unless the user explicitly requests it. Use source inspection, a focused test, and live visual verification instead.
-- Do not run root-level or desktop full-app typechecks after every scoped change. Prefer a focused contract test, file-level syntax check, or the narrowest affected-package check. Run a full-app typecheck only when the change crosses module/type boundaries, changes shared contracts or configuration, is structurally broad, is being prepared for release, or the user explicitly requests it.
-- Iteration check: `npm run check:quick`.
+- Do not run root-level or desktop full-app typechecks after every scoped change. Prefer a focused contract test, file-level syntax check, or the narrowest affected-package check. After local tests pass, use one broader typecheck at a justified contract/integration or release checkpoint, or when explicitly requested. Changed-file count alone is not justification.
+- Single-fix iteration: the named test target or individual test file. See the direct permission and UI targets in `docs/development/fast-validation.md`.
+- Multi-area iteration checkpoint: `npm run check:quick`; this is not the default for a one-file fix.
 - Core CLI checkpoint: `npm run check:core`.
 - Desktop integration checkpoint: `npm run check:desktop`.
 - Merge/release check: `npm run check`.
 - Public readiness check: `npm run privacy-check`.
-- Terminal rendering changes should include `scripts/test-zyra-ui-render.mjs`.
-- Memory command changes should include `scripts/test-zyra-memory.mjs`.
+- Terminal rendering starts with the affected rendering/input target; include `scripts/test-zyra-ui-render.mjs` at the relevant TUI checkpoint.
+- Memory command changes start with their owning test; include `scripts/test-zyra-memory.mjs` at the relevant memory checkpoint.
 - Installed CLI behavior should be verified with the local install path when the request touches command startup or global usage.

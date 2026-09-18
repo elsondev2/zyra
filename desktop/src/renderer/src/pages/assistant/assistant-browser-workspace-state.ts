@@ -165,7 +165,7 @@ export function resolveAssistantBrowserSurfaceTabSessionMode(
 ): BrowserSessionMode {
     if (!request || request.tabId !== selectedTabId) return 'normal'
     return (request.mode || 'open') === 'open'
-        ? request.sessionMode || 'incognito'
+        ? request.sessionMode || 'normal'
         : trustedSessionMode || 'normal'
 }
 
@@ -272,12 +272,13 @@ export function updateAssistantBrowserTab(
 export function closeAssistantBrowserTab(
     state: AssistantBrowserWorkspaceState,
     tabId: string,
-    replacementTabId: string
+    replacementTabId: string,
+    replacementSessionMode: BrowserSessionMode = 'normal'
 ): AssistantBrowserWorkspaceState {
     const closingIndex = state.tabs.findIndex((tab) => tab.id === tabId)
     if (closingIndex < 0) return state
     const tabs = state.tabs.filter((tab) => tab.id !== tabId)
-    if (tabs.length === 0) return createAssistantBrowserWorkspaceState(replacementTabId)
+    if (tabs.length === 0) return createAssistantBrowserWorkspaceState(replacementTabId, replacementSessionMode)
     if (state.splitTabId === tabId) return { ...state, splitTabId: null, tabs }
     if (state.activeTabId !== tabId) return { ...state, tabs }
     if (state.splitTabId && tabs.some((tab) => tab.id === state.splitTabId)) {
@@ -393,12 +394,16 @@ export function hasPersistedAssistantBrowserWorkspaceState(workspaceKey: string)
     }
 }
 
-export function loadAssistantBrowserWorkspaceState(workspaceKey: string): AssistantBrowserWorkspaceState {
-    if (!workspaceKey || typeof window === 'undefined') return createAssistantBrowserWorkspaceState()
+export function loadAssistantBrowserWorkspaceState(
+    workspaceKey: string,
+    fallbackTabId = 'browser:0',
+    fallbackSessionMode: BrowserSessionMode = 'normal'
+): AssistantBrowserWorkspaceState {
+    if (!workspaceKey || typeof window === 'undefined') return createAssistantBrowserWorkspaceState(fallbackTabId, fallbackSessionMode)
     try {
-        return readAndSanitizePersistedWorkspaceRecord()[workspaceKey] || createAssistantBrowserWorkspaceState()
+        return readAndSanitizePersistedWorkspaceRecord()[workspaceKey] || createAssistantBrowserWorkspaceState(fallbackTabId, fallbackSessionMode)
     } catch {
-        return createAssistantBrowserWorkspaceState()
+        return createAssistantBrowserWorkspaceState(fallbackTabId, fallbackSessionMode)
     }
 }
 

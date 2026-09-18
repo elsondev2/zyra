@@ -1,10 +1,16 @@
 {
   "name": "zyra",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "description": "Local Zyra coding assistant CLI.",
   "type": "module",
   "scripts": {
+    "test:message-attachments": "node scripts/test-message-attachments.mjs",
+    "test:session-preferences": "node --test scripts/test-session-preferences.mjs",
+    "test:delegation-preferences": "node scripts/test-delegation-preferences.mjs && node scripts/test-delegation-tools.mjs",
+    "test:provider-connections": "node scripts/test-model-provider-connections.mjs && node scripts/test-provider-transactions.mjs",
+    "test:runtime-architecture": "node scripts/test-server-memory-queue.mjs && node scripts/test-agent-role-models.mjs && node scripts/test-runtime-activation.mjs",
+    "test:memory-idle": "node scripts/test-idle-memory-scheduler.mjs",
     "zyra": "node bin/zyra.mjs",
     "inspect": "node bin/zyra.mjs inspect",
     "ask": "node bin/zyra.mjs ask",
@@ -13,15 +19,27 @@
     "precheck": "node --check src/auth-methods.mjs && node --check src/project-paths.mjs && node --check src/oauth-login-callbacks.mjs && node --check src/desktop-openai-auth.mjs && node --check src/desktop-openai-auth-worker.mjs && node --check src/secret-input.mjs && node --check scripts/test-zyra-auth.mjs && node scripts/test-zyra-auth.mjs",
     "test:agent-surface": "node scripts/test-agent-surface-contract.mjs && bun run --cwd desktop test:agent-surface",
     "test:user-input": "node scripts/test-request-user-input.mjs && bun desktop/scripts/test-assistant-user-input-contract.ts",
+    "test:task-ownership-prompt": "node scripts/test-zyra-task-ownership-prompt.mjs",
+    "test:agent-fleet:cancellation": "node scripts/test-agent-fleet-cancellation.mjs",
     "test:work-timeline-v2": "bun run --cwd desktop test:work-timeline-v2",
-    "test:subagents-workflows": "node scripts/test-zyra-subagents.mjs && node scripts/test-zyra-workflows.mjs && node scripts/test-zyra-fleet-ui.mjs && bun run --cwd desktop test:assistant-fleet",
-    "test:agent-control": "node scripts/test-zyra-computer-control-tool.mjs && bun run --cwd desktop test:agent-control && npm --prefix extensions/zyra-browser-control test && dotnet build native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj && dotnet run --project native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj --no-build",
+    "test:subagents-workflows": "node scripts/test-zyra-subagents.mjs && npm run test:agent-fleet:cancellation && node scripts/test-zyra-workflows.mjs && node scripts/test-zyra-fleet-ui.mjs && bun run --cwd desktop test:assistant-fleet",
+    "test:control-bridge-deadline": "node scripts/test-control-bridge-deadline.mjs",
+    "test:computer-tool-errors": "node scripts/test-computer-tool-errors.mjs",
+    "test:computer-window-feedback": "node scripts/test-computer-window-feedback.mjs",
+    "test:agent-control": "node scripts/test-computer-tool-errors.mjs && node scripts/test-computer-window-feedback.mjs && node scripts/test-zyra-computer-control-tool.mjs && bun run --cwd desktop test:agent-control && npm --prefix extensions/zyra-browser-control test && dotnet build native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj && dotnet run --project native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj --no-build",
     "test:browser-tool-projection": "node scripts/test-zyra-browser-tool-projection.mjs",
     "test:desktop-workspaces": "node scripts/test-zyra-desktop-workspace-commands.mjs && node scripts/test-zyra-desktop-workspace-routing.mjs && bun run --cwd desktop test:assistant-utility-windows",
     "test:desktop-install": "node scripts/test-zyra-desktop-install.mjs && bun run --cwd desktop test:release-infra",
     "test:agent-platform-integration": "bun desktop/scripts/test-agent-platform-integration.ts",
-    "test:agent-server": "node scripts/test-zyra-chat-index.mjs && node scripts/test-zyra-agent-server.mjs && node scripts/test-zyra-agent-server-bridge.mjs && bun run --cwd desktop test:agent-server && bun run --cwd desktop test:assistant-project",
-    "test:permissions": "node scripts/test-zyra-permission-paths.mjs && node scripts/test-zyra-filesystem-scope-runtime.mjs && node scripts/test-zyra-permission-gate.mjs && node scripts/test-zyra-permission-reviewer.mjs && node scripts/test-zyra-cli-permissions.mjs",
+    "test:agent-server:compatibility": "node scripts/test-zyra-agent-server-compatibility.mjs && node scripts/test-agent-server-connection-status.mjs",
+    "test:agent-server:connection-status": "node scripts/test-agent-server-connection-status.mjs",
+    "test:agent-server": "node scripts/test-zyra-agent-server-compatibility.mjs && node scripts/test-agent-server-connection-status.mjs && node scripts/test-zyra-chat-index.mjs && node scripts/test-zyra-agent-server.mjs && node scripts/test-zyra-agent-server-bridge.mjs && bun run --cwd desktop test:agent-server && bun run --cwd desktop test:assistant-project",
+    "test:permissions:command-policy": "node scripts/test-permission-command-policy.mjs",
+    "test:permissions:lifecycle": "node scripts/test-permission-approval-lifecycle.mjs",
+    "test:permissions:gate": "node scripts/test-zyra-permission-gate.mjs",
+    "test:visualizations": "node scripts/test-visualization-blocks.mjs && node scripts/test-visualization-terminal.mjs && node scripts/test-visualization-skill.mjs",
+    "test:permissions:access": "node scripts/test-zyra-filesystem-access.mjs",
+    "test:permissions": "node scripts/test-permission-approval-lifecycle.mjs && node scripts/test-permission-command-policy.mjs && node scripts/test-zyra-permission-paths.mjs && node scripts/test-zyra-filesystem-scope-runtime.mjs && node scripts/test-zyra-filesystem-access.mjs && node scripts/test-zyra-permission-gate.mjs && node scripts/test-zyra-permission-reviewer.mjs && node scripts/test-zyra-cli-permissions.mjs",
     "test:plugins": "node scripts/test-zyra-plugin-system.mjs && node scripts/test-zyra-plugin-availability.mjs && node scripts/test-zyra-plugin-download.mjs && node scripts/test-zyra-plugin-logos.mjs && node scripts/test-zyra-plugin-runtime.mjs && node scripts/test-zyra-plugin-revocation-runtime.mjs && node scripts/test-zyra-plugin-revocation-bridge.mjs && node scripts/test-zyra-prompt-resources.mjs && bun run --cwd desktop test:assistant-plugins",
     "test:voice-agent-contracts": "node scripts/validate-voice-agent-contracts.mjs",
     "test:provider-runtime": "node scripts/test-chatgpt-realtime-call.mjs && node scripts/test-codex-realtime-contract-sync.mjs && node scripts/test-provider-runtime-migration.mjs",
@@ -59,7 +77,8 @@
     "ui:typecheck:renderer": "bun run --cwd desktop typecheck:renderer",
     "ui:typecheck:watch:renderer": "bun run --cwd desktop typecheck:watch:renderer",
     "ui:typecheck:shared": "bun run --cwd desktop typecheck:shared",
-    "ui:typecheck:watch:shared": "bun run --cwd desktop typecheck:watch:shared"
+    "ui:typecheck:watch:shared": "bun run --cwd desktop typecheck:watch:shared",
+    "test:mobile-host": "node scripts/test-prompt-images.mjs && node scripts/test-agent-server-approval-responses.mjs && node scripts/test-agent-server-mobile-sync.mjs && node scripts/test-agent-server-replay-budget.mjs && npm --prefix mobile/gateway test"
   },
   "bin": {
     "zyra": "bin/zyra.mjs"
@@ -78,6 +97,7 @@
     "install.ps1",
     "install.sh",
     "prompts",
+    "skills",
     "src",
     "zyra.cmd",
     "zyra.ps1"
@@ -90,7 +110,9 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-tui": "^0.80.6",
+    "proper-lockfile": "4.1.2",
     "quickjs-emscripten": "^0.32.0",
+    "stream-json": "3.6.0",
     "typebox": "^1.1.24"
   },
   "devDependencies": {

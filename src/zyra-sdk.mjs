@@ -1,3 +1,4 @@
+import { registerSavedProviders } from "./provider-connections.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -113,7 +114,7 @@ const ZYRA_DESKTOP_UI_MARKER = "ZYRA_DESKTOP_UI_SURFACE";
 const ZYRA_FLEET_MARKER = "ZYRA_AGENT_FLEET";
 const PROJECT_DATA_DIR = ".zyra";
 const PROJECT_PREFERENCES_FILE = "preferences.json";
-const BUILT_IN_PROFILE_NAMES = ["default", "learner", "builder"];
+const BUILT_IN_PROFILE_NAMES = ["concise", "friendly", "direct", "thoughtful", "playful"];
 const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const commandCache = new Map();
 
@@ -474,6 +475,7 @@ async function createZyraResourceLoader(project, options = {}) {
     pluginSkillSources: options.pluginSkillSources,
   });
   const loadSkills = async () => loadZyraSkills(project, {
+    nativeBrowserAvailable: options.nativeBrowserAvailable === true,
     projectTrusted,
     sources: await resolveZyraSkillSources({
       project,
@@ -570,9 +572,7 @@ function hasProfilePrompt(profile, project = defaults.project) {
 }
 
 function profileDescription(profile) {
-  if (profile === "default") return "public default";
-  if (profile === "learner") return "beginner-safe learning support";
-  if (profile === "builder") return "builder/product work";
+  if (BUILT_IN_PROFILE_NAMES.includes(profile)) return `${profile} speaking style`;
   return "local profile";
 }
 
@@ -591,24 +591,24 @@ export function listZyraProfiles(project = defaults.project) {
 }
 
 function buildProfilePrompt(profile, project = defaults.project) {
-  const selected = resolveProfileName(profile, project) ?? "default";
+  const selected = resolveProfileName(profile, project) ?? "concise";
   const sections = [];
   const publicText = readOptionalPrompt(profilePromptPath(defaults.profileDir, selected));
   const localText = readOptionalPrompt(profilePromptPath(localProfileDir(project), selected));
-  if (publicText) sections.push(`Public profile: ${selected}\n${publicText}`);
+  if (publicText) sections.push(`Speaking style: ${selected}\n${publicText}`);
   if (localText) sections.push(`Local profile overlay: ${selected}\n${localText}`);
   if (!sections.length) {
-    const fallback = readOptionalPrompt(profilePromptPath(defaults.profileDir, "default"));
-    sections.push(`Public profile: default\n${fallback || "Use Zyra's public default behavior."}`);
+    const fallback = readOptionalPrompt(profilePromptPath(defaults.profileDir, "concise"));
+    sections.push(`Speaking style: concise\n${fallback || "Use Zyra's public default behavior."}`);
   }
-  return [`Active profile: ${selected}`, ...sections].join("\n\n---\n\n");
+  return [`Active speaking style: ${selected}`, ...sections].join("\n\n---\n\n");
 }
 
 function resolveProfileName(profile, project = defaults.project) {
   const normalized = normalizeProfile(profile);
   if (!normalized) return undefined;
   const selected = normalized === "auto" ? detectDefaultProfile() : normalized;
-  return hasProfilePrompt(selected, project) ? selected : "default";
+  return hasProfilePrompt(selected, project) ? selected : "concise";
 }
 
 function readSessionSystemPrompt(session) {
@@ -671,6 +671,7 @@ function injectSurfaceGuide(session, surface) {
     "Do not open with a banner, path recap, or generic greeting like \"Hey - I'm here\" unless the user only said hello.",
     "Start with the direct answer or the exact action being taken.",
     "Keep paragraphs short. Use bullets only when they help scan real work.",
+    "For useful charts, diagrams, or visual explanations, read the built-in visualize skill proactively. Explicit line-delimited <visualization> blocks render themed, sandboxed HTML/CSS/SVG in assistant messages. Include title and summary attributes; scripts and external requests are not supported. Streaming blocks show a placeholder until complete. Ordinary HTML code fences remain code.",
     "Final responses support inline images and videos. When presenting media the user requested, use the embedding syntax below in the final response, outside code fences and backticks. Work narration does not embed media.",
     "Image example: ![Screenshot](file:///C:/Users/example/Pictures/screen%20shot.png)",
     "Video example: [Chat debug](file:///C:/Users/example/Videos/chat%20debug.mp4)",
@@ -921,6 +922,7 @@ export async function createZyraSession(options = {}) {
   const codexServiceTierState = { value: startupPreferences.codexServiceTier };
   const startupResources = await createZyraResourceLoader(project, {
     filesystemScope: options.filesystemScope,
+    nativeBrowserAvailable: Boolean(options.controlBridgeClient),
     enablePiExtensions: options.enablePiExtensions || process.env.ZYRA_ENABLE_PI_EXTENSIONS === "1",
     codexServiceTierState,
     thinkingState,
@@ -1458,7 +1460,7 @@ function ensureSessionProfile(sessionManager, options = {}) {
   const projectPreference = readProjectProfilePreference(options.project, options.preferences);
   const stored = readSessionProfile(sessionManager);
   const selected = requested ?? stored ?? projectPreference ?? "auto";
-  const profile = resolveProfileName(selected, options.project) ?? "default";
+  const profile = resolveProfileName(selected, options.project) ?? "concise";
   if (options.persist && typeof sessionManager.appendCustomEntry === "function" && profile !== stored) {
     sessionManager.appendCustomEntry(ZYRA_PROFILE_CUSTOM_TYPE, {
       profile,
@@ -1483,12 +1485,13 @@ function readSessionProfile(sessionManager) {
 function detectDefaultProfile() {
   const envProfile = normalizeProfile(process.env.ZYRA_PROFILE);
   if (envProfile && envProfile !== "auto") return envProfile;
-  return "default";
+  return "concise";
 }
 
 function normalizeProfile(value) {
   const profile = String(value ?? "").trim().toLowerCase();
   if (!profile) return undefined;
+  if (["default", "learner", "builder"].includes(profile)) return "concise";
   if (profile === "auto") return profile;
   return PROFILE_NAME_PATTERN.test(profile) ? profile : undefined;
 }
@@ -1635,7 +1638,8 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
   } finally {
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
   }
-  assertFinalAssistantMessageSucceeded(runtime);
+  const lastMessage = assertFinalAssistantMessageSucceeded(runtime);
+  await compactZyraContextAfterTurn(runtime, lastMessage);
 }
 
 export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
@@ -1676,8 +1680,9 @@ export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
   }
   const lastMessage = assertFinalAssistantMessageSucceeded(runtime);
-  if (lastMessage?.role !== "assistant") return "";
-  return extractAssistantText(lastMessage.content);
+  const text = lastMessage?.role === "assistant" ? extractAssistantText(lastMessage.content) : "";
+  await compactZyraContextAfterTurn(runtime, lastMessage);
+  return text;
 }
 
 function assertFinalAssistantMessageSucceeded(runtime) {
@@ -1793,11 +1798,19 @@ export function buildSessionInfo(runtime) {
   };
 }
 
+// Streaming needs these in-memory counters, not the filesystem-backed memory,
+// prompt and theme descriptions assembled by describeRuntime.
+export function getRuntimeUsageSnapshot(runtime) {
+  return {
+    usage: calculateSessionUsage(runtime.session.sessionManager),
+    contextUsage: getRuntimeContextUsage(runtime),
+  };
+}
+
 export function describeRuntime(runtime) {
   const model = runtime.session.model;
   const sessionManager = runtime.session.sessionManager;
-  const usage = calculateSessionUsage(sessionManager);
-  const contextUsage = getRuntimeContextUsage(runtime);
+  const { usage, contextUsage } = getRuntimeUsageSnapshot(runtime);
   return {
     project: runtime.project,
     sessions: runtime.sessions,
@@ -1854,13 +1867,13 @@ export function getAutoProfile() {
 export function setProfile(runtime, profile) {
   const next = normalizeProfile(profile);
   if (!next) {
-    throw new Error("Profile must be auto, default, learner, builder, or a local .zyra/profiles/<name>.md profile.");
+    throw new Error("Choose concise, friendly, direct, thoughtful, playful, or a local speaking style.");
   }
   const requested = next === "auto" ? detectDefaultProfile() : next;
   if (!hasProfilePrompt(requested, runtime.project)) {
-    throw new Error(`Profile not found: ${requested}. Create .zyra/profiles/${requested}.md or choose default, learner, or builder.`);
+    throw new Error(`Profile not found: ${requested}. Create .zyra/profiles/${requested}.md or choose a built-in speaking style.`);
   }
-  const resolved = resolveProfileName(next, runtime.project) ?? "default";
+  const resolved = resolveProfileName(next, runtime.project) ?? "concise";
   runtime.profile = resolved;
   writeProjectProfilePreference(runtime.project, next, resolved);
   injectActiveProfile(runtime.session, resolved, runtime.project);
@@ -2387,6 +2400,24 @@ function hasUncompactedConversationEntries(runtime) {
   return branch.slice(latestCompactionIndex + 1).some((entry) => entry?.type === "message");
 }
 
+/** Run Zyra's selected threshold after Pi has settled its retries and queued work.
+ * Keep preflight below: restored/aborted sessions and a large upcoming prompt still
+ * need it. Never turn maintenance failure into failure of an already-delivered answer.
+ */
+export async function compactZyraContextAfterTurn(runtime, lastMessage) {
+  const session = runtime?.session;
+  if (lastMessage?.role !== "assistant" || lastMessage.stopReason !== "stop"
+    || session?.autoCompactionEnabled === false || session?.isStreaming
+    || session?.isCompacting || session?.isIdle === false) return { compacted: false };
+  try {
+    return await compactZyraContextBeforePrompt(runtime, "");
+  } catch (error) {
+    // Pi publishes compaction_end with failure details; the next prompt retains
+    // the strict preflight guard and can retry when the provider recovers.
+    return { compacted: false, errorMessage: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function compactZyraContextBeforePrompt(runtime, prompt, options = {}) {
   const thresholdTokens = setZyraContextCompactionThreshold(
     runtime,
@@ -2624,6 +2655,8 @@ export async function setModel(runtime, selector, options = {}) {
     }
   }
 
+  registerSavedProviders(runtime.session.modelRegistry);
+  await runtime.session.modelRegistry.refresh?.({ allowNetwork: false });
   const available = getZyraAvailableModels(runtime.session.modelRegistry);
   const exact = available.find((model) => {
     const fullSlash = `${model.provider}/${model.id}`.toLowerCase();
@@ -2850,6 +2883,7 @@ async function loadZyraSkills(project, options = {}) {
     }
     const { zyraSourceOrder: _sourceOrder, skillReadResource, ...publicSkill } = winner;
     if (skillReadResource) skillReadResources.push(skillReadResource);
+    if (options.nativeBrowserAvailable && name === "ego-browser") publicSkill.disableModelInvocation = true;
     skills.push(publicSkill);
   }
 

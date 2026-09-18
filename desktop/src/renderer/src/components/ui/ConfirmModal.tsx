@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, createOverlayPortal as createPortal } from './native-overlay-portal'
 import { cn } from '@/lib/utils'
 
 interface ConfirmModalProps {
@@ -51,8 +51,7 @@ export function ConfirmModal({
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onCancel()
         }
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        return addOverlayEventListener('keydown', handleKeyDown)
     }, [isOpen, onCancel])
 
     if (!isOpen || typeof document === 'undefined') return null

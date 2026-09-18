@@ -18,7 +18,7 @@ const standaloneTuiSignerSource = readFileSync(path.join(repositoryRoot, 'script
 const standaloneTuiSmokeSource = readFileSync(path.join(repositoryRoot, 'scripts', 'test-standalone-tui-binary.mjs'), 'utf8')
 const standaloneTuiEntitlements = readFileSync(path.join(desktopRoot, 'build', 'entitlements.tui.plist'), 'utf8')
 
-assert.equal(rootPackage.version, '0.6.1')
+assert.equal(rootPackage.version, '0.6.2')
 assert.equal(rootPackage.scripts['release:tui'], 'node scripts/build-release.mjs', 'the local standalone TUI build shortcut stays stable')
 assert.match(localTuiReleaseSource, /build-tui-release\.mjs/, 'the local release shortcut delegates to the canonical standalone TUI builder')
 assert.doesNotMatch(localTuiReleaseSource, /git["', ]+archive|checksums\.txt/, 'the local shortcut cannot archive source or emit the obsolete checksum format')

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     PointerSensor,
     useSensor,
@@ -13,6 +13,7 @@ import { getFileExtensionFromName, validateCreateName } from '@/lib/filesystem/f
 import { cn } from '@/lib/utils'
 import type { PreviewFile, PreviewMediaItem, PreviewOpenOptions } from './types'
 import { navigateMarkdownLink } from '../markdown/linkNavigation'
+import { navigateHtmlPreviewLink } from './html-preview-links'
 
 type PreviewDragOverlayState =
     | {
@@ -56,6 +57,12 @@ export function useFilePreviewModalInteractions(input: {
         requestExternalIntent
     } = input
 
+    const linkGeneration = useRef(0)
+    useEffect(() => {
+        linkGeneration.current += 1
+        return () => { linkGeneration.current += 1 }
+    }, [file.path, file.htmlLocation?.search, file.htmlLocation?.hash])
+
     const [createModalOpen, setCreateModalOpen] = useState(false)
     const [createModalError, setCreateModalError] = useState<string | null>(null)
     const [folderTreeRefreshToken, setFolderTreeRefreshToken] = useState(0)
@@ -78,21 +85,22 @@ export function useFilePreviewModalInteractions(input: {
         }))
     }, [mediaItems, onOpenLinkedPreview, requestExternalIntent])
 
-    const handleInternalMarkdownLink = useCallback(async (href: string) => {
+    const handleInternalPreviewLink = useCallback(async (href: string) => {
+        const generation = linkGeneration.current
+        const isCurrent = () => file.type !== 'html' || generation === linkGeneration.current
         const openPreview = async (
             nextFile: { name: string; path: string },
             ext: string,
             options?: PreviewOpenOptions
         ) => {
-            if (!onOpenLinkedPreview) return
-            requestExternalIntent(() => onOpenLinkedPreview(nextFile, ext, options))
+            if (!onOpenLinkedPreview || !isCurrent()) return
+            requestExternalIntent(() => { if (isCurrent()) return onOpenLinkedPreview(nextFile, ext, options) })
         }
-        return navigateMarkdownLink({
-            href,
-            filePath: file.path,
-            openPreview: onOpenLinkedPreview ? openPreview : undefined
-        })
-    }, [file.path, onOpenLinkedPreview, requestExternalIntent])
+        const options = { href, filePath: file.path, openPreview: onOpenLinkedPreview ? openPreview : undefined }
+        return file.type === 'html'
+            ? navigateHtmlPreviewLink({ ...options, isCurrent })
+            : navigateMarkdownLink(options)
+    }, [file.path, file.type, onOpenLinkedPreview, requestExternalIntent])
 
     const handleSelectPreviewTab = useCallback((tabId: string) => {
         if (!onSelectPreviewTab || tabId === resolvedActivePreviewTabId) return
@@ -280,7 +288,7 @@ export function useFilePreviewModalInteractions(input: {
         folderTreeRefreshToken,
         dndSensors,
         openMediaItem,
-        handleInternalMarkdownLink,
+        handleInternalPreviewLink,
         handleSelectPreviewTab,
         handleClosePreviewTab,
         handleOpenLinkedPreview,

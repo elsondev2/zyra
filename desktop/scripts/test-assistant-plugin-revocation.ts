@@ -98,7 +98,7 @@ try {
     runtime.checkAvailability = async () => ({ available: true, reason: null })
     const session = { id: 'session:affected', mode: 'default', workingRoot: fixture, threads: [{ id: 'thread:affected', providerThreadId: 'chat:affected', runtimeMode: 'approval-required' }] }
     const service = Object.create(AssistantService.prototype) as any
-    Object.assign(service, { readyPromise: Promise.resolve(), pluginRegistry: registry, runtime,
+    Object.assign(service, { options: {}, readyPromise: Promise.resolve(), pluginRegistry: registry, runtime,
         pluginAuthorityMutations: new PluginAuthorityMutations(), state: { snapshot: { sessions: [session] } },
         persistence: { isInternalProjectPath: () => false } })
     const issueGrant = (principal: ControlPrincipal) => grants.issue({ principal, targetId: 'fixture-target', capabilities: [],

@@ -1,3 +1,4 @@
+import { settleActivityAtTurnEnd } from '@shared/assistant/activity-settlement'
 import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import { normalizeAssistantMessageReferenceId } from '@shared/assistant/message-identity'
 import {
@@ -5,6 +6,7 @@ import {
     getContextCompactionStatus,
     isContextCompactionActivity,
     isModelNoticeActivity,
+    isAssistantConnectionRecoveryActivity,
     type TimelineDisplayRow,
     type TimelineRenderRow,
     type TimelineTurnWorkSummaryRow
@@ -33,7 +35,7 @@ function getRowTurnId(row: TimelineRenderRow): string | null {
 function getActionRowActivities(row: TimelineRenderRow): AssistantActivity[] | null {
     const isAction = (activity: AssistantActivity) => {
         const kind = getActivityRenderGroupKind(activity)
-        return kind === 'tool' || kind === 'subagent'
+        return kind === 'tool' || kind === 'subagent' || kind === 'issue' || isAssistantConnectionRecoveryActivity(activity)
     }
     if (row.kind === 'activity') return isAction(row.activity) ? [row.activity] : null
     if (row.kind === 'activity-group' && row.activities.length > 0 && row.activities.every(isAction)) {
@@ -48,6 +50,8 @@ function groupConsecutiveActionRows(rows: TimelineRenderRow[]): TimelineRenderRo
         const activities = getActionRowActivities(row)
         const previous = groupedRows[groupedRows.length - 1]
         const previousActivities = previous ? getActionRowActivities(previous) : null
+        // This list is already bounded by the user turn. Local/provider IDs can
+        // differ during reconciliation without starting a new action block.
         if (!activities || !previous || !previousActivities) {
             groupedRows.push(row)
             continue
@@ -403,11 +407,9 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         const boundaryRows = rows.slice(userIndex + 1, boundaryEndIndex)
         if (boundaryRows.some((row) => row.kind === 'user-input')) continue
         const usage = turnUsageById?.get(turnId)
-        const projectedTerminalOutcome = usage?.state === 'completed'
-            ? null
-            : projectedTerminalOutcomeByTurn.get(turnId)
-                || getProjectedTerminalOutcomeFromRows(boundaryRows)
-                || null
+        const projectedTerminalOutcome = projectedTerminalOutcomeByTurn.get(turnId)
+            || getProjectedTerminalOutcomeFromRows(boundaryRows)
+            || null
         const isLatestFinal = finalRow.message.id === resolvedLatestAssistantMessageId
         const turnCompleted = usage?.state === 'completed'
         const safeHistoricalFallback = turnId !== activeTurnId
@@ -513,19 +515,15 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             })
             continue
         }
-        const projectedTerminalOutcome = usage?.state === 'completed'
-            ? null
-            : projectedTerminalOutcomeByTurn.get(turnId)
-                || getProjectedTerminalOutcomeFromRows(turnRows)
-                || null
+        const projectedTerminalOutcome = projectedTerminalOutcomeByTurn.get(turnId)
+            || getProjectedTerminalOutcomeFromRows(turnRows)
+            || null
         const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error' || Boolean(projectedTerminalOutcome)
         if (finalByTurn.has(turnId) && !terminalIncomplete) continue
         if ((usage?.state === 'running' && !projectedTerminalOutcome) || (isWorking && turnId === activeTurnId && !projectedTerminalOutcome)) continue
         const outcome = usage?.state === 'interrupted'
             ? 'interrupted'
-            : usage?.state === 'error'
-                ? 'failed'
-                : projectedTerminalOutcome || 'no-response'
+            : projectedTerminalOutcome || (usage?.state === 'error' ? 'failed' : 'no-response')
         const displayTurnRows = outcome === 'interrupted' ? stripProjectedInterruptions(turnRows) : turnRows
         const workRows = displayTurnRows.filter((row) => row.kind !== 'working' && !rowMustStayVisible(row))
         const groupedWorkRows = groupConsecutiveActionRows(workRows)
@@ -577,5 +575,11 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         }
         displayRows.push(rows[index])
     }
-    return displayRows
+    return displayRows.map(row => {
+        if (row.kind !== 'turn-work-summary' || row.running || !row.completedAt) return row
+        const settle = (activity: AssistantActivity) => settleActivityAtTurnEnd(activity, row.completedAt!, row.outcome || 'interrupted')
+        return { ...row, rows: row.rows.map(nested => nested.kind === 'activity'
+            ? { ...nested, activity: settle(nested.activity) }
+            : 'activities' in nested ? { ...nested, activities: nested.activities.map(settle) } : nested) }
+    })
 }

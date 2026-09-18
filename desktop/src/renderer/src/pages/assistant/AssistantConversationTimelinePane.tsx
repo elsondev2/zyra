@@ -26,6 +26,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     isWorking: boolean
     activeStatusLabel: string
     isConnecting: boolean
+    suppressEmptyProjectBadge?: boolean
     activeWorkStartedAt: string | null
     latestAssistantMessageId: string | null
     latestTurnStartedAt: string | null
@@ -34,6 +35,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     focusMessageId?: string | null
     loadingChats: boolean
     selectionHydrating: boolean
+    coldStart?: boolean
     assistantTextStreamingMode: AssistantTextStreamingMode
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
     assistantChatDisplayMode: AssistantChatDisplayMode
@@ -117,7 +119,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                         proposedPlans={props.proposedPlans || []}
                         userInputs={props.userInputs}
                         sessionMode={props.sessionMode}
-                        projectLabel={projectRootPath ? props.latestProjectLabel : null}
+                        projectLabel={projectRootPath && !props.suppressEmptyProjectBadge ? props.latestProjectLabel : null}
                         projectTitle={projectRootPath}
                         projectRootPath={projectRootPath}
                         assistantMessageFilePath={props.assistantMessageFilePath}
@@ -134,6 +136,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                         focusMessageId={props.focusMessageId}
                         loadingChats={props.loadingChats}
                         selectionHydrating={props.selectionHydrating}
+                        coldStart={props.coldStart}
                         assistantTextStreamingMode={props.assistantTextStreamingMode}
                         assistantToolOutputDefaultMode={props.assistantToolOutputDefaultMode}
                         assistantChatDisplayMode={props.assistantChatDisplayMode}

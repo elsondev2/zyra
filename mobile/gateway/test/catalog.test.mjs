@@ -1,0 +1,20 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CanonicalChatCatalog } from '../../../src/agent-server/catalog.mjs';
+test('shared project filtering precedes pagination and equal timestamps have stable cursors', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'zyra-mobile-catalog-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const shared = path.join(dir, 'shared'), privateProject = path.join(dir, 'private');
+  const rows = ['a', 'b', 'c'].map(id => ({ canonicalChatId: id, project: shared, title: id, modifiedAt: '2026-01-01T00:00:00Z' }));
+  rows.push({ canonicalChatId: 'private', project: privateProject, title: 'private', modifiedAt: '2026-02-01T00:00:00Z' });
+  const seen = [];
+  const catalog = new CanonicalChatCatalog({ stateDirectory: dir, index: { listProjects: async projects => { seen.push(projects); return rows.filter(row => projects.includes(row.project)); } } });
+  const first = await catalog.list({ projects: [shared], limit: 2 });
+  assert.deepEqual(first.map(row => row.canonicalChatId), ['a', 'b']);
+  const second = await catalog.list({ projects: [shared], limit: 2, beforeChat: first[1] });
+  assert.deepEqual(second.map(row => row.canonicalChatId), ['c']);
+  assert.ok(seen.every(projects => !projects.includes(privateProject)), 'private projects must never be indexed for a mobile page');
+});

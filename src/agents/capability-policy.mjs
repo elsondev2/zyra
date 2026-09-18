@@ -1,4 +1,6 @@
 const SAFE_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const PERMISSION_MODES = new Set(["read-only", "writer", "full-access"]);
+const PERMISSION_MODE_ALIASES = new Map([["workspace-write", "writer"]]);
 const DELEGATABLE_CONTROL_TOOLS = new Set(["browser_control", "computer_control"]);
 const CONTROL_CAPABILITIES = new Set([
   "observe.structure", "observe.screenshot", "navigate", "pointer.click", "pointer.move", "pointer.drag",
@@ -14,7 +16,7 @@ export const DEFAULT_CHILD_DENIED_CAPABILITIES = Object.freeze([
 ]);
 
 export function attenuateAgentCapabilities(definition = {}, request = {}, policy = {}) {
-  const permissionMode = String(request.permissionMode ?? definition.permissionMode ?? "read-only").toLowerCase();
+  const permissionMode = normalizePermissionMode(request.permissionMode ?? definition.permissionMode);
   const requestedTools = uniqueStrings(request.tools ?? definition.tools ?? ["read", "grep", "find", "ls"]);
   const disallowed = new Set(uniqueStrings([...(definition.disallowedTools ?? []), ...(request.disallowedTools ?? []), ...(policy.disallowedTools ?? [])]));
   const warnings = [];
@@ -109,6 +111,13 @@ export function assertNoControlCapabilities(tools = [], capabilities = [], optio
       && !(options.allowDelegatedControl === true && delegatedCapabilities.has(value))),
   ];
   if (forbidden.length) throw new Error(`Child control capabilities are denied: ${forbidden.join(", ")}.`);
+}
+
+function normalizePermissionMode(value) {
+  const requested = String(value ?? "read-only").trim().toLowerCase();
+  const permissionMode = PERMISSION_MODE_ALIASES.get(requested) ?? requested;
+  if (!PERMISSION_MODES.has(permissionMode)) throw new Error(`Unsupported permissionMode: ${requested}.`);
+  return permissionMode;
 }
 
 function uniqueStrings(value) {

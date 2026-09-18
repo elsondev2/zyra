@@ -45,6 +45,7 @@ function buildNavigationOptions(entry: PreviewNavigationEntry): PreviewOpenOptio
     return {
         startInEditMode: entry.file.startInEditMode === true,
         focusLine: entry.file.focusLine || undefined,
+        htmlLocation: entry.file.htmlLocation ? { ...entry.file.htmlLocation } : undefined,
         mediaItems: entry.mediaItems,
         targetKind: entry.file.type === 'directory' ? 'directory' : 'file',
         openNavigator: entry.file.openNavigator === true,

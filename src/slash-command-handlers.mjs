@@ -34,8 +34,8 @@ import {
 } from "./zyra-sdk.mjs";
 import { normalizeZyraAuthMethod, providerForZyraAuthMethod } from "./auth-methods.mjs";
 import { importClaudeAgentPreviews, previewClaudeAgentImports } from "./agents/claude-importer.mjs";
+import { normalizeModelSelector } from "./agents/model-router.mjs";
 import { formatAgentDoctorReport } from "./agents/definition-validator.mjs";
-import { buildProjectStartPrompt } from "./project-start.mjs";
 import { getSlashCommand, parseSlashInput } from "./slash-commands.mjs";
 import { normalizeWebToolsMode } from "./web-tools-picker.mjs";
 import { normalizeZyraPermissionMode } from "./permission-mode.mjs";
@@ -112,8 +112,6 @@ async function handleSlashCommand(runtime, ui, text, parsed, controls = {}) {
       return runWorkflows(runtime, ui);
     case "workflow":
       return runWorkflow(runtime, ui, arg);
-    case "start":
-      return runStart(runtime, ui, arg, controls);
     case "session":
       if (arg.trim().toLowerCase() === "copy") {
         const threadId = runtime.session?.sessionManager?.getSessionId?.();
@@ -241,14 +239,18 @@ async function runAgents(runtime, ui, arg) {
     ui.block(formatAgentDoctorReport(runtime.fleet.listDefinitions().all).split("\n"));
     return true;
   }
-  if (action === "import claude" || action.startsWith("import claude confirm")) {
+  if (action === "import claude" || action.startsWith("import claude ")) {
+    const modelOption = String(arg).match(/(?:^|\s)--model(?:=|\s+)([^\s]+)/);
+    const selectedModel = modelOption ? normalizeModelSelector(modelOption[1]).prefer : undefined;
+    const importAction = String(arg).replace(/(?:^|\s)--model(?:=|\s+)([^\s]+)/, "").trim().toLowerCase();
     const definitions = runtime.fleet.listDefinitions();
     const preview = await previewClaudeAgentImports({
       project: runtime.project,
+      model: selectedModel,
       existingNames: definitions.active.map((entry) => entry.name),
     });
-    if (action.startsWith("import claude confirm")) {
-      const selections = action.slice("import claude confirm".length).trim().split(/\s+/).filter(Boolean);
+    if (importAction.startsWith("import claude confirm")) {
+      const selections = importAction.slice("import claude confirm".length).trim().split(/\s+/).filter(Boolean);
       const scope = selections.includes("project") ? "project" : "user";
       const names = selections.filter((entry) => !["all", "project", "user"].includes(entry));
       const imported = await importClaudeAgentPreviews(preview, { confirmed: true, project: runtime.project, scope, names });
@@ -258,12 +260,12 @@ async function runAgents(runtime, ui, arg) {
     }
     const lines = ["Claude agent import preview (nothing copied):"];
     for (const item of preview.previews) {
-      lines.push(`${item.valid ? "READY" : "BLOCKED"} ${item.candidate.name}`);
+      lines.push(`${item.valid ? "READY" : "BLOCKED"} ${item.candidate.name} (${item.candidate.model.prefer})`);
       for (const warning of item.warnings) lines.push(`  warning: ${warning}`);
       for (const error of item.errors) lines.push(`  error: ${error}`);
     }
     if (!preview.previews.length) lines.push("No Claude agent definitions found.");
-    else lines.push("Confirm with /agents import claude confirm <name|all> [user|project].");
+    else lines.push(`Confirm with /agents import claude confirm <name|all> [user|project]${selectedModel ? ` --model ${selectedModel}` : ""}. Use --model role-default to follow provider preferences.`);
     ui.block(lines);
     return true;
   }
@@ -332,49 +334,10 @@ function formatFleetActionResult(result) {
   return JSON.stringify(result);
 }
 
-async function runStart(runtime, ui, arg, controls) {
-  ui.beginProgress("Project scan");
-  controls.setTerminalTitleState?.("working");
-  try {
-    await runZyraPrompt(runtime, buildProjectStartPrompt(runtime, arg));
-    controls.notifyTerminalIfUnfocused?.();
-  } finally {
-    ui.endProgress();
-    controls.setTerminalTitleState?.("ready");
-  }
-  return true;
-}
-
 async function runProfile(runtime, ui, arg) {
-  if (!arg) {
-    ui.info(`Profile: ${describeRuntime(runtime).profile}`);
-    return true;
-  }
-  const autoProfile = getAutoProfile();
-  const previousProfile = describeRuntime(runtime).profile ?? autoProfile;
-  const requestedProfile = arg.trim().toLowerCase();
-  const profile = setProfile(runtime, requestedProfile);
-  const prompt = buildProfileChangePrompt({ autoProfile, previousProfile, requestedProfile, profile });
-  ui.suppressUserMessage?.(prompt);
-  const runSwitchPrompt = () => runZyraPrompt(runtime, prompt);
-  if (typeof ui.withActivityLabel === "function") await ui.withActivityLabel("changing current profile", runSwitchPrompt);
-  else await runSwitchPrompt();
+  const profile = arg ? setProfile(runtime, arg.trim().toLowerCase()) : describeRuntime(runtime).profile;
+  ui.info(`Speaking style: ${profile}`);
   return true;
-}
-
-export function buildProfileChangePrompt({ autoProfile, previousProfile, requestedProfile, profile } = {}) {
-  return [
-    "[Internal Zyra profile-change notice]",
-    "This message is hidden from the visible transcript UI, but it is intentionally part of chat history so the assistant can adapt.",
-    `The configured auto profile is ${quoteProfile(autoProfile)}.`,
-    `The active profile before the command was ${quoteProfile(previousProfile)}.`,
-    `The user ran /profile ${String(requestedProfile ?? "").trim() || quoteProfile(profile)} and the active profile is now ${quoteProfile(profile)}.`,
-    "Write one short, witty, human confirmation that spotlights the user changed profile. Do not mention this internal notice. Do not continue into unrelated work.",
-  ].join("\n");
-}
-
-function quoteProfile(value) {
-  return JSON.stringify(String(value ?? "unknown"));
 }
 
 function runMemory(runtime, ui, arg) {

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
     AlertCircle,
     AppWindow,
@@ -147,6 +147,7 @@ type PreviewNavigationSidebarProps = {
     revealTargetRequestId?: string | null
     onRevealTargetHandled?: (requestId: string) => void
     variant?: 'sidebar' | 'workspace' | 'navigation'
+    workspaceHeaderActions?: ReactNode
     initialWorkspaceState?: PreviewNavigationWorkspaceState
     onWorkspaceStateChange?: (state: PreviewNavigationWorkspaceState) => void
 }
@@ -160,6 +161,7 @@ export function PreviewNavigationSidebar({
     revealTargetRequestId = null,
     onRevealTargetHandled,
     variant = 'sidebar',
+    workspaceHeaderActions,
     initialWorkspaceState,
     onWorkspaceStateChange
 }: PreviewNavigationSidebarProps) {
@@ -205,7 +207,7 @@ export function PreviewNavigationSidebar({
     const automaticRevealSequenceRef = useRef(0)
     const persistedExpandedPathKeysRef = useRef(workspacePreferenceSeed.expandedPathKeys)
     const navigationPaneWidthRef = useRef(workspacePreferenceSeed.navigationPaneWidth)
-    const navigationPaneResizeStartRef = useRef<{ clientX: number; width: number } | null>(null)
+    const navigationPaneResizeStartRef = useRef<{ clientX: number; width: number; ownerDocument: Document } | null>(null)
     const navigationPanePendingWidthRef = useRef<number | null>(null)
     const navigationPaneResizeFrameRef = useRef<number | null>(null)
     const {
@@ -280,7 +282,7 @@ export function PreviewNavigationSidebar({
         if (event.button !== 0) return
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
-        navigationPaneResizeStartRef.current = { clientX: event.clientX, width: navigationPaneWidthRef.current }
+        navigationPaneResizeStartRef.current = { clientX: event.clientX, width: navigationPaneWidthRef.current, ownerDocument: event.currentTarget.ownerDocument }
         navigationPanePendingWidthRef.current = navigationPaneWidthRef.current
         setNavigationPaneResizing(true)
     }, [])
@@ -302,10 +304,12 @@ export function PreviewNavigationSidebar({
 
     useEffect(() => {
         if (!navigationPaneResizing) return
-        const previousCursor = document.body.style.cursor
-        const previousUserSelect = document.body.style.userSelect
-        document.body.style.cursor = 'col-resize'
-        document.body.style.userSelect = 'none'
+        const ownerDocument = navigationPaneResizeStartRef.current?.ownerDocument ?? document
+        const ownerWindow = ownerDocument.defaultView ?? window
+        const previousCursor = ownerDocument.body.style.cursor
+        const previousUserSelect = ownerDocument.body.style.userSelect
+        ownerDocument.body.style.cursor = 'col-resize'
+        ownerDocument.body.style.userSelect = 'none'
 
         const flushPendingWidth = () => {
             navigationPaneResizeFrameRef.current = null
@@ -317,13 +321,13 @@ export function PreviewNavigationSidebar({
             if (!resizeStart) return
             navigationPanePendingWidthRef.current = clampNavigationPaneWidth(resizeStart.width + event.clientX - resizeStart.clientX)
             if (navigationPaneResizeFrameRef.current === null) {
-                navigationPaneResizeFrameRef.current = window.requestAnimationFrame(flushPendingWidth)
+                navigationPaneResizeFrameRef.current = ownerWindow.requestAnimationFrame(flushPendingWidth)
             }
         }
         const finishResize = (cancelled: boolean) => {
             const resizeStart = navigationPaneResizeStartRef.current
             if (navigationPaneResizeFrameRef.current !== null) {
-                window.cancelAnimationFrame(navigationPaneResizeFrameRef.current)
+                ownerWindow.cancelAnimationFrame(navigationPaneResizeFrameRef.current)
                 navigationPaneResizeFrameRef.current = null
             }
             const finalWidth = cancelled && resizeStart
@@ -339,19 +343,19 @@ export function PreviewNavigationSidebar({
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') finishResize(true)
         }
-        window.addEventListener('pointermove', handlePointerMove)
-        window.addEventListener('pointerup', handlePointerUp, { once: true })
-        window.addEventListener('pointercancel', handlePointerCancel, { once: true })
-        window.addEventListener('keydown', handleKeyDown)
+        ownerWindow.addEventListener('pointermove', handlePointerMove)
+        ownerWindow.addEventListener('pointerup', handlePointerUp, { once: true })
+        ownerWindow.addEventListener('pointercancel', handlePointerCancel, { once: true })
+        ownerWindow.addEventListener('keydown', handleKeyDown)
         return () => {
-            window.removeEventListener('pointermove', handlePointerMove)
-            window.removeEventListener('pointerup', handlePointerUp)
-            window.removeEventListener('pointercancel', handlePointerCancel)
-            window.removeEventListener('keydown', handleKeyDown)
-            document.body.style.cursor = previousCursor
-            document.body.style.userSelect = previousUserSelect
+            ownerWindow.removeEventListener('pointermove', handlePointerMove)
+            ownerWindow.removeEventListener('pointerup', handlePointerUp)
+            ownerWindow.removeEventListener('pointercancel', handlePointerCancel)
+            ownerWindow.removeEventListener('keydown', handleKeyDown)
+            ownerDocument.body.style.cursor = previousCursor
+            ownerDocument.body.style.userSelect = previousUserSelect
             if (navigationPaneResizeFrameRef.current !== null) {
-                window.cancelAnimationFrame(navigationPaneResizeFrameRef.current)
+                ownerWindow.cancelAnimationFrame(navigationPaneResizeFrameRef.current)
                 navigationPaneResizeFrameRef.current = null
             }
         }
@@ -1010,6 +1014,7 @@ export function PreviewNavigationSidebar({
                             <h2 className="truncate text-[11px] font-semibold text-sparkle-text" title={activeFolderPath}>{workspaceFolderName}</h2>
                             <p className="truncate text-[8px] text-sparkle-text-muted/40" title={activeFolderPath}>{activeFolderPath}</p>
                         </div>
+                        {workspaceHeaderActions ? <div className="ml-auto flex min-w-0 max-w-[45%] shrink-0 items-center justify-end" data-files-root-selector="true">{workspaceHeaderActions}</div> : null}
                     </div>
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[0.05] px-3">
                         <div className="relative min-w-0 flex-1">

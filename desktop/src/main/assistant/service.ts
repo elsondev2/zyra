@@ -1,3 +1,11 @@
+import { usageProjectionFallback } from '../../shared/assistant/usage-ownership'
+import { buildUsageSummary, mergeUsageSummaries, usageWindow, type UsageSummaryInput } from '../../shared/assistant/usage-summary'
+import { isAssistantSessionProjectLocked } from '../../shared/assistant/session-project'
+import { validateAssistantSessionConfiguration } from '../../shared/assistant/session-configuration'
+import { MobileVoicePresence, clearRestoredMobileVoice } from './mobile-voice-presence'
+import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
+import { canonicalVoicePresentationEvent } from './voice/canonical-voice-presentation'
+import { resolveAssistantWorkingDirectory } from '../../shared/assistant/working-directory'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -41,6 +49,7 @@ import type {
     AssistantRuntimeStatus,
     AssistantSearchChatsInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSession,
@@ -77,6 +86,7 @@ import { classifyAnalyticsErrorCode as classifyAnalyticsError } from '../../shar
 import { findAssistantMessageReplayDuplicateIds, preserveCanonicalUserReplayBoundaries } from '../../shared/assistant/message-reconciliation'
 import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { reconcileAssistantUserInputResponseMessageIds } from '../../shared/assistant/user-input-continuation'
+import { recoverCanonicalUserInputReceipts, mergeRecoveredUserInputReceipts } from './user-input-history'
 import {
     ASSISTANT_ACTION_BATCH_TOOL_NAME,
     normalizeAssistantActionBatchIntent
@@ -109,8 +119,9 @@ import {
     readPiFileChangeData,
     ZyraPiRuntime
 } from './zyra-pi-runtime'
+import { readTerminalAssistantMessageOutcome } from './assistant-terminal-outcome'
 import { createAssistantId, deriveSessionTitleFromPrompt, isDefaultSessionTitle, nowIso } from './utils'
-import { materializeCanonicalImage } from './canonical-media-cache'
+import { canonicalImageAttachmentSection } from './canonical-media-cache'
 import { getAssistantCanonicalThreadId } from './thread-identity'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
@@ -129,6 +140,7 @@ import {
 import { toAssistantShellSnapshot } from './persistence-snapshot'
 import { FleetProjection, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
 import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
+import { resolveSessionTitleTarget } from './session-title-target'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
 import {
@@ -242,6 +254,7 @@ type PendingCanonicalVoiceStart = {
 }
 
 export type AssistantServiceOptions = {
+    getDefaultProjectsFolder?: () => string | null
     getNewChatExecutionDefaults?: () => Promise<{ webSearch: boolean; webFetch: boolean }>
     getTitleGenerationModel?: () => Promise<string | null>
     getTitleAutomation?: () => Promise<{ enabled: boolean; turnInterval: number }>
@@ -311,6 +324,9 @@ export class AssistantService {
     private canonicalVoiceSetupPromise: Promise<void> | null = null
     private canonicalVoiceUnsubscribe: (() => void) | null = null
     private activeCanonicalVoice: ActiveCanonicalVoice | null = null
+    private readonly mobileVoicePresence = new MobileVoicePresence((sessionId, threadId, deviceName) => {
+        this.appendEvent('thread.updated', nowIso(), { threadId, patch: { mobileVoice: deviceName ? { deviceName } : null } }, sessionId, threadId)
+    })
     private pendingCanonicalVoiceStart: PendingCanonicalVoiceStart | null = null
     private canonicalVoiceStopPromise: Promise<void> | null = null
     private navigationSelectionGeneration = 0
@@ -367,7 +383,7 @@ export class AssistantService {
     private readonly subscribers = new Set<number>()
     private readonly externalEventSubscribers = new Set<(payload: AssistantEventStreamPayload) => void>()
     private readonly realtimeVoiceSubscribers = new Set<number>()
-    private readonly externalRealtimeVoiceSubscribers = new Set<(event: AssistantRealtimeVoiceEvent) => void>()
+    private readonly externalRealtimeVoiceSubscribers = new Set<(event: AssistantRealtimeVoiceEvent, owner: number | null) => void>()
     private realtimeVoiceOwnerId: number | null = null
     private voicePrimaryPreparationGeneration = 0
     private voiceStartedAt = 0
@@ -488,10 +504,11 @@ export class AssistantService {
                 return
             }
             if (this.activeCanonicalVoice) return
+            const eventOwner = this.realtimeVoiceOwnerId
             if (event.type === 'session.error' || event.type === 'session.closed') {
                 this.realtimeVoiceOwnerId = null
             }
-            this.broadcastRealtimeVoiceEvent(event)
+            this.broadcastRealtimeVoiceEvent(event, false, eventOwner)
         })
         void this.readyPromise
             .then(() => this.recoverSelectedSessionTitle())
@@ -524,12 +541,12 @@ export class AssistantService {
         return { success: true as const }
     }
 
-    subscribeExternalRealtimeVoiceEvents(listener: (event: AssistantRealtimeVoiceEvent) => void): () => void {
+    subscribeExternalRealtimeVoiceEvents(listener: (event: AssistantRealtimeVoiceEvent, owner: number | null) => void): () => void {
         this.externalRealtimeVoiceSubscribers.add(listener)
         return () => this.externalRealtimeVoiceSubscribers.delete(listener)
     }
 
-    private broadcastRealtimeVoiceEvent(event: AssistantRealtimeVoiceEvent, ownerOnly = false): void {
+    private broadcastRealtimeVoiceEvent(event: AssistantRealtimeVoiceEvent, ownerOnly = false, eventOwner = this.realtimeVoiceOwnerId): void {
         if (ownerOnly && this.realtimeVoiceOwnerId === null) return
         const subscribers = ownerOnly
             ? new Set(this.realtimeVoiceSubscribers.has(this.realtimeVoiceOwnerId as number)
@@ -539,7 +556,7 @@ export class AssistantService {
         broadcastAssistantRealtimeVoiceEvent(subscribers, event)
         for (const listener of [...this.externalRealtimeVoiceSubscribers]) {
             try {
-                listener(event)
+                listener(event, eventOwner)
             } catch (error) {
                 log.warn('[AssistantVoice] External realtime event subscriber failed', error)
             }
@@ -574,6 +591,101 @@ export class AssistantService {
     async getSnapshot() {
         await this.ensureReady()
         return toAssistantShellSnapshot(this.state.snapshot)
+    }
+
+    async getMobileTerminalIdentity(canonicalChatId: string) {
+        await this.ensureReady()
+        let session = this.state.snapshot.sessions.find(session => session.threads.some(thread => thread.providerThreadId === canonicalChatId))
+        if (!session) {
+            await this.queueCanonicalChatImport()
+            session = this.state.snapshot.sessions.find(session => session.threads.some(thread => thread.providerThreadId === canonicalChatId))
+        }
+        if (!session) throw new Error('This chat has not synchronized with Desktop yet. Refresh the chat and try again.')
+        return { runtimeId: 'assistant-terminal:' + session.id }
+    }
+
+    async getMobileFilesystemContext(canonicalChatId: string) {
+        await this.ensureReady()
+        const record = this.state.snapshot.sessions.flatMap(session => session.threads.map(thread => ({ session, thread })))
+            .find(({ thread }) => thread.providerThreadId === canonicalChatId)
+        return record ? this.getChatFilesystemContext(record.thread.id) : null
+    }
+
+    async getMobilePluginContext(canonicalChatId: string) {
+        await this.ensureReady()
+        const session = this.state.snapshot.sessions.find(entry => entry.threads.some(thread => thread.providerThreadId === canonicalChatId))
+        if (!session || isAssistantDevelopmentChatFixtureSessionId(session.id)) return null
+        return { sessionId: session.id, projectId: session.projectId || session.chatScope?.projectId || null }
+    }
+
+    async searchMobileChats(input: { query: string; limit: number }) {
+        await this.ensureReady()
+        const result = await this.persistence.searchChats({ ...input, scope: 'all' })
+        const identities = new Map(this.state.snapshot.sessions.flatMap(session => session.threads.map(thread => [thread.id, thread.providerThreadId] as const)))
+        return { indexingOlderChats: result.indexingOlderChats, matches: result.matches.flatMap(match => {
+            const canonicalChatId = identities.get(match.threadId)
+            return canonicalChatId ? [{ ...match, canonicalChatId }] : []
+        }) }
+    }
+
+    async mobileSearchContext(input: { session: string; threadId: string; messageId: string }) {
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, input.threadId)
+        if (!record || record.thread.providerThreadId !== input.session) throw new Error('This search result no longer belongs to the conversation.')
+        const result = await this.persistence.readHistoryAroundMessage({ threadId: input.threadId, messageId: input.messageId, turnLimit: 2 })
+        return { messageId: result.messageId, messages: result.page.messages.map(message => ({ id: message.id, role: message.role, text: message.text, createdAt: message.createdAt })) }
+    }
+
+    async prepareMobileChat(canonicalChatId: string): Promise<boolean> {
+        await this.ensureReady()
+        const record = this.state.snapshot.sessions.flatMap(session => session.threads.map(thread => ({ session, thread })))
+            .find(({ thread }) => thread.providerThreadId === canonicalChatId)
+        if (!record) return false
+        if (isAssistantDevelopmentChatFixtureSessionId(record.session.id)) throw new Error('Development fixtures are read-only.')
+        // Reuse the owning Desktop configuration without changing its navigation or voice selection.
+        await this.connectSessionRuntime(record.session, record.thread)
+        return true
+    }
+
+    async regenerateMobileChatTitle(canonicalChatId: string): Promise<{ title: string }> {
+        await this.ensureReady()
+        const find = () => this.state.snapshot.sessions.find(session => session.threads.some(thread => thread.providerThreadId === canonicalChatId))
+        let session = find()
+        if (!session) { await this.queueCanonicalChatImport(); session = find() }
+        if (!session) throw new Error('This chat has not synchronized with Desktop yet. Refresh and try again.')
+        if (isAssistantDevelopmentChatFixtureSessionId(session.id)) throw new Error('Development fixtures are read-only.')
+        return this.regenerateSessionTitle(session.id, canonicalChatId)
+    }
+
+    ownsRealtimeVoice(owner: number): boolean { return this.realtimeVoiceOwnerId === owner }
+
+    async startMobileRealtimeVoice(canonicalChatId: string,
+        input: { sdp: string; voice?: AssistantStartRealtimeVoiceInput['voice']; deviceName?: string }, owner: number, signal: AbortSignal) {
+        await this.ensureReady()
+        signal.throwIfAborted()
+        const find = () => this.state.snapshot.sessions.flatMap(session => session.threads.map(thread => ({ session, thread })))
+            .find(({ thread }) => thread.providerThreadId === canonicalChatId)
+        let record = find()
+        if (!record) { await this.queueCanonicalChatImport(); signal.throwIfAborted(); record = find() }
+        if (!record) throw new Error('This chat has not synchronized with Desktop yet. Refresh the chat and try again.')
+        const stop = () => { if (this.ownsRealtimeVoice(owner)) void this.stopRealtimeVoice(owner).catch(() => undefined) }
+        signal.addEventListener('abort', stop, { once: true })
+        try {
+            signal.throwIfAborted()
+            const started = await this.startRealtimeVoice({
+                conversationId: record.thread.id, sessionId: record.session.id, transcriptBridgeVersion: 1,
+                sdp: input.sdp, voice: input.voice, outputModality: 'audio',
+                executionConfiguration: {
+                    model: record.thread.model, effort: record.thread.thinking || 'low',
+                    runtimeMode: record.thread.runtimeMode, interactionMode: record.thread.interactionMode,
+                    profile: record.thread.profile || 'default'
+                }
+            }, owner)
+            if ('adapterSessionId' in started && typeof started.adapterSessionId === 'string') this.mobileVoicePresence.activate({ owner, adapterSessionId: started.adapterSessionId,
+                sessionId: record.session.id, threadId: record.thread.id, deviceName: input.deviceName },
+                { owner: this.realtimeVoiceOwnerId, adapterSessionId: this.activeCanonicalVoice?.adapterSessionId }, signal)
+            return started
+        } finally { signal.removeEventListener('abort', stop) }
     }
 
     async getChatFilesystemContext(threadId: string) {
@@ -618,6 +730,10 @@ export class AssistantService {
     async getPluginCatalog() {
         await this.ensureReady()
         return { success: true as const, catalog: await this.pluginRegistry.getCatalog() }
+    }
+
+    onPluginCatalogChanged(listener: () => void): () => void {
+        return this.pluginRegistry.onChange(listener)
     }
 
     async startPluginDownload(name: string, ownerId: number) {
@@ -679,7 +795,7 @@ export class AssistantService {
         })
     }
 
-    async setPluginState(pluginId: string, state: 'active' | 'disabled') {
+    async setPluginState(pluginId: string, state: 'active' | 'disabled', expectedCatalogRevision?: number) {
         await this.ensureReady()
         if (state !== 'active' && state !== 'disabled') throw new Error('Plugin state is invalid.')
         pluginId = String(pluginId || '').trim()
@@ -690,7 +806,7 @@ export class AssistantService {
         return this.pluginAuthorityMutations.run(affectedSessionIds, async () => {
             // Refuse an unavailable/older server before committing registry state.
             await this.runtime.updatePluginAuthority({ chats: [] })
-            const result = await this.pluginRegistry.setPluginState(pluginId, state)
+            const result = await this.pluginRegistry.setPluginState(pluginId, state, expectedCatalogRevision)
             // The server selects by loaded Plugin identity too, so detached Chats
             // and connections still being established cannot escape revocation.
             const affectedIds = new Set(result.catalog.chatScopes
@@ -704,9 +820,9 @@ export class AssistantService {
         })
     }
 
-    async rollbackPlugin(pluginId: string, releaseId: string, confirmed: boolean) {
+    async rollbackPlugin(pluginId: string, releaseId: string, confirmed: boolean, expectedCatalogRevision?: number) {
         await this.ensureReady()
-        return this.pluginRegistry.rollbackPlugin(pluginId, releaseId, confirmed)
+        return this.pluginRegistry.rollbackPlugin(pluginId, releaseId, confirmed, expectedCatalogRevision)
     }
 
     async createProject(input: AssistantCreateProjectInput, candidateId?: string) {
@@ -853,12 +969,32 @@ export class AssistantService {
         }
     }
 
+    async getAccountLimitsOverview() {
+        await this.ensureReady()
+        return { success: true as const, overview: await this.accountService.getLimitsOverview() }
+    }
+
     async redeemAccountReset(input: AssistantRedeemAccountResetInput) {
         await this.ensureReady()
         return {
             success: true as const,
             ...await this.accountService.redeemAccountReset(input)
         }
+    }
+
+    async getUsageSummary(input: UsageSummaryInput = {}) {
+        await this.ensureReady()
+        const now = new Date()
+        const window = usageWindow(input, now)
+        const turns = await this.persistence.readUsageTurns(window.since)
+        const included = turns.filter(turn => !isAssistantDevelopmentChatFixtureSessionId(turn.sessionId))
+        if (!input.harness) return {success:true as const,summary:buildUsageSummary(included,input,now)}
+        const { readHarnessUsage } = await import('./usage/harness-client')
+        const external = await readHarnessUsage(input,await this.persistence.readUsageOwners(),await this.persistence.readUsageProjectPaths())
+        const fallback = input.harness === 'zyra' || input.harness === 'all' ? usageProjectionFallback(included,external.coveredSessionIds) : []
+        const zyra = buildUsageSummary(fallback,input,now)
+        zyra.sources = [{ id:'zyra',state:'ready',files:1,records:fallback.length,updatedAt:now.toISOString() }]
+        return {success:true as const,summary:mergeUsageSummaries(zyra,external.summary)}
     }
 
     async getSessionTurnUsage(input?: AssistantGetSessionTurnUsageInput) {
@@ -1210,12 +1346,10 @@ export class AssistantService {
         return renameAssistantSessionAction(this.actionDeps, sessionId, title)
     }
 
-    async regenerateSessionTitle(sessionId: string) {
+    async regenerateSessionTitle(sessionId: string, canonicalChatId?: string) {
         await this.ensureReady()
         const session = requireSession(this.state.snapshot, sessionId)
-        const thread = session.threads.find((entry) => entry.source === 'root' && !entry.parentThreadId)
-            || getActiveThread(session)
-        if (!thread) throw new Error('Assistant thread not found.')
+        const { thread, canonicalIds } = resolveSessionTitleTarget(session, canonicalChatId)
         if (['starting', 'running', 'waiting'].includes(thread.state) || thread.latestTurn?.state === 'running') {
             throw new Error('Wait for the current turn to finish before refreshing the title.')
         }
@@ -1236,9 +1370,7 @@ export class AssistantService {
                 this.appendEvent(type, occurredAt, payload, eventSessionId, eventThreadId)
             },
             onApplied: async (nextTitle) => {
-                await Promise.allSettled(session.threads
-                    .map((entry) => entry.providerThreadId)
-                    .filter((providerThreadId): providerThreadId is string => Boolean(providerThreadId))
+                await Promise.allSettled(canonicalIds
                     .map((providerThreadId) => this.runtime.updateCanonicalChat(providerThreadId, { title: nextTitle })))
             }
         })
@@ -1278,7 +1410,21 @@ export class AssistantService {
         return deleteAssistantMessageAction(this.actionDeps, input)
     }
 
+    async updateSessionConfiguration(value: AssistantUpdateSessionConfigurationInput) {
+        const input = validateAssistantSessionConfiguration(value)
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, input.threadId)
+        if (!record || record.session.id !== input.sessionId) throw new Error('This chat configuration belongs to a stale selection.')
+        const runtimeId = record.thread.providerThreadId || record.thread.id
+        if (!this.runtime.hasSession(runtimeId)) throw new Error('Connect this chat before changing its configuration.')
+        const { sessionId: _sessionId, threadId: _threadId, ...patch } = input
+        await this.runtime.configureSession(runtimeId, patch)
+        return { success: true as const }
+    }
+
     async setSessionProject(sessionId: string, input: AssistantSetSessionProjectInput) {
+        // Verify the server's permission contract before changing the saved Project.
+        await this.runtime.updatePluginAuthority({ chats: [] })
         const chatScope = input.projectId
             ? await this.persistence.createProjectChatScope(input.projectId, input.workingRoot)
             : null
@@ -1288,6 +1434,7 @@ export class AssistantService {
     }
 
     async setSessionProjectPath(sessionId: string, projectPath: string | null) {
+        await this.runtime.updatePluginAuthority({ chats: [] })
         const normalizedPath = String(projectPath || '').trim()
         const chatScope = normalizedPath
             ? await this.persistence.ensureProjectForFolder(normalizedPath)
@@ -1303,6 +1450,10 @@ export class AssistantService {
         chatScope: import('../../shared/assistant/contracts').AssistantChatScope | null
     ) {
         const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const scopeChanged = JSON.stringify(session?.chatScope || null) !== JSON.stringify(chatScope || null)
+        if (scopeChanged && isAssistantSessionProjectLocked(session)) {
+            throw new Error('Finish or stop the active chat work before applying folder changes.')
+        }
         const pendingVoiceBelongsToSession = Boolean(
             this.pendingCanonicalVoiceStart
             && session?.threads.some((thread) => thread.id === this.pendingCanonicalVoiceStart?.conversationId)
@@ -1313,7 +1464,6 @@ export class AssistantService {
             this.invalidateVoicePrimaryWorkerPreparation()
         }
         const projectPath = chatScope?.workingRoot || null
-        const scopeChanged = JSON.stringify(session?.chatScope || null) !== JSON.stringify(chatScope || null)
         try {
             const result = await setAssistantSessionProjectPathAction(this.actionDeps, sessionId, projectPath)
             if (scopeChanged && projectPath === session?.projectPath) {
@@ -1726,6 +1876,7 @@ export class AssistantService {
             || this.activeCanonicalVoice
             || this.realtimeVoiceRuntime.currentSessionIdentity()
         )
+        this.mobileVoicePresence.clearOwner(senderId)
         if (!hasVoiceState) return { success: true as const }
         await this.cancelPendingCanonicalVoiceStart()
         this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'stop', outcome: 'started' } })
@@ -1803,6 +1954,7 @@ export class AssistantService {
             snapshot: loaded.snapshot || createDefaultSnapshot(),
             events: loaded.events || []
         }
+        clearRestoredMobileVoice(this.state.snapshot)
         this.state.snapshot.fleetByThreadId ||= {}
         await this.pluginRegistry.ensureLegacyChatScopes(this.state.snapshot.sessions.map((session) => ({
             sessionId: session.id,
@@ -2065,6 +2217,8 @@ export class AssistantService {
         if (this.canonicalVoiceStopPromise) return this.canonicalVoiceStopPromise
         const active = this.activeCanonicalVoice
         if (!active) return
+        const eventOwner = this.realtimeVoiceOwnerId
+        this.mobileVoicePresence.clearAdapter(active.adapterSessionId)
         const stop = (async () => {
             this.queuedVoiceStrongRequests.delete(active.conversationId)
             this.activeVoiceStrongTasks.get(active.conversationId)?.abortController.abort(new Error('Voice session ended.'))
@@ -2091,7 +2245,7 @@ export class AssistantService {
                 type: 'session.closed',
                 threadId: handle?.realtimeProviderThreadId || active.conversationId,
                 reason
-            })
+            }, false, eventOwner)
         })()
         this.canonicalVoiceStopPromise = stop
         try {
@@ -2102,7 +2256,7 @@ export class AssistantService {
     }
 
     private handleCanonicalVoiceEvent(event: RealtimeDomainEvent): void {
-        const legacy = canonicalVoicePresentationEvent(event)
+        const legacy = canonicalVoicePresentationEvent(event, this.activeCanonicalVoice?.adapterSessionId || null)
         if (legacy) this.broadcastRealtimeVoiceEvent(legacy)
         if (event.type === 'realtime.delegation.requested') {
             this.routeVoiceStrongRequest(event)
@@ -2859,13 +3013,13 @@ export class AssistantService {
                 const persistedTimeline = await this.persistence.readTimelineProjectionRows(input.threadId)
                 const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
                 const reconciledUserInputs = reconcileAssistantUserInputResponseMessageIds(
-                    record.thread.pendingUserInputs,
+                    mergeRecoveredUserInputReceipts(record.thread.pendingUserInputs, recoverCanonicalUserInputReceipts(canonicalEntries, [...persistedTimeline.messages, ...canonicalMessages], canonicalStartCursor)),
                     persistedTimeline.messages,
                     canonicalMessages
                 )
                 for (let index = 0; index < reconciledUserInputs.length; index += 1) {
                     const userInput = reconciledUserInputs[index]!
-                    if (userInput.responseMessageId === record.thread.pendingUserInputs[index]?.responseMessageId) continue
+                    if (JSON.stringify(userInput) === JSON.stringify(record.thread.pendingUserInputs[index])) continue
                     this.appendEvent('thread.user-input.updated', nowIso(), {
                         threadId: record.thread.id,
                         userInput
@@ -3016,13 +3170,13 @@ export class AssistantService {
         const persistedTimeline = await this.persistence.readTimelineProjectionRows(thread.id)
         const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
         const reconciledUserInputs = reconcileAssistantUserInputResponseMessageIds(
-            thread.pendingUserInputs,
+            mergeRecoveredUserInputReceipts(thread.pendingUserInputs, recoverCanonicalUserInputReceipts(entries, [...persistedTimeline.messages, ...canonicalMessages], baseEntryIndex)),
             persistedTimeline.messages,
             canonicalMessages
         )
         for (let index = 0; index < reconciledUserInputs.length; index += 1) {
             const userInput = reconciledUserInputs[index]!
-            if (userInput.responseMessageId === thread.pendingUserInputs[index]?.responseMessageId) continue
+            if (JSON.stringify(userInput) === JSON.stringify(thread.pendingUserInputs[index])) continue
             this.appendEvent('thread.user-input.updated', nowIso(), {
                 threadId: thread.id,
                 userInput
@@ -3223,7 +3377,11 @@ export class AssistantService {
         session: AssistantSession,
         thread: AssistantThread
     ): string {
-        return this.resolveCanonicalProjectPath(session.workingRoot, session.projectPath, thread.cwd)
+        return resolveAssistantWorkingDirectory({
+            workingRoot: this.resolveCanonicalProjectPath(session.workingRoot),
+            projectPath: this.resolveCanonicalProjectPath(session.projectPath),
+            cwd: this.resolveCanonicalProjectPath(thread.cwd)
+        }, this.options.getDefaultProjectsFolder?.())
             || this.persistence.getGlobalWorkspaceRoot()
     }
 
@@ -3503,34 +3661,6 @@ function normalizeClientVoiceMessageId(value: unknown): string {
     throw new Error('The Voice composer message identity is missing or invalid.')
 }
 
-function canonicalVoicePresentationEvent(event: RealtimeDomainEvent): AssistantRealtimeVoiceEvent | null {
-    if (event.type === 'realtime.session.error') {
-        return { type: 'session.error', threadId: event.realtimeProviderThreadId, message: event.message }
-    }
-    if (event.type === 'realtime.session.closed') {
-        return { type: 'session.closed', threadId: event.realtimeProviderThreadId, reason: event.reason || undefined }
-    }
-    if (event.type === 'realtime.user.transcript.delta' || event.type === 'realtime.assistant.transcript.delta') {
-        return {
-            type: 'transcript.delta',
-            threadId: event.realtimeProviderThreadId,
-            providerItemId: event.providerItemId,
-            role: event.type.includes('.user.') ? 'user' : 'assistant',
-            delta: event.delta
-        }
-    }
-    if (event.type === 'realtime.user.transcript.completed' || event.type === 'realtime.assistant.transcript.completed') {
-        return {
-            type: 'transcript.done',
-            threadId: event.realtimeProviderThreadId,
-            providerItemId: event.providerItemId,
-            role: event.type.includes('.user.') ? 'user' : 'assistant',
-            text: event.text
-        }
-    }
-    return null
-}
-
 function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
     const date = new Date(typeof value === 'string' || typeof value === 'number' ? value : fallback)
     return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
@@ -3790,12 +3920,18 @@ export function projectCanonicalTimeline(
 
         const errorMessage = String(message['errorMessage'] || '').trim()
         const stopReason = String(message['stopReason'] || '').trim().toLowerCase()
-        const interrupted = stopReason === 'aborted'
-            || stopReason === 'cancelled'
-            || stopReason === 'canceled'
-            || stopReason === 'interrupted'
-            || stopReason === 'stopped'
-        if (interrupted || errorMessage || stopReason === 'error') {
+        const terminalMessageOutcome = role === 'assistant'
+            ? readTerminalAssistantMessageOutcome(message, sourceMessageId)
+            : null
+        const interrupted = terminalMessageOutcome?.outcome === 'interrupted'
+        if (role === 'assistant' && activeTurnId && (terminalMessageOutcome || ['stop', 'length'].includes(stopReason))) {
+            for (const [id, activity] of activities) {
+                if (activity.turnId !== activeTurnId) continue
+                const settled = settleActivityAtTurnEnd(activity, messageOccurredAt, terminalMessageOutcome ? 'interrupted' : 'completed')
+                if (settled !== activity) activities.set(id, settled)
+            }
+        }
+        if (terminalMessageOutcome) {
             const errorActivityId = `shared-error:${sourceMessageId}`
             const legacyErrorActivityId = `shared-error:${legacyMessageId}`
             if (errorActivityId !== legacyErrorActivityId) legacyActivityIds.add(legacyErrorActivityId)
@@ -3815,10 +3951,10 @@ export function projectCanonicalTimeline(
                     canonicalMessageId: messageId
                 }
             })
-            if (role === 'assistant' && activeTurnId) {
+            if (activeTurnId) {
                 terminalActivityByTurn.set(activeTurnId, {
                     activityId: errorActivityId,
-                    outcome: interrupted ? 'interrupted' : 'failed'
+                    outcome: terminalMessageOutcome.outcome
                 })
             }
         } else if (role === 'assistant' && activeTurnId) {
@@ -4012,15 +4148,7 @@ function canonicalImageAttachment(
     part: Record<string, unknown>
 ): string | null {
     try {
-        const image = materializeCanonicalImage(canonicalChatId, messageId, partIndex, part)
-        if (!image) return null
-        return [
-            `${partIndex + 1}. Image ${partIndex + 1} [IMAGE]`,
-            `path: ${image.path}`,
-            `mime: ${image.mime}`,
-            `size: ${image.size}`,
-            'origin: Canonical Zyra transcript'
-        ].join('\n')
+        return canonicalImageAttachmentSection(canonicalChatId, messageId, partIndex, part)
     } catch (error) {
         log.warn('[Assistant] Failed to cache a canonical transcript image', { canonicalChatId, messageId, error })
         return null

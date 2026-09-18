@@ -382,7 +382,6 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                         : 'fixed inset-0 z-[80] items-center justify-center bg-black/70 backdrop-blur-md'
             )}
             data-preview-expanded={isExpanded ? 'true' : 'false'}
-            data-zyra-native-view-occluder={isWindowShell ? undefined : 'true'}
             onClick={!isWindowShell && !isExpanded ? handleCloseRequest : undefined}
             style={!isWindowShell && !isExpanded ? { animation: 'fadeIn 0.18s ease-out' } : undefined}
             onWheel={(event) => event.stopPropagation()}

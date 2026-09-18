@@ -187,6 +187,7 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
             summary TEXT NOT NULL,
             detail TEXT,
             turn_id TEXT,
+            turn_terminal_outcome TEXT,
             timeline_sequence INTEGER,
             created_at TEXT NOT NULL,
             payload_json TEXT,
@@ -336,6 +337,7 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_messages', 'modality', 'TEXT')
     ensureTableColumn(db, 'assistant_pending_user_inputs', 'response_message_id', 'TEXT')
     ensureTableColumn(db, 'assistant_activities', 'timeline_sequence', 'INTEGER')
+    ensureTableColumn(db, 'assistant_activities', 'turn_terminal_outcome', 'TEXT')
     ensureTableColumn(db, 'assistant_proposed_plans', 'timeline_sequence', 'INTEGER')
     db.run(`
         CREATE INDEX IF NOT EXISTS idx_assistant_messages_history ON assistant_messages(thread_id, created_at DESC, timeline_sequence DESC, id DESC);

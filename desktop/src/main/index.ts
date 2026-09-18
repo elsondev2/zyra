@@ -1,3 +1,6 @@
+import { assistantUtilityProvisionalUrl } from './assistant-utility-provisional-document'
+import { defaultThemeTokens, resolveDefaultAppearance } from '../shared/preferences/default-theme-tokens'
+import { browserRecordingCapture } from './browser-recording-capture'
 /**
  * Zyra
  * Main Process Entry Point
@@ -13,7 +16,7 @@ import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
 import { ipcMain, registerTrustedIpcSender } from './ipc/trusted-ipc'
-import { configurePreviewTerminalWorkspaceAuthorizer } from './ipc/handlers/preview-terminal-handlers'
+import { configurePreviewTerminalWorkspaceAuthorizer, disposePreviewTerminalRuntime } from './ipc/handlers/preview-terminal-handlers'
 import { configureProjectOpenAnalytics } from './ipc/handlers/project-details-handlers'
 import { configureAssistantService, disposeAssistantService, getAssistantService } from './assistant'
 import { AssistantUtilityWindowManager, type ResolvedUtilityChat, type UtilityWindowCreationOptions } from './assistant/assistant-utility-window-manager'
@@ -25,6 +28,8 @@ import { registerFileProtocol } from './file-protocol'
 import { configureBrowserActionAnalytics, configureBrowserPermissionAnalytics, flushGlobalBrowserProfileStorage, isSafeBrowserNavigationUrl } from './ipc/handlers/browser-preview-handlers'
 import {
     configureWindowsControlOverlayAppearance,
+    configureChromeBrowserAppearance,
+    refreshChromeBrowserAppearance,
     disposeAgentControlBroker,
     getAgentControlBroker,
     refreshWindowsControlOverlayAppearance
@@ -37,6 +42,9 @@ import {
 } from '../shared/contracts/devscope-api'
 import { BrowserPopupManager } from './browser-popup-manager'
 import { BrowserViewManager } from './browser-view-manager'
+import { AccessoryWindowManager } from './accessory-window-manager'
+import { BrowserRecordingOverlayManager } from './browser-recording-overlay'
+import { NativeOverlayManager } from './native-overlay-manager'
 import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionService } from './browser-threat-protection-service'
 import { createDesktopSetupServices } from './setup'
 import { resolveZyraRoot } from './zyra/zyra-root'
@@ -50,6 +58,9 @@ import { normalizeAnalyticsOnboardingStep } from '../shared/analytics/contracts'
 import { buildAssistantFilesShellLaunchRoute } from '../shared/assistant/files-shell-launch-route'
 import { buildQuickPreviewRoute } from '../shared/file-preview-route'
 import { BROWSER_LOCAL_FILE_SCHEME } from '../shared/browser-view'
+import type { AccessoryWindowState } from '../shared/accessories'
+import { configureRuntimeInstallation } from './assistant/runtime-activation'
+import { configureDesktopTerminalEnvironment, desktopNamespaceId } from './assistant/agent-server-namespace'
 
 app.enableSandbox()
 
@@ -98,6 +109,13 @@ function applyRuntimeIdentity(identity: RuntimeIdentity): void {
 }
 
 applyRuntimeIdentity(runtimeIdentity)
+configureDesktopTerminalEnvironment(app.getPath('userData'))
+configureRuntimeInstallation({
+    kind: runtimeIdentity.isDevRuntime ? 'development' : 'installed',
+    namespaceId: desktopNamespaceId(app.getPath('userData')),
+    label: runtimeIdentity.isDevRuntime ? runtimeIdentity.appName.replace('Zyra-dev', 'Development') : 'Installed Zyra',
+    appVersion: app.getVersion()
+})
 
 let mainWindow: BrowserWindow | null = null
 
@@ -131,19 +149,26 @@ async function readMainRendererOverlayAppearance(): Promise<Record<string, unkno
 
 const launchStartedAt = performance.now()
 const setupServices = createDesktopSetupServices(app.getPath('userData'))
+let startupThemeMode: unknown = 'system'
+async function refreshStartupTheme(): Promise<void> {
+    try { startupThemeMode = (await setupServices.preferences.get({ surface: 'desktop' })).settings.appearanceThemeMode }
+    catch (error) { log.warn('[Appearance] could not load startup appearance', error) }
+}
+function startupTheme() {
+    return defaultThemeTokens(resolveDefaultAppearance(startupThemeMode, nativeTheme.shouldUseDarkColors))
+}
+configureChromeBrowserAppearance(async () => {
+    const { settings } = await setupServices.preferences.get({ surface: 'desktop' })
+    return Object.fromEntries(['appearanceThemeMode', 'appearanceLightTheme', 'appearanceDarkTheme', 'accentColor', 'appearanceCustomTheme', 'appearanceCustomThemeActive', 'accessibilityReduceMotion'].map((key) => [key, settings[key]]))
+})
 configureWindowsControlOverlayAppearance(async () => {
     const settings = (await setupServices.preferences.get({ surface: 'desktop' })).settings
     const accent = settings.accentColor && typeof settings.accentColor === 'object' && !Array.isArray(settings.accentColor)
         ? settings.accentColor as Record<string, unknown>
         : {}
-    const themeAppearance = settings.appearanceThemeMode === 'light'
-        ? 'light'
-        : settings.appearanceThemeMode === 'dark'
-            ? 'dark'
-            : nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-    const themeFallback = themeAppearance === 'light'
-        ? { themeBackground: '#f7f7f5', themeSurface: '#ffffff', themeText: '#202124', themeTextSecondary: '#62666d', themeBorder: '#d7d9dc' }
-        : { themeBackground: '#0c121f', themeSurface: '#131c2c', themeText: '#f0f4f8', themeTextSecondary: '#aab4c3', themeBorder: '#2c394c' }
+    const themeAppearance = resolveDefaultAppearance(settings.appearanceThemeMode, nativeTheme.shouldUseDarkColors)
+    const tokens = defaultThemeTokens(themeAppearance)
+    const themeFallback = { themeBackground: tokens.bg, themeSurface: tokens.card, themeText: tokens.text, themeTextSecondary: tokens.textSecondary, themeBorder: tokens.borderSecondary }
     return {
         accentPrimary: typeof accent.primary === 'string' ? accent.primary : undefined,
         accentSecondary: typeof accent.secondary === 'string' ? accent.secondary : undefined,
@@ -160,8 +185,10 @@ const WINDOWS_OVERLAY_APPEARANCE_KEYS = new Set([
     'accessibilityReduceMotion', 'compactMode'
 ])
 setupServices.preferences.subscribe((event) => {
+    if (event.changedKeys.includes('appearanceThemeMode')) void refreshStartupTheme()
     if (event.changedKeys.some((key) => WINDOWS_OVERLAY_APPEARANCE_KEYS.has(key))) {
         setTimeout(refreshWindowsControlOverlayAppearance, 50).unref?.()
+        void refreshChromeBrowserAppearance().catch(() => undefined)
     }
 })
 configureProjectOpenAnalytics((projectPath, outcome) => captureProjectOpenAnalytics(projectPath, outcome))
@@ -289,12 +316,27 @@ function getWindowChromeOptions(): Pick<Electron.BrowserWindowConstructorOptions
 }
 
 function sendAppMenuCommand(command: 'new-chat' | 'search' | 'settings' | 'reload' | 'about'): void {
-    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    if (!mainWindow.isVisible()) mainWindow.show()
-    mainWindow.focus()
-    mainWindow.webContents.send('window:app-menu-command', command)
+    const openingWindow = !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()
+    if (openingWindow) {
+        mainWindow = createWindow(true)
+        ensureIpcHandlersRegistered(mainWindow)
+    }
+    const target = mainWindow!
+    if (target.isMinimized()) target.restore()
+    if (!target.isVisible()) target.show()
+    target.focus()
+    const deliver = () => {
+        if (!target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send('window:app-menu-command', command)
+    }
+    if (openingWindow || target.webContents.isLoadingMainFrame()) target.webContents.once('did-finish-load', deliver)
+    else deliver()
 }
+
+// Fixed destination only. Browser clients never receive arbitrary window control.
+ipcMain.handle('desktop:open-settings', () => {
+    sendAppMenuCommand('settings')
+    return { success: true }
+})
 
 function configureApplicationMenu(setupComplete = true): void {
     if (process.platform !== 'darwin') {
@@ -469,18 +511,33 @@ const browserPopupManager = new BrowserPopupManager({
 })
 browserPopupManager.registerIpc()
 
+const accessoryWindowManager = new AccessoryWindowManager({
+    rootPath: app.getPath('home'),
+    createWindow: createAccessoryShellWindow,
+    canOpen: () => setupServices.onboarding.isAccessAllowed(),
+    onTerminalWindowClosed: disposePreviewTerminalRuntime
+})
+accessoryWindowManager.registerIpc()
+
 let assistantUtilityWindowManager!: AssistantUtilityWindowManager
 const browserViewManager = new BrowserViewManager({
     popupManager: browserPopupManager,
     resolveOwnerId: (window) => {
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow === window) return 'main'
         const utilityWindowId = assistantUtilityWindowManager?.windowIdForWebContents(window.webContents.id)
-        return utilityWindowId ? `utility:${utilityWindowId}` : null
+        if (utilityWindowId) return `utility:${utilityWindowId}`
+        const accessoryWindowId = accessoryWindowManager.windowIdForWebContents(window.webContents.id)
+        return accessoryWindowId ? `accessory:${accessoryWindowId}` : null
     },
     canUseBrowser: () => setupServices.onboarding.isAccessAllowed(),
     captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties })
 })
+accessoryWindowManager.setBrowserViews(browserViewManager)
 browserViewManager.registerIpc()
+const browserRecordingOverlayManager = new BrowserRecordingOverlayManager({ browserViews: browserViewManager, preloadPath: getPreloadPath() })
+browserRecordingOverlayManager.registerIpc()
+const nativeOverlayManager = new NativeOverlayManager()
+nativeOverlayManager.registerIpc()
 isIncognitoBrowserWebContents = (webContentsId) => (
     browserViewManager.isIncognitoWebContents(webContentsId)
     || browserPopupManager.isIncognitoWebContents(webContentsId)
@@ -514,6 +571,11 @@ configurePreviewTerminalWorkspaceAuthorizer(async (event, owner) => {
         const runtimeId = await assistantUtilityWindowManager.resolveOwnedTerminalRuntimeId(event.sender.id, owner.tabId)
         if (runtimeId) return runtimeId
         throw new Error('Terminal tab identity does not belong to this Zyra window.')
+    }
+    if (owner?.kind === 'accessory-window') {
+        const runtimeId = accessoryWindowManager.resolveOwnedTerminalRuntimeId(event.sender.id, owner.workspaceId)
+        if (runtimeId) return runtimeId
+        throw new Error('Terminal accessory identity does not belong to this Zyra window.')
     }
     throw new Error('Preview terminal workspace owner is invalid.')
 })
@@ -594,7 +656,7 @@ function extractShellLaunchTargetFromArgv(argv: string[]): ShellLaunchTarget | n
 
 function ensureIpcHandlersRegistered(targetWindow: BrowserWindow): void {
     if (hasRegisteredIpcHandlers) return
-    registerIpcHandlers(targetWindow, setupServices)
+    registerIpcHandlers(targetWindow, setupServices, () => mainWindow)
     hasRegisteredIpcHandlers = true
 }
 
@@ -624,6 +686,7 @@ function isTrustedRendererLocation(value: string): boolean {
 
 function configureTrustedRendererWindow(window: BrowserWindow): void {
     registerTrustedIpcSender(window.webContents, isTrustedRendererLocation)
+    nativeOverlayManager.registerOwner(window)
     window.webContents.on('will-navigate', (event, url) => {
         if (!isTrustedRendererLocation(url)) event.preventDefault()
     })
@@ -638,18 +701,26 @@ function configureMainRendererMediaPermissions(): void {
         Boolean(webContents && mainWindow && !mainWindow.isDestroyed() && webContents.id === mainWindow.webContents.id)
     )
 
-    session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => (
-        permission === 'media'
-        && details.isMainFrame
-        && details.mediaType === 'audio'
-        && isTrustedMainRenderer(webContents)
+    // A recording grant opens only the exact owner frame's display request.
+    // Ordinary microphone access stays audio-only, including detached recorders.
+    const canUseMicrophone = (contents: Electron.WebContents | null) => (
+        isTrustedMainRenderer(contents) || browserRecordingCapture.hasRecording(contents)
+    )
+    session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => (
+        details.isMainFrame && (
+            (permission === 'media' && browserRecordingCapture.hasGrant(contents))
+            || (permission === 'media' && details.mediaType === 'audio' && canUseMicrophone(contents))
+        )
     ))
-    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
         const mediaTypes = permission === 'media' && 'mediaTypes' in details && Array.isArray(details.mediaTypes)
             ? details.mediaTypes
             : []
         const audioOnly = mediaTypes.length > 0 && mediaTypes.every((mediaType) => mediaType === 'audio')
-        callback(permission === 'media' && details.isMainFrame && audioOnly && isTrustedMainRenderer(webContents))
+        callback(details.isMainFrame && (
+            ((permission === 'display-capture' || permission === 'media') && browserRecordingCapture.hasGrant(contents))
+            || (permission === 'media' && audioOnly && canUseMicrophone(contents))
+        ))
     })
 }
 
@@ -662,7 +733,7 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         minHeight: 600,
         show: false,
         ...getWindowChromeOptions(),
-        backgroundColor: '#0c121f',
+        backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -689,6 +760,8 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     })
 
     window.webContents.setWindowOpenHandler((details) => {
+        const overlay = nativeOverlayManager.handleWindowOpen(window, details)
+        if (overlay) return overlay
         shell.openExternal(details.url)
         return { action: 'deny' }
     })
@@ -713,15 +786,58 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     return window
 }
 
-function escapeUtilityProvisionalText(value: string): string {
-    return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character)
-}
-
-function assistantUtilityProvisionalUrl(options: UtilityWindowCreationOptions): string {
-    const label = escapeUtilityProvisionalText(String(options.label || 'Workspace').slice(0, 160))
-    const accent = /^#[0-9a-f]{6}$/i.test(String(options.accentColor || '')) ? String(options.accentColor) : '#5b8cff'
-    const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><title>Zyra</title><style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#0c121f;color:#f0f4f8;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}.bar{height:34px;display:flex;align-items:center;border-bottom:1px solid #222d3f;background:#101827;box-shadow:inset 0 2px 0 ${accent}}.brand{width:76px;height:100%;display:flex;align-items:center;padding:0 12px;border-right:1px solid #222d3f;color:#aeb7c5;font-size:11px;font-weight:650}.tab{height:28px;max-width:220px;margin-left:4px;padding:0 10px;display:flex;align-items:center;gap:7px;border:1px solid color-mix(in srgb,${accent} 30%,#2a3548);border-radius:6px;background:color-mix(in srgb,${accent} 10%,#131c2c);font-size:10px;font-weight:600}.dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:${accent}}.label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.surface{height:calc(100% - 34px);display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 36%,color-mix(in srgb,${accent} 8%,transparent),transparent 42%),#0c121f}.status{display:flex;align-items:center;gap:8px;color:#7f8a9b;font-size:11px}.spinner{width:12px;height:12px;border:1.5px solid #344158;border-top-color:${accent};border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}</style></head><body><div class="bar"><div class="brand">Zyra</div><div class="tab"><span class="dot"></span><span class="label">${label}</span></div></div><div class="surface"><div class="status"><span class="spinner"></span><span>${label}</span></div></div></body></html>`
-    return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+function createAccessoryShellWindow(state: AccessoryWindowState): BrowserWindow {
+    const iconPath = getAppIconPath()
+    const title = state.kind === 'browser'
+        ? state.sessionMode === 'incognito' ? 'Zyra Incognito Browser' : 'Zyra Browser'
+        : state.kind === 'terminal' ? 'Zyra Terminal' : 'Zyra File Explorer'
+    const window = new BrowserWindow({
+        width: state.kind === 'browser' ? 1200 : 1120,
+        height: 800,
+        minWidth: 720,
+        minHeight: 480,
+        show: false,
+        title,
+        ...getWindowChromeOptions(),
+        backgroundColor: startupTheme().bg,
+        ...(iconPath ? { icon: iconPath } : {}),
+        webPreferences: {
+            preload: getPreloadPath(),
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            webviewTag: false,
+            backgroundThrottling: false,
+            devTools: is.dev
+        }
+    })
+    configureTrustedRendererWindow(window)
+    window.setMenu(null)
+    window.setMenuBarVisibility(false)
+    window.on('ready-to-show', () => {
+        if (!window.isDestroyed()) {
+            if (state.provisional) window.showInactive()
+            else {
+                window.show()
+                window.focus()
+            }
+        }
+    })
+    window.on('focus', () => lockWindowZoom(window))
+    window.webContents.on('did-finish-load', () => lockWindowZoom(window))
+    window.webContents.on('will-navigate', (event, url) => {
+        if (!isTrustedRendererLocation(url)) event.preventDefault()
+    })
+    window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+        if (isMainFrame) log.error('[AccessoryRenderer] load failed', { code, description, url, kind: state.kind })
+    })
+    window.webContents.setWindowOpenHandler((details) => nativeOverlayManager.handleWindowOpen(window, details) || { action: 'deny' })
+    registerEditableContextMenu(window)
+    attachWindowStateEvents(window)
+    lockWindowZoom(window)
+    loadRendererRoute(window, `/accessories?workspaceId=${encodeURIComponent(state.id)}&kind=${state.kind}&sessionMode=${state.sessionMode}`)
+    registerUpdateWindow(window)
+    return window
 }
 
 function createAssistantUtilityShellWindow(windowId: string, creationOptions: UtilityWindowCreationOptions = {}): BrowserWindow {
@@ -734,7 +850,7 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
         show: false,
         title: 'Zyra',
         ...getWindowChromeOptions(),
-        backgroundColor: '#0c121f',
+        backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -755,12 +871,12 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
     window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
         if (isMainFrame) log.error('[AssistantUtilityRenderer] load failed', { code, description, url })
     })
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.setWindowOpenHandler(details => nativeOverlayManager.handleWindowOpen(window, details) || { action: 'deny' })
     registerEditableContextMenu(window)
     attachWindowStateEvents(window)
     lockWindowZoom(window)
     if (creationOptions.provisional) {
-        void window.loadURL(assistantUtilityProvisionalUrl(creationOptions))
+        void window.loadURL(assistantUtilityProvisionalUrl(creationOptions, resolveDefaultAppearance(startupThemeMode, nativeTheme.shouldUseDarkColors)))
     } else {
         loadRendererRoute(window, `/assistant-utility/${encodeURIComponent(windowId)}`)
     }
@@ -805,7 +921,7 @@ function createBrowserPopupShellWindow(input: {
             show: false,
             title: 'Zyra Browser',
             ...getWindowChromeOptions(),
-            backgroundColor: '#0c121f',
+            backgroundColor: startupTheme().bg,
             ...(iconPath ? { icon: iconPath } : {}),
             webPreferences: {
                 preload: getPreloadPath(),
@@ -824,7 +940,7 @@ function createBrowserPopupShellWindow(input: {
         popupWindow.on('focus', () => popupWindow && lockWindowZoom(popupWindow))
         popupWindow.webContents.on('did-finish-load', () => popupWindow && lockWindowZoom(popupWindow))
         popupWindow.webContents.on('will-navigate', (event) => event.preventDefault())
-        popupWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+        popupWindow.webContents.setWindowOpenHandler(details => popupWindow ? nativeOverlayManager.handleWindowOpen(popupWindow, details) || { action: 'deny' } : { action: 'deny' })
         registerEditableContextMenu(popupWindow)
         attachWindowStateEvents(popupWindow)
         lockWindowZoom(popupWindow)
@@ -856,7 +972,7 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
         minHeight: 520,
         show: false,
         ...getWindowChromeOptions(),
-        backgroundColor: '#0c121f',
+        backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -883,6 +999,8 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
         lockWindowZoom(window)
     })
     window.webContents.setWindowOpenHandler((details) => {
+        const overlay = nativeOverlayManager.handleWindowOpen(window, details)
+        if (overlay) return overlay
         shell.openExternal(details.url)
         return { action: 'deny' }
     })
@@ -1068,6 +1186,7 @@ app.whenReady().then(async () => {
     void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
+    await refreshStartupTheme()
     await setupServices.analytics.initialize()
     const initialOnboardingSnapshot = await setupServices.onboarding.initialize().catch((error) => {
         log.error('[Onboarding] failed to hydrate mandatory setup state', error)
@@ -1087,6 +1206,7 @@ app.whenReady().then(async () => {
         log.warn('[OpenAI] connection prewarm failed', error)
     })
     configureAssistantService({
+        getDefaultProjectsFolder: () => setupServices.preferences.getConfiguredProjectsFolder(),
         getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults(),
         getProjectDiscoveryRoots: () => setupServices.preferences.getProjectDiscoveryRoots(),
         openDesktopWorkspace: (request) => assistantUtilityWindowManager.openFromTui(request),
@@ -1132,7 +1252,7 @@ app.whenReady().then(async () => {
         log.warn('[BrowserClientHost] could not initialize', error)
         browserClientRuntime = null
     }
-    registerFileProtocol(FILE_PROTOCOL)
+    registerFileProtocol(FILE_PROTOCOL, is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined)
     configureMainRendererMediaPermissions()
     nativeTheme.on('updated', () => {
         syncOpenWindowIcons()
@@ -1227,21 +1347,24 @@ app.on('before-quit', (event) => {
         event: 'zyra_v1_app_lifecycle',
         properties: { action: 'shutdown', outcome: 'started' }
     })
-    void flushGlobalBrowserProfileStorage().then(() => {
+    void flushGlobalBrowserProfileStorage().then(async () => {
         globalShortcut.unregisterAll()
+        browserRecordingOverlayManager.dispose()
+        nativeOverlayManager.dispose()
         browserViewManager.dispose()
         const browserRuntime = browserClientRuntime
         browserClientRuntime = null
         disposeUpdater()
-        return Promise.all([
+        // Disconnect external callers before closing the assistant database.
+        await Promise.all([
             browserRuntime?.stop().catch((error) => log.warn('[Shutdown] Browser runtime cleanup failed', error)),
-            disposeAssistantService(),
             assistantUtilityWindowManager.dispose(),
             setupServices.auth.dispose().catch((error) => log.warn('[Shutdown] OpenAI auth worker cleanup failed', error)),
             disposeAgentControlBroker().catch((error) => log.warn('[Shutdown] Agent Control cleanup failed', error)),
             disposeBrowserThreatProtectionService().catch((error) => log.warn('[Shutdown] Browser phishing protection cleanup failed', error)),
             setupServices.analytics.flush(1_500)
         ])
+        await disposeAssistantService()
     }).then(async () => {
         await setupServices.analytics.shutdown(250)
         rendererHangRecorder.dispose()

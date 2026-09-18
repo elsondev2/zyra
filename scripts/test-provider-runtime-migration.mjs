@@ -30,7 +30,14 @@ for (const path of retiredDesktopModules) {
 for (const path of sourceFiles(desktopSourceRoot)) {
   const source = readFileSync(path, "utf8");
   const label = relative(root, path);
-  assert.doesNotMatch(source, /(?:codex\.cmd|codex\.exe|CODEX_HOME|[\\/]\.codex[\\/]|["']\.codex["']|auth\.json|app-server)/iu, `${label} must not depend on a Codex executable, app-server, or auth file`);
+  assert.doesNotMatch(source, /(?:codex\.cmd|codex\.exe|auth\.json|app-server)/iu, `${label} must not depend on a Codex executable, app-server, or auth file`);
+  const usageHistoryDiscovery = label.replaceAll('\\', '/') === 'desktop/src/main/assistant/usage/harness-index.ts';
+  if (usageHistoryDiscovery) {
+    assert.doesNotMatch(source, /node:child_process|\b(?:spawn|spawnSync|execFile)\s*\(/u, 'usage history discovery must not launch a harness');
+    assert.match(source, /paths: \[join\(codex,'sessions'\), join\(codex,'archived_sessions'\)\]/u, 'Codex usage discovery is limited to saved history, not account credentials');
+  } else {
+    assert.doesNotMatch(source, /(?:CODEX_HOME|[\\/]\.codex[\\/]|["']\.codex["'])/iu, `${label} must not use a Codex home outside local usage history discovery`);
+  }
   if (basename(path).toLowerCase().includes("codex")) {
     assert.doesNotMatch(source, /node:child_process|\b(?:spawn|spawnSync|execFile)\s*\(/u, `${label} must not retain a Codex process boundary`);
   }
@@ -70,7 +77,7 @@ const tuiRuntime = read("src/agent-server/tui-runtime.mjs");
 assert.match(tuiRuntime, /async syncAuthProvider\(providerValue\)[\s\S]*modelRegistry\.authStorage\.modelRuntime\.refresh[\s\S]*client\.request\("auth\.refresh"/u, "the TUI refreshes its local snapshot and requests a server-wide auth refresh");
 const agentServer = read("src/agent-server/server.mjs");
 assert.match(agentServer, /refreshAuthProvider[\s\S]*new Set\(this\.sessions\.values\(\)\)[\s\S]*disposable SDK runtimes[\s\S]*session\.request\(client, "auth\.refresh"/u, "auth changes refresh every live server-owned chat runtime while leaving disposable utility runtimes uncached");
-assert.match(tuiRuntime, /async setModel\(nextModel\)[\s\S]*await syncRemoteChatConfig\(\)[\s\S]*currentModel = previousModel/u, "remote model switches wait for server acceptance and roll back on failure");
+assert.match(tuiRuntime, /async setModel\(nextModel\)[\s\S]*await syncRemoteChatConfig\(\{ model: [^\n]+\}\)[\s\S]*if \(currentModel === nextModel\) currentModel = previousModel/u, "remote model switches wait for server acceptance and roll back on failure");
 const slashHandlers = read("src/slash-command-handlers.mjs");
 assert.match(slashHandlers, /syncAuthProvider\?\.\(provider\)/u, "auth setup waits for server credential refresh before switching models");
 const sdkRuntime = read("src/zyra-sdk.mjs");

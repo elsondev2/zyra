@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { addOverlayEventListener, addOverlayWindowBlurListener, NativeOverlayPortal } from './native-overlay-portal'
 
 function formatLinkTarget(anchor: HTMLAnchorElement): string | null {
     const rawHref = anchor.getAttribute('href')?.trim()
@@ -35,8 +36,9 @@ export default function LinkHoverStatus() {
 
     useEffect(() => {
         const getAnchor = (node: EventTarget | null): HTMLAnchorElement | null => {
-            if (!(node instanceof Element)) return null
-            return node.closest('a[href]') as HTMLAnchorElement | null
+            const element = node as Element | null
+            if (element?.nodeType !== 1) return null
+            return element.closest('a[href]') as HTMLAnchorElement | null
         }
 
         const commitTarget = (nextTarget: string | null) => {
@@ -100,32 +102,30 @@ export default function LinkHoverStatus() {
 
         const clearTarget = () => showForAnchor(null)
 
-        document.addEventListener('pointerover', handlePointerOver, true)
-        document.addEventListener('pointerout', handlePointerOut, true)
-        document.addEventListener('focusin', handleFocusIn, true)
-        document.addEventListener('focusout', handleFocusOut, true)
-        window.addEventListener('blur', clearTarget)
+        const removeListeners = [
+            addOverlayEventListener('pointerover', handlePointerOver, true),
+            addOverlayEventListener('pointerout', handlePointerOut, true),
+            addOverlayEventListener('focusin', handleFocusIn, true),
+            addOverlayEventListener('focusout', handleFocusOut, true),
+            addOverlayWindowBlurListener(clearTarget)
+        ]
 
         return () => {
             if (rafRef.current !== null) {
                 window.cancelAnimationFrame(rafRef.current)
                 rafRef.current = null
             }
-            document.removeEventListener('pointerover', handlePointerOver, true)
-            document.removeEventListener('pointerout', handlePointerOut, true)
-            document.removeEventListener('focusin', handleFocusIn, true)
-            document.removeEventListener('focusout', handleFocusOut, true)
-            window.removeEventListener('blur', clearTarget)
+            removeListeners.forEach(remove => remove())
         }
     }, [])
 
     if (!target) return null
 
-    return (
+    return <NativeOverlayPortal passive>
         <div
             className="fixed left-3 bottom-2 z-[9999] max-w-[65vw] truncate rounded-md border border-white/10 bg-sparkle-card/95 px-2 py-1 text-[11px] text-sparkle-text-secondary shadow-lg backdrop-blur-sm pointer-events-none"
         >
             {target}
         </div>
-    )
+    </NativeOverlayPortal>
 }

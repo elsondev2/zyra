@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { ONBOARDING_STEPS, getPreviousOnboardingStep, type OnboardingStep } from '@shared/onboarding/contracts'
 import type { AnalyticsStatus } from '@shared/analytics/contracts'
 import { getDesktopAnalyticsStatus, onDesktopAnalyticsStatusChange, setDesktopAnalyticsEnabled } from '@/lib/product-analytics'
 import { useSettings } from '@/lib/settings'
 import { useOnboarding } from '@/lib/onboarding'
-import { cn } from '@/lib/utils'
+import { getThemeDefinition } from '@/lib/settings-theme-catalog'
+import { onboardingThemeStyle } from './onboarding-theme'
+import { useThemeReveal, type ThemeRevealOrigin } from './useThemeReveal'
+import { OnboardingShowcase } from './OnboardingShowcase'
+import { OnboardingStage } from './OnboardingStage'
+import { OnboardingFooter } from './OnboardingFooter'
 import { OnboardingBackground } from './OnboardingBackground'
 import { OnboardingChrome } from './OnboardingChrome'
 import './OnboardingFlow.css'
@@ -24,18 +28,18 @@ type StepTransitionDirection = 'forward' | 'backward'
 
 const STEP_LABELS: Record<OnboardingStep, string> = {
     welcome: 'Welcome',
-    'connect-openai': 'Connect ChatGPT',
+    'connect-openai': 'Connect a provider',
     appearance: 'Choose your look',
-    projects: 'Choose your projects folder',
+    projects: 'Choose a projects folder',
     review: 'Review setup'
 }
 
 const STEP_DESCRIPTIONS: Record<OnboardingStep, string> = {
     welcome: '',
-    'connect-openai': 'Sign in with ChatGPT to start using Zyra.',
-    appearance: 'Pick the appearance that feels right.',
+    'connect-openai': 'Choose how Zyra connects to its models.',
+    appearance: 'Make this space feel like yours.',
     projects: 'Choose the folder where you keep your work.',
-    review: 'Check the essentials before opening Zyra.'
+    review: 'Your essentials are ready. You can change them later in Settings.'
 }
 
 export function OnboardingFlow() {
@@ -46,6 +50,9 @@ export function OnboardingFlow() {
 
     const [appearance, setAppearance] = useState(() => createAppearanceSelection(settings, record))
     const [projects, setProjects] = useState(() => createProjectsSelection(settings, record))
+    const revealTheme = useThemeReveal(settings.accessibilityReduceMotion)
+    const resolvedMode = appearance.appearanceThemeMode === 'system' ? settings.appearanceResolvedMode : appearance.appearanceThemeMode
+    const selectedTheme = getThemeDefinition(resolvedMode === 'light' ? appearance.appearanceLightTheme : appearance.appearanceDarkTheme)
     const latestAppearance = useRef(appearance)
     const appearanceRevision = useRef(record.revision)
     const appearanceSavesPending = useRef(0)
@@ -57,7 +64,6 @@ export function OnboardingFlow() {
     const [analyticsError, setAnalyticsError] = useState<string | null>(null)
     const transitionDirection = useRef<StepTransitionDirection>('forward')
     const actionInFlight = useRef(false)
-    const stepScrollRef = useRef<HTMLDivElement | null>(null)
     const auth = useOpenAiStatus(onboarding.getAuthStatus, record.currentStep === 'connect-openai')
 
     useEffect(() => {
@@ -79,10 +85,6 @@ export function OnboardingFlow() {
         settings.appearanceThemeMode,
         settings.appearanceUiFont
     ])
-
-    useEffect(() => {
-        if (stepScrollRef.current) stepScrollRef.current.scrollTop = 0
-    }, [record.currentStep])
 
     useEffect(() => {
         let cancelled = false
@@ -173,10 +175,10 @@ export function OnboardingFlow() {
         }
     }
 
-    const changeAppearance = (nextAppearance: typeof appearance) => {
+    const changeAppearance = (nextAppearance: typeof appearance, origin?: ThemeRevealOrigin) => {
         if (actionInFlight.current) return
         latestAppearance.current = nextAppearance
-        setAppearance(nextAppearance)
+        revealTheme(() => setAppearance(nextAppearance), origin)
         setError(null)
         appearanceSavesPending.current += 1
         const save = appearanceSaveQueue.current
@@ -261,106 +263,51 @@ export function OnboardingFlow() {
         ? 'Ready to open Zyra'
         : STEP_LABELS[record.currentStep]
     const stepDescription = record.currentStep === 'review' && !record.reviewActive
-        ? 'Everything is ready.'
+        ? 'Your essentials are ready. You can change them later in Settings.'
         : STEP_DESCRIPTIONS[record.currentStep]
     const continueLabel = record.currentStep === 'review'
         ? record.reviewActive ? 'Save setup' : 'Open Zyra'
         : 'Continue'
     const recovery = onboarding.snapshot?.recovery
-    const stepMotionClass = transitionDirection.current === 'backward'
-        ? 'onboarding-step-enter-backward'
-        : 'onboarding-step-enter-forward'
-
     return (
-        <div className="relative h-screen overflow-hidden bg-sparkle-bg text-sparkle-text">
-            <OnboardingBackground />
+        <div className="relative h-screen overflow-hidden bg-sparkle-bg text-sparkle-text" style={onboardingThemeStyle(selectedTheme)}>
+            <OnboardingBackground theme={selectedTheme} />
             <OnboardingChrome reviewActive={record.reviewActive} onExitReview={record.reviewActive ? () => void exitReview() : undefined} />
 
             <main className="relative z-10 h-full pt-[34px]">
-                {record.currentStep === 'welcome' ? (
-                    <div className="flex h-full min-h-0 overflow-y-auto px-6 pb-[12vh] pt-[4vh]">
-                        <div key="welcome" className={cn('onboarding-step-transition-surface m-auto w-full', stepMotionClass)}>
-                            {recovery ? (
-                                <p role="status" className="mx-auto mb-8 max-w-[520px] text-center text-[11px] leading-5 text-[var(--status-warning)]">
-                                    Your previous setup checkpoint could not be read, so Zyra started a fresh review.
-                                </p>
-                            ) : null}
-                            <WelcomeStep
-                                saving={saving}
-                                error={error}
-                                onStart={() => void continueStep()}
-                            />
-                        </div>
-                    </div>
-                ) : (
-                    <div className="relative h-full min-h-0">
-                        <div className="onboarding-fixed-heading">
-                            <header key={`heading-${record.currentStep}`} className={cn('onboarding-step-transition-surface text-center', stepMotionClass)}>
-                                <h1 id="onboarding-step-title" className="text-[27px] font-medium tracking-[-0.04em] text-sparkle-text sm:text-[30px]">{stepTitle}</h1>
-                                <p className="mt-2 text-[13px] leading-5 text-sparkle-text-secondary">{stepDescription}</p>
+                <OnboardingStage step={record.currentStep} direction={transitionDirection.current} reducedMotion={settings.accessibilityReduceMotion} decoration={<OnboardingShowcase theme={selectedTheme} />}>
+                    {record.currentStep === 'welcome' ? (
+                        <WelcomeStep saving={saving} error={error} onStart={() => void continueStep()} />
+                    ) : <>
+                        {record.currentStep !== 'connect-openai' ? (
+                            <header className="onboarding-step-heading text-center">
+                                <h1 id="onboarding-step-title" className="text-[28px] font-medium tracking-[-0.035em] text-sparkle-text">{stepTitle}</h1>
+                                <p className="mx-auto mt-3 max-w-[360px] text-[13px] leading-[1.7] text-sparkle-text-secondary">{stepDescription}</p>
                             </header>
-                        </div>
+                        ) : null}
+                        {record.currentStep === 'connect-openai' ? (
+                            <ConnectOpenAiStep status={auth.status} loading={auth.loading} activity={auth.activity} error={auth.error}
+                                onRefresh={auth.refresh} onConnectChatGpt={() => runAuth('chatgpt', onboarding.connectChatGpt)}
+                                onConnectApiKey={apiKey => runAuth('api-key', () => onboarding.connectApiKey(apiKey))} />
+                        ) : null}
+                        {record.currentStep === 'appearance' ? <AppearanceStep selection={appearance} onChange={changeAppearance} /> : null}
+                        {record.currentStep === 'projects' ? <ProjectsStep selection={projects} onChange={setProjects} /> : null}
+                        {record.currentStep === 'review' ? (
+                            <ReviewStep record={record} analyticsChoice={analyticsChoice} analyticsConfigured={analyticsStatus?.configured === true}
+                                analyticsManagedByEnvironment={analyticsStatus?.canChangeEnabled === false} analyticsLoading={analyticsLoading}
+                                analyticsError={analyticsError} onAnalyticsChoice={enabled => { void setAnalyticsChoice(enabled) }} />
+                        ) : null}
+                    </>}
+                    {recovery ? <p role="status" className="mx-auto mt-5 max-w-[440px] text-center text-[11px] leading-5 text-[var(--status-warning)]">Zyra recovered setup from a fresh checkpoint.</p> : null}
+                </OnboardingStage>
 
-                        <div ref={stepScrollRef} className="onboarding-fixed-step-scroll px-6 sm:px-10">
-                            <section key={record.currentStep} aria-labelledby="onboarding-step-title" className={cn('onboarding-step-content onboarding-step-transition-surface mx-auto w-full max-w-[640px]', stepMotionClass)}>
-                                {recovery ? (
-                                    <p role="status" className="mb-7 text-center text-[11px] leading-5 text-[var(--status-warning)]">
-                                        Zyra recovered setup from a fresh checkpoint.
-                                    </p>
-                                ) : null}
-
-                                <div>
-                                    {record.currentStep === 'connect-openai' ? (
-                                        <ConnectOpenAiStep
-                                            status={auth.status}
-                                            loading={auth.loading}
-                                            activity={auth.activity}
-                                            error={auth.error}
-                                            onRefresh={auth.refresh}
-                                            onConnectChatGpt={() => runAuth('chatgpt', onboarding.connectChatGpt)}
-                                            onConnectApiKey={(apiKey) => runAuth('api-key', () => onboarding.connectApiKey(apiKey))}
-                                        />
-                                    ) : null}
-                                    {record.currentStep === 'appearance' ? <AppearanceStep selection={appearance} onChange={changeAppearance} /> : null}
-                                    {record.currentStep === 'projects' ? <ProjectsStep selection={projects} onChange={setProjects} /> : null}
-                                    {record.currentStep === 'review' ? (
-                                        <ReviewStep
-                                            record={record}
-                                            analyticsChoice={analyticsChoice}
-                                            analyticsConfigured={analyticsStatus?.configured === true}
-                                            analyticsManagedByEnvironment={analyticsStatus?.canChangeEnabled === false}
-                                            analyticsLoading={analyticsLoading}
-                                            analyticsError={analyticsError}
-                                            onAnalyticsChoice={(enabled) => { void setAnalyticsChoice(enabled) }}
-                                        />
-                                    ) : null}
-                                </div>
-                            </section>
-                        </div>
-
-                        <footer className="onboarding-action-dock">
-                            {error ? <p role="alert" className="onboarding-action-error">{error}</p> : null}
-                            <div className="onboarding-action-row">
-                                <button type="button" disabled={saving} onClick={() => void goBack()} className="inline-flex h-11 w-[120px] items-center justify-center gap-1.5 rounded-md text-[12px] font-medium text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:opacity-45">
-                                    <ArrowLeft size={13} />Back
-                                </button>
-
-                                <div className="onboarding-dock-progress" aria-label={`Setup step ${currentIndex + 1} of ${ONBOARDING_STEPS.length}: ${STEP_LABELS[record.currentStep]}`}>
-                                    <div className="mb-2 text-center text-[10px] font-medium text-sparkle-text-muted">
-                                        {currentIndex + 1} of {ONBOARDING_STEPS.length}
-                                    </div>
-                                    <div className="h-px overflow-hidden bg-[color-mix(in_srgb,var(--color-text)_14%,transparent)]">
-                                        <div className="h-full bg-[var(--accent-primary)] transition-[width] duration-300 ease-out motion-reduce:transition-none" style={{ width: `${((currentIndex + 1) / ONBOARDING_STEPS.length) * 100}%` }} />
-                                    </div>
-                                </div>
-
-                                <button type="button" disabled={saving || analyticsLoading || !canContinue || !projectReady} onClick={() => void continueStep()} className="inline-flex h-11 w-[120px] items-center justify-center gap-1.5 rounded-md bg-[var(--accent-primary)] px-4 text-[12px] font-semibold text-[var(--accent-on-primary)] shadow-[0_8px_24px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0">
-                                    {continueLabel}{record.currentStep !== 'review' ? <ArrowRight size={13} /> : null}
-                                </button>
-                            </div>
-                        </footer>
-                    </div>
-                )}
+                <OnboardingFooter
+                    visible={record.currentStep !== 'welcome'} index={currentIndex} total={ONBOARDING_STEPS.length}
+                    stepLabel={STEP_LABELS[record.currentStep]} continueLabel={continueLabel} finalStep={record.currentStep === 'review'}
+                    backDisabled={saving} continueDisabled={saving || analyticsLoading || !canContinue || !projectReady}
+                    reducedMotion={settings.accessibilityReduceMotion} direction={transitionDirection.current} error={error}
+                    onBack={() => void goBack()} onContinue={() => void continueStep()}
+                />
             </main>
         </div>
     )

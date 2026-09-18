@@ -1,3 +1,4 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { Copy, ExternalLink, FolderOpen, MousePointer2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type {
@@ -85,7 +86,7 @@ export function AssistantInspectorDeveloperToast({
 
     if (hasImage && artifact?.thumbnailDataUrl) {
         return (
-            <div
+            <AnchoredNativeOverlay><div
                 className="absolute bottom-3 right-3 z-[390] w-[min(320px,calc(100%-24px))]"
                 style={{
                     transform: toast.closing ? 'translate3d(calc(100% + 24px),0,0)' : `translate3d(${dragX}px,0,0)`,
@@ -97,7 +98,7 @@ export function AssistantInspectorDeveloperToast({
                 aria-label={annotation ? 'Browser annotation attached' : 'Browser screenshot captured'}
                 onPointerDown={(event) => {
                     const target = event.target
-                    if (event.button !== 0 || (target instanceof Element && target.closest('button'))) return
+                    if (event.button !== 0 || (target as Element | null)?.closest?.('button')) return
                     event.preventDefault()
                     dragStartXRef.current = event.clientX
                     setDragging(true)
@@ -128,12 +129,12 @@ export function AssistantInspectorDeveloperToast({
                         <button type="button" onClick={onDismiss} className={cn(ACTION_CLASS, 'w-7 justify-center px-0')} aria-label="Close preview"><X size={11} /></button>
                     </div>
                 </div>
-            </div>
+            </div></AnchoredNativeOverlay>
         )
     }
 
     return (
-        <div
+        <AnchoredNativeOverlay><div
             className={cn(
                 'absolute bottom-3 right-3 z-[390] flex max-w-[min(320px,calc(100%-24px))] items-center gap-2 rounded-lg border bg-[var(--color-card)] px-2.5 py-2 text-[10px] shadow-lg transition-[transform,opacity] duration-200',
                 toast.closing && 'translate-x-[calc(100%_+_24px)] opacity-0',
@@ -145,6 +146,6 @@ export function AssistantInspectorDeveloperToast({
             <span className="min-w-0 flex-1">{toast.message || (artifact ? 'Capture ready' : 'Done')}</span>
             {artifact ? <button type="button" onClick={() => void window.devscope.openBrowserPreviewArtifact(artifact.artifactId)} className={ACTION_CLASS}>Open</button> : null}
             <button type="button" onClick={onDismiss} className="inline-flex size-6 items-center justify-center rounded bg-[var(--surface-floating)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-card)_82%,var(--accent-primary)_18%)]" aria-label="Dismiss"><X size={11} /></button>
-        </div>
+        </div></AnchoredNativeOverlay>
     )
 }

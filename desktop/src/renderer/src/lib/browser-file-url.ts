@@ -22,5 +22,6 @@ export function projectLocalFileUrl(source: string): string {
         }
     }
     if (!zyraSource.startsWith('zyra://')) return value
-    return `${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}${BROWSER_FILE_BRIDGE_PATH}?source=${encodeURIComponent(zyraSource)}`
+    const prefix = window.location?.protocol === 'chrome-extension:' ? '/__zyra_browser_assistant' : BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX
+    return `${prefix}${BROWSER_FILE_BRIDGE_PATH}?source=${encodeURIComponent(zyraSource)}`
 }

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ArrowRight, Check, ChevronRight, FolderOpen, Info, KeyRound, Palette, RefreshCw } from 'lucide-react'
+import { useEffect, useState, type CSSProperties } from 'react'
+import { ArrowRight, ChevronRight, FolderOpen, Info, Palette } from 'lucide-react'
 import type {
     OnboardingAppearanceSelection,
     OnboardingAuthStatus,
@@ -8,11 +8,8 @@ import type {
 } from '@shared/onboarding/contracts'
 import { useSettings, type Settings } from '@/lib/settings'
 import { getThemeDefinition } from '@/lib/settings-theme-catalog'
-import { AppearanceSystemThemeCard, AppearanceThemeCard } from '@/pages/settings/appearance/AppearancePreviews'
-import { AppearanceThemeSelector } from '@/pages/settings/appearance/AppearanceThemeSelect'
-import { SettingsInput, SettingsSwitch } from '@/pages/settings/settings-layout'
+import { SettingsSwitch } from '@/pages/settings/settings-layout'
 import { OpenAiLogo } from '@/components/ui/OpenAiLogo'
-import { ZyraLogoASCII } from '@/components/ui/ZyraLogo'
 import { cn } from '@/lib/utils'
 
 type OnboardingAnalyticsChoiceProps = {
@@ -87,164 +84,25 @@ export function WelcomeStep({ saving, error, onStart }: {
 }) {
     return (
         <section className="mx-auto flex w-full max-w-[520px] flex-col items-center text-center" aria-labelledby="onboarding-welcome-title">
-            <h1 id="onboarding-welcome-title" className="text-[18px] font-medium tracking-[-0.025em] text-sparkle-text-secondary sm:text-[20px]">
-                Welcome to
+            <h1 id="onboarding-welcome-title" aria-label="Welcome to Zyra" className="text-[28px] font-medium tracking-[-0.035em] text-sparkle-text">
+                <span aria-hidden="true" className="onboarding-welcome-letters">{Array.from('Welcome to Zyra').map((letter, index) => <span key={index} style={{ '--letter-index': index } as CSSProperties}>{letter === ' ' ? '\u00a0' : letter}</span>)}</span>
             </h1>
-            <ZyraLogoASCII size="lg" variant="loading" className="mt-5 drop-shadow-[0_0_24px_color-mix(in_srgb,var(--accent-primary)_22%,transparent)]" />
             <button
                 type="button"
                 disabled={saving}
                 onClick={onStart}
-                className="mt-8 inline-flex h-11 min-w-[142px] items-center justify-center gap-2 rounded-md bg-[var(--accent-primary)] px-5 text-[13px] font-semibold text-[var(--accent-on-primary)] shadow-[0_10px_30px_color-mix(in_srgb,var(--accent-primary)_22%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+                className="onboarding-welcome-button mt-8 inline-flex h-11 min-w-[142px] items-center justify-center gap-2 rounded-full bg-[var(--accent-primary)] px-5 text-[13px] font-semibold text-[var(--accent-on-primary)] shadow-[0_10px_30px_color-mix(in_srgb,var(--accent-primary)_22%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
-                Start setup<ArrowRight size={14} />
+                Let’s get you set up<ArrowRight size={14} />
             </button>
             {error ? <p role="alert" className="mt-4 text-[11px] text-[var(--status-danger)]">{error}</p> : null}
         </section>
     )
 }
 
-export function ConnectOpenAiStep({
-    status,
-    loading,
-    activity,
-    error,
-    onRefresh,
-    onConnectChatGpt,
-    onConnectApiKey
-}: {
-    status: OnboardingAuthStatus | null
-    loading: boolean
-    activity: 'checking' | 'chatgpt' | 'api-key' | null
-    error: string | null
-    onRefresh: () => Promise<void>
-    onConnectChatGpt: () => Promise<void>
-    onConnectApiKey: (apiKey: string) => Promise<void>
-}) {
-    const [apiKey, setApiKey] = useState('')
-    const [showApiKey, setShowApiKey] = useState(false)
-    const [apiKeyOpen, setApiKeyOpen] = useState(false)
-    const connected = status?.verified === true
-    const chatGptConnected = connected && status?.method === 'chatgpt'
-    const apiKeyConnected = connected && status?.method === 'api-key'
+export { ConnectOpenAiStep } from './ConnectOpenAiStep'
 
-    useEffect(() => {
-        if (!apiKeyConnected) return
-        setApiKey('')
-        setShowApiKey(false)
-    }, [apiKeyConnected])
-
-    const statusCopy = activity === 'checking'
-        ? 'Checking this device…'
-        : activity === 'chatgpt'
-            ? 'Finish signing in in your browser…'
-            : activity === 'api-key'
-                ? 'Verifying your API key…'
-                : error || status?.detail || (connected ? status?.label : 'Choose a connection to continue.')
-
-    return (
-        <div className="mx-auto w-full max-w-[500px]">
-            <button
-                type="button"
-                disabled={loading}
-                onClick={() => void onConnectChatGpt()}
-                className={cn(
-                    'group grid w-full grid-cols-[42px_minmax(0,1fr)_20px] items-center gap-3 rounded-xl border bg-[color-mix(in_srgb,var(--color-bg)_78%,transparent)] px-4 py-4 text-left shadow-[0_18px_50px_color-mix(in_srgb,var(--color-bg)_28%,transparent)] backdrop-blur-md transition-[border-color,background-color,transform] hover:-translate-y-px hover:bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0',
-                    chatGptConnected
-                        ? 'border-[color-mix(in_srgb,var(--status-success)_52%,transparent)]'
-                        : 'border-[color-mix(in_srgb,var(--accent-primary)_46%,transparent)]'
-                )}
-            >
-                <span className="inline-flex size-10 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] text-[var(--accent-primary)]"><OpenAiLogo className="size-[18px]" /></span>
-                <span className="min-w-0">
-                    <span className="flex items-center gap-2 text-[13px] font-semibold text-sparkle-text">
-                        {chatGptConnected ? 'ChatGPT connected' : 'Continue with ChatGPT'}
-                        {chatGptConnected ? <Check size={13} className="text-[var(--status-success)]" /> : <span className="text-[10px] font-medium text-[var(--accent-primary)]">Recommended</span>}
-                    </span>
-                    <span className="mt-1 block text-[11px] text-sparkle-text-muted">Opens a secure sign-in page in your browser</span>
-                </span>
-                <ArrowRight size={14} className="text-sparkle-text-muted transition-transform group-hover:translate-x-0.5" />
-            </button>
-
-            <div className="mt-4 flex items-center gap-3 text-[10px] font-medium text-sparkle-text-muted" role="separator" aria-label="Alternative OpenAI connection">
-                <span className="h-px flex-1 bg-[var(--surface-divider)]" />
-                <span>or</span>
-                <span className="h-px flex-1 bg-[var(--surface-divider)]" />
-            </div>
-
-            <div className="pt-1">
-                <button
-                    type="button"
-                    disabled={loading}
-                    onClick={() => setApiKeyOpen((value) => !value)}
-                    aria-expanded={apiKeyOpen}
-                    className="mx-auto flex h-10 items-center justify-center gap-2 rounded-md px-3 text-[11px] font-medium text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-55"
-                >
-                    <KeyRound size={13} />
-                    {apiKeyConnected ? 'API key connected' : 'Use an API key instead'}
-                    {apiKeyConnected ? <Check size={12} className="text-[var(--status-success)]" /> : null}
-                    <ChevronRight size={13} className={cn('transition-transform', apiKeyOpen && 'rotate-90')} />
-                </button>
-
-                <div inert={!apiKeyOpen} aria-hidden={!apiKeyOpen} className={cn('grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none', apiKeyOpen ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0')}>
-                    <div className="min-h-0 overflow-hidden">
-                        <div className="flex flex-col gap-2 pb-1 pt-2 sm:flex-row">
-                            <SettingsInput
-                                type={showApiKey ? 'text' : 'password'}
-                                value={apiKey}
-                                autoComplete="off"
-                                spellCheck={false}
-                                placeholder="sk-…"
-                                aria-label="OpenAI API key"
-                                onChange={(event) => setApiKey(event.target.value)}
-                                className="!h-10 !w-full sm:!w-auto sm:flex-1"
-                            />
-                            <button type="button" onClick={() => setShowApiKey((value) => !value)} className="h-10 rounded-md px-3 text-[11px] font-medium text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text">{showApiKey ? 'Hide' : 'Show'}</button>
-                            <button type="button" disabled={loading || !apiKey.trim()} onClick={() => void onConnectApiKey(apiKey)} className="h-10 rounded-md bg-[var(--accent-primary)] px-4 text-[11px] font-semibold text-[var(--accent-on-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">Verify key</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div className="mt-4 flex min-h-6 items-center justify-center gap-2 text-center text-[11px]">
-                {loading ? <RefreshCw size={12} className="shrink-0 animate-spin motion-reduce:animate-none text-sparkle-text-muted" /> : connected ? <Check size={12} className="shrink-0 text-[var(--status-success)]" /> : null}
-                <span className={error ? 'text-[var(--status-danger)]' : connected ? 'text-[var(--status-success)]' : 'text-sparkle-text-muted'}>{statusCopy}</span>
-                {!loading && !connected ? <button type="button" onClick={() => void onRefresh()} className="ml-1 text-sparkle-text-secondary underline decoration-[color-mix(in_srgb,var(--color-text)_24%,transparent)] underline-offset-2 hover:text-sparkle-text">Check again</button> : null}
-            </div>
-        </div>
-    )
-}
-
-export function AppearanceStep({ selection, onChange }: {
-    selection: OnboardingAppearanceSelection
-    onChange: (selection: OnboardingAppearanceSelection) => void
-}) {
-    const { settings } = useSettings()
-    const lightTheme = getThemeDefinition(selection.appearanceLightTheme)
-    const darkTheme = getThemeDefinition(selection.appearanceDarkTheme)
-    const activeAppearance = selection.appearanceThemeMode === 'system'
-        ? settings.appearanceResolvedMode
-        : selection.appearanceThemeMode
-    const selectMode = (appearanceThemeMode: OnboardingAppearanceSelection['appearanceThemeMode']) => onChange({ ...selection, appearanceThemeMode })
-
-    return (
-        <div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Zyra appearance">
-                <AppearanceSystemThemeCard darkTheme={darkTheme} lightTheme={lightTheme} selected={selection.appearanceThemeMode === 'system'} onSelect={() => selectMode('system')} />
-                <AppearanceThemeCard theme={lightTheme} label="Light" selected={selection.appearanceThemeMode === 'light'} onSelect={() => selectMode('light')} />
-                <AppearanceThemeCard theme={darkTheme} label="Dark" selected={selection.appearanceThemeMode === 'dark'} onSelect={() => selectMode('dark')} />
-            </div>
-            <AppearanceThemeSelector
-                className="mt-5"
-                appearance={activeAppearance}
-                lightTheme={selection.appearanceLightTheme}
-                darkTheme={selection.appearanceDarkTheme}
-                onLightThemeChange={(appearanceLightTheme) => onChange({ ...selection, appearanceLightTheme })}
-                onDarkThemeChange={(appearanceDarkTheme) => onChange({ ...selection, appearanceDarkTheme })}
-            />
-        </div>
-    )
-}
+export { AppearanceStep } from './AppearanceStep'
 
 export function ProjectsStep({ selection, onChange }: {
     selection: OnboardingProjectsSelection
@@ -268,14 +126,14 @@ export function ProjectsStep({ selection, onChange }: {
     }
 
     return (
-        <div className="mx-auto w-full max-w-[540px]">
+        <div className="mx-auto w-full max-w-[440px]">
             <button
                 type="button"
                 disabled={choosing}
                 onClick={() => void choose()}
-                className="group grid w-full grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-4 rounded-xl border border-[color-mix(in_srgb,var(--color-text)_13%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_78%,transparent)] p-4 text-left backdrop-blur-md transition-[border-color,background-color,transform] hover:-translate-y-px hover:border-[color-mix(in_srgb,var(--accent-primary)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)] disabled:opacity-55 disabled:hover:translate-y-0"
+                className="group grid w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-[color-mix(in_srgb,var(--color-text)_13%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_78%,transparent)] p-4 text-left backdrop-blur-md transition-[border-color,background-color] hover:border-[color-mix(in_srgb,var(--accent-primary)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-bg)_88%,transparent)] disabled:opacity-55 disabled:hover:translate-y-0"
             >
-                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--accent-primary)_14%,transparent)] text-[var(--accent-primary)]"><FolderOpen size={18} /></span>
+                <span className="inline-flex size-6 items-center justify-center text-sparkle-text-secondary"><FolderOpen size={18} /></span>
                 <span className="min-w-0">
                     <span className="block text-[12px] font-semibold text-sparkle-text">{selection.projectsFolder ? 'Projects folder' : 'Choose a folder'}</span>
                     <span className={cn('mt-1 block truncate text-[11px]', selection.projectsFolder ? 'font-mono text-sparkle-text-secondary' : 'text-sparkle-text-muted')} title={selection.projectsFolder || undefined}>
@@ -326,15 +184,11 @@ export function ReviewStep({
     const projectsFolder = record.data.projects?.projectsFolder || ''
     const projectFolderName = projectsFolder.split(/[\\/]/).filter(Boolean).at(-1) || 'Projects folder'
     const accountUsesApiKey = record.data.auth?.method === 'api-key'
-    const readyTitle = record.reviewActive ? 'Your setup is in sync' : 'Your workspace is set'
-    const readyDescription = record.reviewActive
-        ? 'Save your choices and return to Zyra.'
-        : 'Open Zyra and start your first chat.'
     const items = [
         {
             id: 'account',
             label: 'Account',
-            value: accountUsesApiKey ? 'OpenAI API' : 'ChatGPT',
+            value: record.data.auth?.label?.replace(/ connected$/i, '') || (accountUsesApiKey ? 'OpenAI API' : 'ChatGPT'),
             detail: accountUsesApiKey ? 'API key verified' : 'Subscription connected',
             icon: <OpenAiLogo className="size-[15px]" />
         },
@@ -355,32 +209,20 @@ export function ReviewStep({
     ]
 
     return (
-        <div className="mx-auto w-full max-w-[600px]">
-            <div className="onboarding-review-ready">
-                <span className="onboarding-review-ready-mark"><Check size={18} strokeWidth={2.5} /></span>
-                <span className="min-w-0">
-                    <span className="block text-[14px] font-semibold tracking-[-0.015em] text-sparkle-text">{readyTitle}</span>
-                    <span className="mt-0.5 block text-[11px] text-sparkle-text-muted">{readyDescription}</span>
-                </span>
-            </div>
-
+        <div className="mx-auto w-full max-w-[440px]">
             <dl className="onboarding-review-grid">
-                {items.map((item) => (
-                    <div key={item.id} className="onboarding-review-item">
+                {items.map((item, index) => (
+                    <div key={item.id} className="onboarding-review-item" style={{ '--item-index': index } as CSSProperties}>
                         <span className="onboarding-review-icon">{item.icon}</span>
-                        <dt className="mt-3 text-[10px] font-medium text-sparkle-text-muted">{item.label}</dt>
-                        <dd className="mt-1 truncate text-[13px] font-semibold text-sparkle-text" title={item.value}>{item.value}</dd>
-                        <dd className={cn('mt-1 truncate text-[10px] text-sparkle-text-muted', item.id === 'projects' && 'font-mono')} title={item.detail}>{item.detail}</dd>
+                        <dt className="row-span-2 text-[12px] font-medium text-sparkle-text">{item.label}</dt>
+                        <dd className="truncate text-right text-[13px] font-medium text-sparkle-text" title={item.value}>{item.value}</dd>
+                        <dd className={cn('onboarding-review-detail truncate text-right text-[11px] text-sparkle-text-muted', item.id === 'projects' && 'font-mono')} title={item.detail}>{item.detail}</dd>
                     </div>
                 ))}
             </dl>
 
-            <div className="mt-4"><OnboardingAnalyticsChoice analyticsChoice={analyticsChoice} analyticsConfigured={analyticsConfigured} analyticsManagedByEnvironment={analyticsManagedByEnvironment} analyticsLoading={analyticsLoading} analyticsError={analyticsError} onAnalyticsChoice={onAnalyticsChoice} /></div>
+            <div className="onboarding-review-choice mt-4"><OnboardingAnalyticsChoice analyticsChoice={analyticsChoice} analyticsConfigured={analyticsConfigured} analyticsManagedByEnvironment={analyticsManagedByEnvironment} analyticsLoading={analyticsLoading} analyticsError={analyticsError} onAnalyticsChoice={onAnalyticsChoice} /></div>
 
-            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-[11px] leading-5 text-sparkle-text-muted">
-                <Check size={11} className="text-[var(--status-success)]" />
-                You can change this later in Settings.
-            </p>
         </div>
     )
 }

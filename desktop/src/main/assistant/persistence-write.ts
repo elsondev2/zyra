@@ -1,3 +1,4 @@
+import { encodeApprovalScope } from './approval-persistence'
 import type { Database as SqlDatabase, SqlValue } from 'sql.js/dist/sql-asm.js'
 import type {
     AssistantActivity,
@@ -20,7 +21,10 @@ import {
     shouldPersistAssistantSession,
     sqlBool
 } from './persistence-utils'
-import { serializeAssistantActivityPayload } from './persistence-activity-payload'
+import {
+    serializeAssistantActivityPayload,
+    serializeAssistantActivityTerminalOutcome
+} from './persistence-activity-payload'
 import { upsertAssistantChatScope } from './assistant-project-persistence'
 import { sanitizeOptionalPath } from './utils'
 
@@ -179,7 +183,18 @@ export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEve
                     upsertAssistantThreadSummary(db, thread.sessionId, thread.thread)
                     const payloadApproval = event.payload['approval'] as Record<string, unknown> | undefined
                     const approval = thread.thread.pendingApprovals.find((entry) => entry.requestId === String(payloadApproval?.['requestId'] || ''))
-                    if (approval) upsertAssistantPendingApproval(db, thread.thread.id, approval)
+                    if (approval) {
+                        upsertAssistantPendingApproval(db, thread.thread.id, approval)
+                        // The approval projection also changes its correlated activity.
+                        // Persist that flag so switching/hydrating chats stays consistent.
+                        if (approval.toolCallId) {
+                            for (const activity of thread.thread.activities) {
+                                if (activity.payload?.toolCallId === approval.toolCallId || activity.id === `zyra-tool-${approval.toolCallId}`) {
+                                    upsertAssistantActivity(db, thread.thread.id, activity)
+                                }
+                            }
+                        }
+                    }
                 }
                 break
             case 'thread.user-input.updated':
@@ -535,8 +550,8 @@ function updateAssistantThreadMessageCount(db: SqlDatabase, threadId: string): v
 
 function upsertAssistantActivity(db: SqlDatabase, threadId: string, activity: AssistantActivity): void {
     db.run(`
-        INSERT INTO assistant_activities (id, thread_id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO assistant_activities (id, thread_id, kind, tone, summary, detail, turn_id, turn_terminal_outcome, timeline_sequence, created_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
             kind = excluded.kind,
@@ -544,10 +559,11 @@ function upsertAssistantActivity(db: SqlDatabase, threadId: string, activity: As
             summary = excluded.summary,
             detail = excluded.detail,
             turn_id = excluded.turn_id,
+            turn_terminal_outcome = excluded.turn_terminal_outcome,
             timeline_sequence = excluded.timeline_sequence,
             created_at = excluded.created_at,
             payload_json = excluded.payload_json
-    `, [activity.id, threadId, activity.kind, activity.tone, activity.summary, activity.detail || null, activity.turnId, activity.timelineSequence ?? null, activity.createdAt, serializeAssistantActivityPayload(activity.payload)])
+    `, [activity.id, threadId, activity.kind, activity.tone, activity.summary, activity.detail || null, activity.turnId, serializeAssistantActivityTerminalOutcome(activity.turnTerminalOutcome), activity.timelineSequence ?? null, activity.createdAt, serializeAssistantActivityPayload(activity.payload)])
 }
 
 function upsertAssistantProposedPlan(db: SqlDatabase, threadId: string, plan: AssistantProposedPlan): void {
@@ -591,7 +607,7 @@ function upsertAssistantPendingApproval(db: SqlDatabase, threadId: string, appro
         approval.title || null,
         approval.detail || null,
         approval.command || null,
-        jsonStringify(approval.paths),
+        jsonStringify(encodeApprovalScope(approval)),
         approval.status,
         approval.decision,
         approval.turnId,

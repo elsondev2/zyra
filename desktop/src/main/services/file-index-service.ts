@@ -243,6 +243,7 @@ class FileIndexService {
     private writeTimer: NodeJS.Timeout | null = null
     private requiresExportFlush = false
     private pendingRefreshPaths = new Set<string>()
+    private pendingDeletedPaths = new Set<string>()
     private refreshTimer: NodeJS.Timeout | null = null
     private scopeIndexPromises = new Map<string, Promise<void>>()
     private indexedScopeCache = new Map<string, number>()
@@ -314,6 +315,17 @@ class FileIndexService {
         const normalizedPath = String(pathValue || '').trim()
         if (!normalizedPath) return
         this.pendingRefreshPaths.add(resolve(normalizedPath))
+        this.schedulePendingRefresh()
+    }
+
+    scheduleDeletedPath(pathValue: string): void {
+        const normalizedPath = String(pathValue || '').trim()
+        if (!normalizedPath) return
+        this.pendingDeletedPaths.add(resolve(normalizedPath))
+        this.schedulePendingRefresh()
+    }
+
+    private schedulePendingRefresh(): void {
         if (this.refreshTimer) return
         this.refreshTimer = setTimeout(() => {
             this.refreshTimer = null
@@ -325,6 +337,15 @@ class FileIndexService {
     private async flushPendingRefreshPaths(): Promise<void> {
         const refreshPaths = minimizeRefreshPaths(Array.from(this.pendingRefreshPaths))
         this.pendingRefreshPaths.clear()
+        const deletedPaths = minimizeRefreshPaths(Array.from(this.pendingDeletedPaths))
+        this.pendingDeletedPaths.clear()
+        for (const deletedPath of deletedPaths) {
+            await this.ensureInitialized()
+            await this.enqueue(async () => {
+                await this.removeDeletedPath(deletedPath)
+                this.scheduleFlush()
+            }).catch(error => { log.warn('[FileIndex] Failed to remove deleted path.', deletedPath, error) })
+        }
         for (const refreshPath of refreshPaths) {
             await this.ensureInitialized()
             await this.enqueue(async () => {
@@ -427,7 +448,26 @@ class FileIndexService {
             db.run('DELETE FROM file_index_entries WHERE normalized_root_path = ?', [normalizedRootPath])
             db.run('DELETE FROM file_index_roots WHERE normalized_root_path = ?', [normalizedRootPath])
 
-            const insertStatement = db.prepare(`
+            const insertStatement = this.prepareEntryInsert()
+            try {
+                await this.indexDirectoryTree(rootPath, rootPath, null, 0, insertStatement)
+            } finally {
+                insertStatement.free()
+            }
+
+            db.run(
+                'INSERT INTO file_index_roots (root_path, normalized_root_path, last_indexed_at) VALUES (?, ?, ?)',
+                [rootPath, normalizedRootPath, timestamp]
+            )
+            db.run('COMMIT')
+        } catch (error) {
+            db.run('ROLLBACK')
+            throw error
+        }
+    }
+
+    private prepareEntryInsert(): Statement {
+        return this.requireDb().prepare(`
                 INSERT OR REPLACE INTO file_index_entries (
                     path,
                     normalized_path,
@@ -452,16 +492,37 @@ class FileIndexService {
                     depth
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `)
-            try {
-                await this.indexDirectoryTree(rootPath, rootPath, null, 0, insertStatement)
-            } finally {
-                insertStatement.free()
-            }
+    }
 
-            db.run(
-                'INSERT INTO file_index_roots (root_path, normalized_root_path, last_indexed_at) VALUES (?, ?, ?)',
-                [rootPath, normalizedRootPath, timestamp]
-            )
+    private async removeDeletedPath(targetPath: string): Promise<void> {
+        // A path may be recreated while this debounced operation is waiting.
+        if (await access(targetPath).then(() => true, () => false)) {
+            await this.reindexSubtree(targetPath)
+            return
+        }
+        const db = this.requireDb()
+        const normalizedTargetPath = normalizePathKey(targetPath)
+        const parentPath = dirname(targetPath)
+        const root = this.findCoveringRoot(parentPath)
+        for (const scopePath of this.indexedScopeCache.keys()) {
+            if (isPathWithinScope(scopePath, targetPath)) this.indexedScopeCache.delete(scopePath)
+        }
+        this.searchResultCache.clear()
+        db.run('BEGIN')
+        try {
+            // Literal bounds keep underscores and percent signs in folder names
+            // from matching unrelated paths, as SQL LIKE patterns would.
+            const range = [normalizedTargetPath, normalizedTargetPath + '/', normalizedTargetPath + '0']
+            db.run('DELETE FROM file_index_entries WHERE normalized_path = ? OR (normalized_path >= ? AND normalized_path < ?)', range)
+            db.run('DELETE FROM file_index_roots WHERE normalized_root_path = ? OR (normalized_root_path >= ? AND normalized_root_path < ?)', range)
+            if (root) {
+                const insertStatement = this.prepareEntryInsert()
+                try {
+                    await this.indexDirectoryTree(root.rootPath, parentPath,
+                        normalizePathKey(parentPath) === root.normalizedRootPath ? null : dirname(parentPath),
+                        depthFromRoot(root.rootPath, parentPath), insertStatement, true)
+                } finally { insertStatement.free() }
+            }
             db.run('COMMIT')
         } catch (error) {
             db.run('ROLLBACK')
@@ -483,31 +544,7 @@ class FileIndexService {
                 [existingRoot.normalizedRootPath, normalizedTargetPath, `${normalizedTargetPath}/%`]
             )
 
-            const insertStatement = db.prepare(`
-                INSERT OR REPLACE INTO file_index_entries (
-                    path,
-                    normalized_path,
-                    root_path,
-                    normalized_root_path,
-                    parent_path,
-                    normalized_parent_path,
-                    relative_path,
-                    relative_path_lower,
-                    name,
-                    name_lower,
-                    type,
-                    extension,
-                    size,
-                    last_modified,
-                    is_hidden,
-                    is_project,
-                    project_type,
-                    project_icon_path,
-                    markers_json,
-                    frameworks_json,
-                    depth
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `)
+            const insertStatement = this.prepareEntryInsert()
             try {
                 await this.indexPath(existingRoot.rootPath, targetPath, insertStatement)
             } finally {
@@ -546,7 +583,8 @@ class FileIndexService {
         directoryPath: string,
         parentPath: string | null,
         depth: number,
-        insertStatement: Statement
+        insertStatement: Statement,
+        directChildrenOnly = false
     ): Promise<void> {
         const stack: Array<{ path: string; parentPath: string | null; depth: number }> = [{ path: directoryPath, parentPath, depth }]
         let processedEntries = 0
@@ -560,9 +598,10 @@ class FileIndexService {
                 const currentStats = await stat(current.path)
                 const entries = await readdir(current.path, { withFileTypes: true })
                 const metadata = await this.inspectDirectory(current.path, entries)
+                const entryRoot = directChildrenOnly ? this.findCoveringRoot(current.path)?.rootPath || rootPath : rootPath
                 this.insertEntry({
-                    rootPath,
-                    parentPath: current.parentPath,
+                    rootPath: entryRoot,
+                    parentPath: normalizePathKey(current.path) === normalizePathKey(entryRoot) ? null : current.parentPath,
                     targetPath: current.path,
                     type: 'directory',
                     extension: '',
@@ -574,9 +613,10 @@ class FileIndexService {
                     projectIconPath: metadata.projectIconPath,
                     markers: metadata.markers,
                     frameworks: metadata.frameworks,
-                    depth: current.depth
+                    depth: directChildrenOnly ? depthFromRoot(entryRoot, current.path) : current.depth
                 }, insertStatement)
                 processedEntries += 1
+                if (directChildrenOnly && current.path !== directoryPath) continue
 
                 const filePaths: string[] = []
                 for (const entry of entries) {
@@ -1132,4 +1172,9 @@ export async function searchIndexedPaths(
 
 export function scheduleFileIndexRefresh(pathValue: string): void {
     getFileIndexService().scheduleRefreshPath(pathValue)
+}
+
+/** A deletion must not rebuild every sibling subtree under its parent. */
+export function scheduleFileIndexDeletion(pathValue: string): void {
+    getFileIndexService().scheduleDeletedPath(pathValue)
 }

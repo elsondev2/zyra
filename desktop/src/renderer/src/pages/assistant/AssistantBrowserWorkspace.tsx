@@ -1,8 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { getOverlayActiveElement, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
     ArrowLeft,
     ArrowRight,
     Camera,
+    ChevronDown,
     Circle,
     Clock3,
     Code2,
@@ -78,8 +82,9 @@ import {
 import type { AssistantInspectorDeveloperToastInput } from './AssistantInspectorDeveloperToast'
 import { publishAssistantBrowserAnnotationAttachment } from './assistant-browser-annotation-composer'
 import {
-    readActiveAssistantBrowserRecordingTabId,
-    startAssistantBrowserRecording,
+    readAssistantBrowserRecording,
+    subscribeAssistantBrowserRecording,
+    prepareAssistantBrowserRecording,
     stopAssistantBrowserRecording
 } from './assistant-browser-recording'
 import {
@@ -89,6 +94,7 @@ import {
     ASSISTANT_BROWSER_TAB_LIMIT,
     browserTabFallbackTitle,
     closeAssistantBrowserTab,
+    createAssistantBrowserWorkspaceState,
     ensureAssistantBrowserSurfaceTabs,
     ensureAssistantBrowserWorkspaceTab,
     loadAssistantBrowserWorkspaceState,
@@ -101,6 +107,7 @@ import {
     type AssistantBrowserTabState,
     type AssistantBrowserWorkspaceState
 } from './assistant-browser-workspace-state'
+import { reorderBrowserTabs } from './assistant-browser-tab-order'
 
 function isSpotifyBrowserUrl(value: string): boolean {
     try {
@@ -163,6 +170,7 @@ export type AssistantBrowserWorkspaceController = {
     createTab: (url?: string, options?: { activate?: boolean; tabId?: string; sessionMode?: BrowserSessionMode }) => string
     closeTab: (tabId: string, options?: { transferred?: boolean }) => AssistantBrowserWorkspaceState
     activateTab: (tabId: string) => void
+    reorderTabs: (tabIds: string[]) => void
 }
 
 export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace({
@@ -182,7 +190,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     onRequestTabSelection,
     onControllerChange,
     onDeveloperToast,
-    onOpenPreview
+    onOpenPreview,
+    chatIntegration = true,
+    defaultSessionMode = 'normal',
+    tabIdPrefix = 'browser',
+    persistState = true
 }: {
     workspaceKey: string
     threadId: string
@@ -190,9 +202,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     active: boolean
     selectedTabId: string | null
     controlState: ControlStateSnapshot | null
-    navigationRequest: { id: number; tabId: string; url: string; sessionMode: BrowserSessionMode } | null
+    navigationRequest: { id: string | number; tabId: string; url: string; sessionMode: BrowserSessionMode } | null
     surfaceRequest: BrowserSurfaceOpenRequest | null
-    onNavigationRequestHandled: (requestId: number) => void
+    onNavigationRequestHandled: (requestId: string | number) => void
     onSurfaceRequestHandled: (requestId: string) => void
     onWorkspaceStateChange: (state: ControlWorkspaceSnapshot['browser']) => void
     onLocalControlTargetChange?: (tabId: string, targetId: string) => void
@@ -201,6 +213,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     onControllerChange: (controller: AssistantBrowserWorkspaceController | null) => void
     onDeveloperToast: (toast: AssistantInspectorDeveloperToastInput) => void
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
+    chatIntegration?: boolean
+    defaultSessionMode?: BrowserSessionMode
+    tabIdPrefix?: string
+    persistState?: boolean
 }) {
     const { settings } = useSettings()
     const browserDownloadsApi = useMemo(() => ({
@@ -221,8 +237,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [onOpenPreview])
     const normalizedProjectPath = String(projectPath || '').trim()
     const [workspaceState, setWorkspaceState] = useState<AssistantBrowserWorkspaceState>(() => {
+        const fallbackTabId = `${tabIdPrefix}:0`
         const restored = {
-            ...loadAssistantBrowserWorkspaceState(workspaceKey),
+            ...(persistState
+                ? loadAssistantBrowserWorkspaceState(workspaceKey, fallbackTabId, defaultSessionMode)
+                : createAssistantBrowserWorkspaceState(fallbackTabId, defaultSessionMode)),
             splitTabId: null
         }
         const initialSurfaceMode = surfaceRequest?.mode || 'open'
@@ -235,10 +254,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const initialNavigationTabId = navigationRequest?.tabId || null
         const initialTabId = selectedTabId || initialSurfaceTabId || initialNavigationTabId
         const initialSessionMode = initialTabId && initialTabId === initialSurfaceTabId
-            ? surfaceRequest?.sessionMode || 'incognito'
+            ? surfaceRequest?.sessionMode || 'normal'
             : initialTabId && initialTabId === initialNavigationTabId
-                ? navigationRequest?.sessionMode || 'normal'
-                : 'normal'
+                ? navigationRequest?.sessionMode || defaultSessionMode
+                : defaultSessionMode
         return initialTabId ? ensureAssistantBrowserWorkspaceTab(restored, initialTabId, initialSessionMode) : restored
     })
     const [viewportRects, setViewportRects] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({})
@@ -248,7 +267,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [addressValue, setAddressValue] = useState('')
     const [addressError, setAddressError] = useState<string | null>(null)
     const [profileMenuOpen, setProfileMenuOpen] = useState(false)
-    const [downloadsOverlayOpen, setDownloadsOverlayOpen] = useState(false)
     const [downloadsPanelOpen, setDownloadsPanelOpen] = useState(false)
     const [popupWindows, setPopupWindows] = useState<BrowserPopupSummary[]>([])
     const [clearProfileArmed, setClearProfileArmed] = useState(false)
@@ -257,7 +275,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [profileNotice, setProfileNotice] = useState<{ tone: 'info' | 'error'; message: string } | null>(null)
     const [annotationTabId, setAnnotationTabId] = useState<string | null>(null)
     const [fullscreenTabId, setFullscreenTabId] = useState<string | null>(null)
-    const [recordingTabId, setRecordingTabId] = useState<string | null>(() => readActiveAssistantBrowserRecordingTabId())
+    const recordingState = useSyncExternalStore(subscribeAssistantBrowserRecording, readAssistantBrowserRecording)
+    const recordingTabId = ['starting', 'recording', 'paused', 'stopping'].includes(recordingState.status) ? recordingState.tabId : null
     const [localServers, setLocalServers] = useState<DevScopeLocalServer[]>([])
     const [browserHistory, setBrowserHistory] = useState<DevScopeBrowserHistoryEntry[]>([])
     const [historySearch, setHistorySearch] = useState<{ query: string; entries: DevScopeBrowserHistoryEntry[] }>({ query: '', entries: [] })
@@ -270,7 +289,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [historyPanelLoading, setHistoryPanelLoading] = useState(false)
     const [historyActiveIndex, setHistoryActiveIndex] = useState(-1)
     const [addressFocused, setAddressFocused] = useState(false)
-    const [omniboxPresentationReady, setOmniboxPresentationReady] = useState(false)
     const [historyClearArmed, setHistoryClearArmed] = useState(false)
     const [adBlockPrompt, setAdBlockPrompt] = useState<{ tabId: string; origin: string } | null>(null)
     const [adBlockEnabling, setAdBlockEnabling] = useState(false)
@@ -281,24 +299,24 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [serversLoading, setServersLoading] = useState(false)
     const [serversError, setServersError] = useState<string | null>(null)
     const workspaceStateRef = useRef(workspaceState)
-    const controlTargetsByTab = useMemo<Record<string, string>>(() => Object.fromEntries(
+    const controlTargetsByTab = useMemo<Record<string, string>>(() => chatIntegration ? Object.fromEntries(
         (controlState?.targets || []).flatMap((target): Array<[string, string]> => (
             target.kind === 'zyra-browser' && target.ownerThreadId === threadId ? [[target.tabId, target.targetId]] : []
         ))
-    ), [controlState?.targets, threadId])
+    ) : {}, [chatIntegration, controlState?.targets, threadId])
     const controlTargetsByTabRef = useRef(controlTargetsByTab)
     const webviewRefs = useRef(new Map<string, AssistantBrowserWebviewHandle>())
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
     const closedTabsRef = useRef<AssistantBrowserTabState[]>([])
     const pendingNavigationRef = useRef(new Map<string, string>())
-    const consumedNavigationRequestsRef = useRef(new Set<number>())
+    const consumedNavigationRequestsRef = useRef(new Set<string | number>())
     const consumedSurfaceRequestsRef = useRef(new Set<string>())
     const cancelledSurfaceRequestsRef = useRef(new Set<string>())
     const pendingSurfaceRequestsRef = useRef(new Map<string, BrowserSurfaceOpenRequest>())
     const onSurfaceRequestHandledRef = useRef(onSurfaceRequestHandled)
     const tabSequenceRef = useRef(tabSequenceSeed(workspaceState))
     const addressFocusedRef = useRef(false)
-    const omniboxPreparationGenerationRef = useRef(0)
+    const omniboxMenuRef = useRef<HTMLDivElement | null>(null)
     const addressContainerRef = useRef<HTMLDivElement | null>(null)
     const suppressHistoryUntilRef = useRef(0)
     const profileReloadHistorySuppressionRef = useRef(new Map<string, AssistantBrowserProfileReloadHistoryPhase>())
@@ -338,7 +356,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         historySuggestionEntries,
         8
     ), [activeGoogleSearchSuggestions, historySuggestionEntries])
-    const omniboxOpen = Boolean(addressFocused && historyQuery && omniboxPresentationReady)
     const historyPanelEntries = historyPanelQuery && historyPanelSearch.query === historyPanelQuery
         ? historyPanelSearch.entries
         : historyPanelQuery
@@ -346,28 +363,19 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             : browserHistory
     const historyPanelSearching = Boolean(historyPanelQuery.trim() && historyPanelSearch.query !== historyPanelQuery.trim()) || historyPanelLoading
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
-    const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
     const activePendingGrant = controlState?.pendingGrants.find((grant) => grant.targetId === activeControlTargetId) || null
-    const prepareActiveBrowserOverlay = useCallback(async (): Promise<boolean> => {
-        const state = workspaceStateRef.current
-        const tab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-        if (!tab?.url) return true
-        return webviewRefs.current.get(tab.id)?.preparePresentation() ?? false
-    }, [])
-    const prepareOmniboxPresentation = useCallback(() => {
-        const generation = ++omniboxPreparationGenerationRef.current
-        const state = workspaceStateRef.current
-        const tab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-        if (!tab?.url) {
-            setOmniboxPresentationReady(true)
-            return
-        }
-        setOmniboxPresentationReady(false)
-        void prepareActiveBrowserOverlay().finally(() => {
-            if (generation !== omniboxPreparationGenerationRef.current || !addressFocusedRef.current) return
-            setOmniboxPresentationReady(true)
-        })
-    }, [prepareActiveBrowserOverlay])
+    const browserOverlayScope = JSON.stringify([workspaceKey, activeTab?.id, activeTab?.url])
+    const omniboxOpen = active && addressFocused && Boolean(historyQuery)
+    useEffect(() => {
+        if (!omniboxOpen) return
+        return addOverlayEventListener('pointerdown', event => {
+            if (isOverlayEventInside(event, addressContainerRef.current, omniboxMenuRef.current)) return
+            setAddressFocused(false)
+            addressFocusedRef.current = false
+            addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
+        }, true)
+    }, [omniboxOpen])
+    useEffect(() => { setProfileMenuOpen(false) }, [active, browserOverlayScope])
     useEffect(() => {
         if (!shouldFocusAssistantBrowserOmnibox(active, browserChromeReady, activeTab)) return
         const animationFrame = window.requestAnimationFrame(() => {
@@ -376,11 +384,17 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         return () => window.cancelAnimationFrame(animationFrame)
     }, [active, activeTab?.id, activeTab?.url, browserChromeReady])
 
+    // A fresh New Tab can remain unchanged for its entire lifetime. Save it on
+    // mount as well as mutation so the inspector can restore its Browser entry.
+    useEffect(() => {
+        if (persistState) persistAssistantBrowserWorkspaceState(workspaceKey, workspaceStateRef.current)
+    }, [persistState, workspaceKey])
+
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
         workspaceStateRef.current = nextState
         setWorkspaceState(nextState)
-        persistAssistantBrowserWorkspaceState(workspaceKey, nextState)
-    }, [workspaceKey])
+        if (persistState) persistAssistantBrowserWorkspaceState(workspaceKey, nextState)
+    }, [persistState, workspaceKey])
 
     const mutateWorkspaceState = useCallback((
         updater: (current: AssistantBrowserWorkspaceState) => AssistantBrowserWorkspaceState
@@ -399,9 +413,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             window.devscope.window.setFullScreen(false)
         }
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         mutateWorkspaceState((current) => activateAssistantBrowserTab(current, tabId))
     }, [mutateWorkspaceState])
@@ -438,14 +450,17 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         }
     }, [configError, failSurfaceRequest])
 
-    useEffect(() => window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
-        cancelledSurfaceRequestsRef.current.add(requestId)
-        pendingSurfaceRequestsRef.current.delete(requestId)
-        if (cancelledSurfaceRequestsRef.current.size > 100) {
-            const oldest = cancelledSurfaceRequestsRef.current.values().next().value
-            if (oldest) cancelledSurfaceRequestsRef.current.delete(oldest)
-        }
-    }), [])
+    useEffect(() => {
+        if (!chatIntegration) return
+        return window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
+            cancelledSurfaceRequestsRef.current.add(requestId)
+            pendingSurfaceRequestsRef.current.delete(requestId)
+            if (cancelledSurfaceRequestsRef.current.size > 100) {
+                const oldest = cancelledSurfaceRequestsRef.current.values().next().value
+                if (oldest) cancelledSurfaceRequestsRef.current.delete(oldest)
+            }
+        })
+    }, [chatIntegration])
 
     const handleFullscreenChange = useCallback((tabId: string, fullscreen: boolean) => {
         setFullscreenTabId((current) => fullscreen ? tabId : current === tabId ? null : current)
@@ -535,9 +550,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     useEffect(() => {
         if (active) return
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         cancelAnnotation()
     }, [active, cancelAnnotation])
@@ -657,21 +670,20 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             setHistoryClearArmed(false)
         }
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target
-            if (target instanceof Node && profileMenuRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, profileMenuRef.current)) return
             dismissProfileMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') dismissProfileMenu()
         }
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissProfileMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener4 = addOverlayWindowBlurListener(dismissProfileMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissProfileMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener4()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
         }
     }, [profileMenuOpen])
@@ -729,7 +741,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const popupApi = window.devscope.browserPopup
         if (typeof popupApi?.listOpenWindows !== 'function' || typeof popupApi.onOpenWindowsChange !== 'function') return
         let disposed = false
-        const scopeWindows = (windows: BrowserPopupSummary[]) => windows.filter((popup) => popup.ownerThreadId === threadId)
+        const scopeWindows = (windows: BrowserPopupSummary[]) => chatIntegration
+            ? windows.filter((popup) => popup.ownerThreadId === threadId)
+            : windows
         void popupApi.listOpenWindows().then((result) => {
             if (!disposed && result.success) setPopupWindows(scopeWindows(result.windows))
         }).catch(() => undefined)
@@ -740,7 +754,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             disposed = true
             unsubscribe()
         }
-    }, [active, threadId])
+    }, [active, chatIntegration, threadId])
 
     useEffect(() => {
         if (!historyQuery) {
@@ -898,14 +912,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (annotationTabIdRef.current === tabId) cancelAnnotation()
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         setAddressError(null)
         setAddressValue('')
         setHistoryActiveIndex(-1)
         setProfileMenuOpen(false)
-        setDownloadsOverlayOpen(false)
         setDownloadsPanelOpen(false)
         setHistoryPanelOpen(false)
         setHistoryImportOpen(false)
@@ -948,9 +959,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const navigateHistorySuggestion = useCallback((url: string) => {
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         setHistoryActiveIndex(-1)
         void navigateActiveTab(url)
     }, [navigateActiveTab])
@@ -958,7 +967,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const createTab = useCallback((url = '', options?: { activate?: boolean; tabId?: string; sessionMode?: BrowserSessionMode }) => {
         const activate = options?.activate !== false
         const requestedTabId = options?.tabId
-        const sessionMode = options?.sessionMode || 'normal'
+        const sessionMode = options?.sessionMode || defaultSessionMode
         if (requestedTabId && workspaceStateRef.current.tabs.some((tab) => tab.id === requestedTabId)) {
             if (activate) transitionToBrowserTab(requestedTabId)
             return requestedTabId
@@ -969,7 +978,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         }
         const tabId = requestedTabId && /^browser:[a-zA-Z0-9][a-zA-Z0-9:._-]{0,127}$/.test(requestedTabId)
             ? requestedTabId
-            : `browser:${tabSequenceRef.current++}`
+            : `${tabIdPrefix}:${tabSequenceRef.current++}`
         if (activate) onRequestTabSelection(tabId)
         mutateWorkspaceState((current) => addAssistantBrowserTab(current, tabId, url, activate, sessionMode))
         if (activate) {
@@ -977,7 +986,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             setAddressError(null)
         }
         return tabId
-    }, [mutateWorkspaceState, onDeveloperToast, onRequestTabSelection, transitionToBrowserTab])
+    }, [defaultSessionMode, mutateWorkspaceState, onDeveloperToast, onRequestTabSelection, tabIdPrefix, transitionToBrowserTab])
 
     useEffect(() => {
         if (!config || !navigationRequest || consumedNavigationRequestsRef.current.has(navigationRequest.id)) return
@@ -1006,9 +1015,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const closingTab = workspaceStateRef.current.tabs.find((tab) => tab.id === tabId)
         if (!closingTab) return workspaceStateRef.current
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         if (!transferred && closingTab.url && closingTab.sessionMode === 'normal' && !isBrowserLocalFileUrl(closingTab.url)) {
             closedTabsRef.current = [...closedTabsRef.current.slice(-9), closingTab]
@@ -1029,18 +1036,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 cancelAnnotation()
             }
         }
-        if (transferred && recordingTabId === tabId) setRecordingTabId(null)
         if (!transferred && closingHandle && recordingTabId === tabId) {
             try {
                 const target = closingHandle.getDeveloperTarget()
-                setRecordingTabId(null)
-                void stopAssistantBrowserRecording(target).then((artifact) => {
-                    onDeveloperToast({ message: 'Browser recording saved before the tab closed.', artifact })
-                }).catch((error: unknown) => {
-                    onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not save the closing Browser recording.' })
-                })
+                // The persistent recorder host owns saved/error recovery after tab closure.
+                void stopAssistantBrowserRecording(target).catch(() => {})
             } catch (error) {
-                setRecordingTabId(readActiveAssistantBrowserRecordingTabId())
                 onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not stop the closing Browser recording.' })
             }
         }
@@ -1048,16 +1049,16 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         webviewRefCallbacks.current.delete(tabId)
         profileReloadHistorySuppressionRef.current.delete(tabId)
         pendingNavigationRef.current.delete(tabId)
-        const replacementTabId = `browser:${tabSequenceRef.current++}`
+        const replacementTabId = `${tabIdPrefix}:${tabSequenceRef.current++}`
         let nextState = workspaceStateRef.current
         mutateWorkspaceState((current) => {
-            nextState = closeAssistantBrowserTab(current, tabId, replacementTabId)
+            nextState = closeAssistantBrowserTab(current, tabId, replacementTabId, defaultSessionMode)
             return nextState
         })
         const nextActiveTab = nextState.tabs.find((tab) => tab.id === nextState.activeTabId)
         setAddressValue(browserTabAddress(nextActiveTab))
         return nextState
-    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast, recordingTabId])
+    }, [cancelAnnotation, defaultSessionMode, mutateWorkspaceState, onDeveloperToast, recordingTabId, tabIdPrefix])
 
     const activateTab = transitionToBrowserTab
 
@@ -1212,11 +1213,19 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (targetTab) selectBrowserTab(targetTab.id)
     }, [closeTab, createTab, onDeveloperToast, onRequestTabSelection, openLocalFileInTab, selectBrowserTab])
 
+    const reorderTabs = useCallback((tabIds: string[]) => {
+        mutateWorkspaceState(current => {
+            const tabs = reorderBrowserTabs(current.tabs, tabIds)
+            return tabs === current.tabs ? current : { ...current, tabs }
+        })
+    }, [mutateWorkspaceState])
+
     const controller = useMemo<AssistantBrowserWorkspaceController>(() => ({
         createTab,
         closeTab,
-        activateTab
-    }), [activateTab, closeTab, createTab])
+        activateTab,
+        reorderTabs
+    }), [activateTab, closeTab, createTab, reorderTabs])
 
     useEffect(() => {
         onControllerChange(controller)
@@ -1245,10 +1254,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (typeof window.devscope.onBrowserThreatBlocked !== 'function') return
         return window.devscope.onBrowserThreatBlocked((warning) => {
             const tabId = findTabIdByGuestWebContentsId(warning.sourceGuestWebContentsId)
-            if (!tabId) {
-                void window.devscope.dismissBrowserThreatWarning(warning.decisionId).catch(() => undefined)
-                return
-            }
+            // Other Browser surfaces in this shell own their own warnings.
+            if (!tabId) return
             setThreatWarning((current) => {
                 if (current && current.warning.decisionId !== warning.decisionId) {
                     void window.devscope.dismissBrowserThreatWarning(current.warning.decisionId).catch(() => undefined)
@@ -1313,8 +1320,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             event.stopPropagation()
             executeBrowserShortcut(action, workspaceStateRef.current.activeTabId)
         }
-        window.addEventListener('keydown', handleBrowserShortcut, true)
-        return () => window.removeEventListener('keydown', handleBrowserShortcut, true)
+        const removeOverlayListener3 = addOverlayEventListener('keydown', handleBrowserShortcut, true)
+        return () => removeOverlayListener3()
     }, [active, browserFullscreen, executeBrowserShortcut])
 
     const getWebviewRefCallback = useCallback((tabId: string) => {
@@ -1341,7 +1348,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [mutateWorkspaceState])
 
     useEffect(() => {
-        if (!surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId) || cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
+        if (!chatIntegration || !surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId) || cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
         if (surfaceRequest.threadId !== threadId) {
             failSurfaceRequest(surfaceRequest, 'The Browser surface request belongs to another chat thread.')
             return
@@ -1433,7 +1440,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             workspaceStateRef.current,
             surfaceRequest.tabId,
             surfaceRequest.secondaryTabId || null,
-            mode === 'open' ? surfaceRequest.sessionMode || 'incognito' : 'normal'
+            mode === 'open' ? surfaceRequest.sessionMode || 'normal' : 'normal'
         )
         if (requestedTabIds.some((tabId) => !requestedState.tabs.some((tab) => tab.id === tabId))) {
             failSurfaceRequest(surfaceRequest, `Close a Browser tab first; the ${ASSISTANT_BROWSER_TAB_LIMIT}-tab limit is full.`)
@@ -1446,7 +1453,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         } else {
             pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
         }
-    }, [closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest, threadId, transitionToBrowserTab])
+    }, [chatIntegration, closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest, threadId, transitionToBrowserTab])
 
     const getActiveDeveloperTarget = useCallback(() => {
         const tabId = workspaceStateRef.current.activeTabId
@@ -1563,6 +1570,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             })
             if (!result.success) throw new Error(result.error || 'Could not annotate the Browser tab.')
             if (result.annotation && result.artifact) {
+                if (!chatIntegration) {
+                    onDeveloperToast({ message: 'Annotation ready', artifact: result.artifact })
+                    return
+                }
                 const staged = await window.devscope.stageBrowserPreviewArtifactForAssistant(result.artifact.artifactId)
                 if (!staged.success) throw new Error(staged.error || 'Could not attach the Browser annotation to chat.')
                 publishAssistantBrowserAnnotationAttachment({
@@ -1581,25 +1592,23 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 setAnnotationTabId(null)
             }
         }
-    }, [cancelAnnotation, getActiveDeveloperTarget, onDeveloperToast, workspaceKey])
+    }, [cancelAnnotation, chatIntegration, getActiveDeveloperTarget, onDeveloperToast, workspaceKey])
 
     const toggleActiveRecording = useCallback(async () => {
         try {
+            setProfileMenuOpen(false)
             const { tabId, target, handle } = getActiveDeveloperTarget()
             if (annotationTabIdRef.current === tabId) cancelAnnotation()
             if (recordingTabId) {
                 if (recordingTabId !== tabId) throw new Error('Another Browser tab is already recording.')
-                const artifact = await stopAssistantBrowserRecording(target)
-                setRecordingTabId(null)
-                onDeveloperToast({ message: 'Browser recording saved.', artifact })
+                await stopAssistantBrowserRecording(target)
                 return
             }
-            await startAssistantBrowserRecording(target, handle.getViewportSize())
-            setRecordingTabId(tabId)
-            onDeveloperToast({ message: 'Recording this Browser tab.' })
+            prepareAssistantBrowserRecording(target, handle.getViewportSize())
         } catch (error) {
-            setRecordingTabId(readActiveAssistantBrowserRecordingTabId())
-            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not change Browser recording state.' })
+            if (!readAssistantBrowserRecording().error) {
+                onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not change Browser recording state.' })
+            }
         }
     }, [cancelAnnotation, getActiveDeveloperTarget, onDeveloperToast, recordingTabId])
 
@@ -1785,9 +1794,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     event.preventDefault()
                     addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
                     addressFocusedRef.current = false
-                    omniboxPreparationGenerationRef.current += 1
                     setAddressFocused(false)
-                    setOmniboxPresentationReady(false)
                     const selectedSuggestion = historyActiveIndex >= 0 ? omniboxSuggestions[historyActiveIndex] : null
                     void navigateActiveTab(selectedSuggestion?.value || addressValue)
                 }}
@@ -1813,11 +1820,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     ref={addressContainerRef}
                     onBlurCapture={() => {
                         window.setTimeout(() => {
-                            if (addressContainerRef.current?.contains(document.activeElement)) return
+                            if (addressContainerRef.current?.contains(getOverlayActiveElement()) || omniboxMenuRef.current?.contains(getOverlayActiveElement())) return
                             addressFocusedRef.current = false
-                            omniboxPreparationGenerationRef.current += 1
                             setAddressFocused(false)
-                            setOmniboxPresentationReady(false)
                             if (!addressError) {
                                 const current = workspaceStateRef.current.tabs.find((tab) => tab.id === workspaceStateRef.current.activeTabId)
                                 setAddressValue(browserTabAddress(current))
@@ -1831,6 +1836,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         addressFocused
                             ? 'border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_96%,var(--color-bg))] shadow-[0_18px_38px_rgba(0,0,0,0.34)]'
                             : 'border-transparent bg-transparent hover:bg-[var(--surface-hover)]',
+                        omniboxOpen && 'rounded-b-none border-b-transparent',
                         addressError && 'border-red-400/35'
                     )}>
                         <div className="group/address flex h-7 items-center gap-1.5 px-2">
@@ -1851,7 +1857,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 onFocus={(event) => {
                                     addressFocusedRef.current = true
                                     setAddressFocused(true)
-                                    prepareOmniboxPresentation()
                                     event.currentTarget.select()
                                 }}
                                 onKeyDown={(event) => {
@@ -1865,9 +1870,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                     if (event.key === 'Escape') {
                                         setAddressValue(activeAddress)
                                         setAddressError(null)
-                                        omniboxPreparationGenerationRef.current += 1
                                         setAddressFocused(false)
-                                        setOmniboxPresentationReady(false)
                                         event.currentTarget.blur()
                                     }
                                 }}
@@ -1883,7 +1886,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             />
                         </div>
                         {omniboxOpen ? (
-                            <div id={BROWSER_HISTORY_LISTBOX_ID} role="listbox" className="max-h-72 overflow-y-auto border-t border-[color-mix(in_srgb,var(--color-text)_10%,transparent)] p-1" aria-label="Address and search suggestions">
+                            <AnchoredNativeOverlay anchorRef={addressContainerRef} autoFocus={false}><div ref={omniboxMenuRef} onPointerDown={(event) => event.preventDefault()} id={BROWSER_HISTORY_LISTBOX_ID} role="listbox" className="absolute inset-x-0 top-7 max-h-72 overflow-y-auto rounded-b-[13px] border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_96%,var(--color-bg))] p-1 shadow-[0_18px_38px_rgba(0,0,0,0.34)]" aria-label="Address and search suggestions">
                                 {omniboxSuggestions.length > 0 ? omniboxSuggestions.map((suggestion, index) => (
                                     <button
                                         key={suggestion.id}
@@ -1903,7 +1906,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                             <span className="max-w-[58%] shrink-0 truncate text-[11px] font-medium text-[var(--color-text)]">{suggestion.label}</span>
                                             {suggestion.kind === 'history' ? (
                                                 <>
-                                                    <span aria-hidden="true" className="shrink-0 text-[9px] text-[color-mix(in_srgb,var(--color-text)_36%,transparent)]">—</span>
+                                                    <span aria-hidden="true" className="shrink-0 text-[9px] text-[color-mix(in_srgb,var(--color-text)_36%,transparent)]">â€”</span>
                                                     <span className="min-w-0 flex-1 truncate text-[9px] text-[color-mix(in_srgb,var(--color-text)_52%,transparent)]">{suggestion.detail}</span>
                                                 </>
                                             ) : null}
@@ -1915,49 +1918,40 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                         <span>{omniboxLoading ? 'Finding suggestions…' : 'Press Enter to search'}</span>
                                     </div>
                                 )}
-                            </div>
+                            </div></AnchoredNativeOverlay>
                         ) : null}
                     </div>
                 </div>
                 <AssistantBrowserDownloadsButton
                     api={browserDownloadsApi}
+                    active={active}
+                    scopeKey={browserOverlayScope}
                     onOpenHere={openDownloadHere}
-                    onBeforeOverlayOpen={prepareActiveBrowserOverlay}
-                    onOverlayChange={setDownloadsOverlayOpen}
                 />
-                <button
-                    type="button"
-                    onClick={() => void toggleAnnotation()}
-                    disabled={!activeTab?.url}
-                    className={cn(BROWSER_CHROME_BUTTON_CLASS, annotationTabId === activeTab?.id && 'bg-[var(--surface-hover)] text-[var(--accent-primary)]')}
-                    title={annotationTabId === activeTab?.id ? 'Cancel annotation' : 'Annotate page'}
-                    aria-pressed={annotationTabId === activeTab?.id}
-                >
-                    <Crosshair size={13} />
-                </button>
-                <button type="button" onClick={() => void captureActiveScreenshot()} disabled={!activeTab?.url} className={BROWSER_CHROME_BUTTON_CLASS} title="Capture screenshot"><Camera size={13} /></button>
+                <>
+                    <button
+                        type="button"
+                        onClick={() => void toggleAnnotation()}
+                        disabled={!activeTab?.url}
+                        className={cn(BROWSER_CHROME_BUTTON_CLASS, annotationTabId === activeTab?.id && 'bg-[var(--surface-hover)] text-[var(--accent-primary)]')}
+                        title={annotationTabId === activeTab?.id ? 'Cancel annotation' : 'Annotate page'}
+                        aria-pressed={annotationTabId === activeTab?.id}
+                    >
+                        <Crosshair size={13} />
+                    </button>
+                    <button type="button" onClick={() => void captureActiveScreenshot()} disabled={!activeTab?.url} className={BROWSER_CHROME_BUTTON_CLASS} title="Capture screenshot"><Camera size={13} /></button>
+                </>
                 {activePendingGrant ? (
                     <div className="flex h-5 items-center gap-1 border border-sky-300/25 bg-sky-400/[0.08] px-1.5 text-[8px] text-sky-100" title="Review this Browser request in chat.">
                         <ShieldAlert size={9} />
                         <span>Waiting in chat</span>
-                    </div>
-                ) : activeControlGrant ? (
-                    <div className="flex h-5 items-center gap-1 border border-amber-300/25 bg-amber-400/[0.08] px-1 text-[8px] text-amber-100" title={`Controlled by ${activeControlGrant.principal.type === 'root' ? 'root agent' : activeControlGrant.principal.agentRunId}`}>
-                        <ShieldAlert size={9} />
-                        <span>{Math.max(0, activeControlGrant.maxActions - activeControlGrant.actionCount)}</span>
-                        <button type="button" onClick={() => void window.devscope.agentControl.revokeGrant(activeControlGrant.grantId)} className="px-0.5 hover:bg-white/[0.08]" title="Revoke Browser control">Revoke</button>
-                        <button type="button" onClick={() => void window.devscope.agentControl.emergencyStop()} className="px-0.5 text-red-200 hover:bg-red-400/[0.12]" title="Emergency stop all control">Stop all</button>
                     </div>
                 ) : null}
                 <div ref={profileMenuRef} className="relative">
                     <button
                         type="button"
                         onClick={() => {
-                            if (profileMenuOpen) {
-                                setProfileMenuOpen(false)
-                            } else {
-                                void prepareActiveBrowserOverlay().then(() => setProfileMenuOpen(true))
-                            }
+                            setProfileMenuOpen(current => !current)
                             setClearProfileArmed(false)
                             setSiteSignOutArmed(false)
                             setHistoryClearArmed(false)
@@ -1968,7 +1962,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             'relative',
                             profileMenuOpen && 'bg-[var(--surface-hover)] text-emerald-300/80'
                         )}
-                        title={popupWindows.length > 0 ? `Browser menu · ${popupWindows.length} open window${popupWindows.length === 1 ? '' : 's'}` : 'Browser menu'}
+                        title={popupWindows.length > 0 ? `Browser menu Â· ${popupWindows.length} open window${popupWindows.length === 1 ? '' : 's'}` : 'Browser menu'}
                         aria-label="Browser menu"
                         aria-expanded={profileMenuOpen}
                     >
@@ -1976,7 +1970,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         {popupWindows.length > 0 ? <span className="absolute -right-0.5 -top-0.5 inline-flex min-w-3.5 items-center justify-center rounded-full bg-[var(--accent-primary)] px-0.5 text-[7px] font-semibold leading-3.5 text-white">{popupWindows.length}</span> : null}
                     </button>
                     {profileMenuOpen ? (
-                        <div className="absolute right-0 top-8 z-[380] w-64 rounded-[7px] border border-[var(--surface-divider)] bg-sparkle-card p-1 text-left shadow-[0_12px_30px_rgba(0,0,0,0.30)]">
+                        <AnchoredNativeOverlay><div className="absolute right-0 top-8 z-[380] w-64 rounded-[7px] border border-[var(--surface-divider)] bg-sparkle-card p-1 text-left shadow-[0_12px_30px_rgba(0,0,0,0.30)]">
                             <button type="button" onClick={() => activeTab && void openLocalFileInTab(activeTab.id)} disabled={!activeTab} title="Open file (Ctrl+O)" className={BROWSER_MENU_ROW_CLASS}><FileUp size={12} /><span>Open file</span></button>
                             <button type="button" onClick={() => void hardReloadActiveTab()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><RefreshCw size={12} /><span>Hard reload</span></button>
                             <button type="button" onClick={() => void openActiveDevTools()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><Code2 size={12} /><span>Open DevTools</span></button>
@@ -2008,7 +2002,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 <button type="button" onClick={() => void updateActiveZoom(1)} className="ml-1 inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-[var(--surface-hover)]" aria-label="Reset zoom"><RotateCcw size={10} /></button>
                             </div>
                             <div className="my-1 h-px bg-[var(--surface-divider)]" />
-                            <button type="button" onClick={() => void toggleActiveRecording()} disabled={!activeTab?.url || Boolean(recordingTabId && recordingTabId !== activeTab?.id)} className={cn(BROWSER_MENU_ROW_CLASS, recordingTabId === activeTab?.id && 'text-red-300')}><Circle size={11} fill={recordingTabId === activeTab?.id ? 'currentColor' : 'none'} /><span>{recordingTabId === activeTab?.id ? 'Stop and save recording' : 'Record Browser tab'}</span></button>
+                            <button type="button" onClick={() => void toggleActiveRecording()} disabled={!activeTab?.url || recordingState.status === 'starting' || recordingState.status === 'stopping' || Boolean(recordingTabId && recordingTabId !== activeTab?.id)} className={cn(BROWSER_MENU_ROW_CLASS, recordingTabId === activeTab?.id && 'text-red-300')}><Circle size={11} fill={recordingTabId === activeTab?.id ? 'currentColor' : 'none'} /><span>{recordingTabId === activeTab?.id ? 'Stop and save recording' : 'Record Browser tab'}</span></button>
                             <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url || isBrowserLocalFileUrl(activeTab.url)} className={BROWSER_MENU_ROW_CLASS}><ExternalLink size={12} /><span>Open in default browser</span></button>
                             <div className="my-1 h-px bg-[var(--surface-divider)]" />
                             <button type="button" onClick={() => {
@@ -2036,13 +2030,16 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                             <PanelsTopLeft size={12} className="shrink-0 text-[var(--accent-primary)]" />
                                             <span className="min-w-0 flex-1">
                                                 <span className="block truncate text-[10px] font-medium text-[var(--color-text)]">{popupWindow.title}</span>
-                                                <span className="block truncate text-[8px] text-[color-mix(in_srgb,var(--color-text)_48%,transparent)]">{popupWindow.minimized ? 'Minimized · ' : ''}{popupWindow.origin}</span>
+                                                <span className="block truncate text-[8px] text-[color-mix(in_srgb,var(--color-text)_48%,transparent)]">{popupWindow.minimized ? 'Minimized Â· ' : ''}{popupWindow.origin}</span>
                                             </span>
                                         </button>
                                     ))}
                                 </>
                             ) : null}
                             <div className="my-1 h-px bg-[var(--surface-divider)]" />
+                            <details className="group/browser-data">
+                                <summary className={cn(BROWSER_MENU_ROW_CLASS, 'cursor-pointer list-none [&::-webkit-details-marker]:hidden')}><Trash2 size={12} /><span className="flex-1">Clear browser data</span><ChevronDown size={11} className="transition-transform group-open/browser-data:rotate-180" /></summary>
+                                <div className="ml-2 border-l border-[var(--surface-divider)] pl-1">
                             <button type="button" onClick={() => void clearHistory()} className={cn(BROWSER_MENU_ROW_CLASS, historyClearArmed && 'text-red-300')}><Clock3 size={12} /><span>{historyClearArmed ? 'Confirm clear history' : 'Clear history'}</span></button>
                             <button type="button" onClick={() => void clearBrowserCookies()} className={cn(BROWSER_MENU_ROW_CLASS, siteSignOutArmed && 'text-red-300')}><ShieldCheck size={12} /><span>{siteSignOutArmed ? 'Confirm sign out of websites' : 'Sign out of websites'}</span></button>
                             <button type="button" onClick={() => void clearBrowserCache()} className={BROWSER_MENU_ROW_CLASS}><Trash2 size={12} /><span>Clear temporary cache</span></button>
@@ -2051,7 +2048,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 <span>{clearingProfile ? 'Resetting Browser profile' : clearProfileArmed ? 'Confirm reset Browser profile' : 'Reset Browser profile'}</span>
                             </button>
                             {profileNotice ? <p className="px-2 py-1 text-[9px] leading-3.5 text-[color-mix(in_srgb,var(--color-text)_58%,transparent)]">{profileNotice.message}</p> : null}
-                        </div>
+                                </div>
+                            </details>
+                        </div></AnchoredNativeOverlay>
                     ) : null}
                 </div>
             </form>
@@ -2070,18 +2069,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             <div className="relative isolate min-h-0 flex-1 overflow-hidden bg-white">
                 {workspaceState.tabs.map((tab) => {
                     const visible = active && tab.id === activeTab?.id
-                    const shellOverlayOpen = visible && (
-                        (!tab.url && tab.status === 'idle')
-                        || tab.status === 'error'
-                        || omniboxOpen
-                        || profileMenuOpen
-                        || downloadsOverlayOpen
-                        || downloadsPanelOpen
-                        || historyPanelOpen
-                        || historyImportOpen
-                        || threatWarning?.tabId === tab.id
-                        || adBlockPrompt?.tabId === tab.id
-                    )
+                    const pageReplaced = (!tab.url && tab.status === 'idle') || tab.status === 'error'
                     const targetId = controlTargetsByTab[tab.id]
                     const grant = targetId ? controlState?.grants.find((entry) => entry.targetId === targetId && entry.state === 'active') : null
                     const cursor = targetId ? controlState?.cursors.find((entry) => entry.targetId === targetId) || null : null
@@ -2093,6 +2081,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             visible={visible}
                             controlled={Boolean(grant)}
                             cursor={cursor}
+                            cursorTargetId={targetId}
                             onViewportChange={(viewport) => {
                                 mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tab.id, { viewport }))
                             }}
@@ -2103,10 +2092,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 threadId={threadId}
                                 config={config}
                                 active={visible}
-                                visible={visible && !shellOverlayOpen}
+                                visible={visible && !pageReplaced}
                                 placement="full"
                                 controlled={Boolean(grant)}
+                                agentControlEnabled={chatIntegration}
                                 cursor={cursor}
+                            cursorTargetId={targetId}
                                 onStateChange={handleWebviewStateChange}
                                 onControlTargetChange={handleControlTargetChange}
                                 onFullscreenChange={handleFullscreenChange}
@@ -2194,12 +2185,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 ) : null}
 
                 {activeTab?.status === 'error' && activeTab.error ? (
-                    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-red-500/15 bg-sparkle-bg px-2 py-1 text-[9px] text-red-300 shadow-sm">
+                    <AnchoredNativeOverlay passive><div className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-red-500/15 bg-sparkle-bg px-2 py-1 text-[9px] text-red-300 shadow-sm">
                         {activeTab.error}
-                    </div>
+                    </div></AnchoredNativeOverlay>
                 ) : null}
 
-                {activeTab?.status === 'loading' ? <div className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]" /> : null}
+                {activeTab?.status === 'loading' ? <AnchoredNativeOverlay passive><div className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]" /></AnchoredNativeOverlay> : null}
             </div>
         </section>
     )

@@ -1,0 +1,10 @@
+{
+  "source": "desktop/resources/icon.png",
+  "sha256": "87bc1c41fe3544d82e99f2a8c9e919ae281da44f1d71a82fa95658be6b44ce37",
+  "icons": {
+    "icon16.png": "62375f8079fd2f8ba392cf3c89718e00cd16b436f4a39bb9f70b6b93185dfb32",
+    "icon32.png": "1fa182e75a38fdaed6435c4d089235f2f10455fc9e4d80d183262cd6a901f2f0",
+    "icon48.png": "ccc9e6cb079550ad77cb74bf67b589b6573f84f57e8b73423a83659c6fba532c",
+    "icon128.png": "3b4365f1db975a2298625fe6bd4ed4f5281f30585254400fdbc07470bb7b3e4a"
+  }
+}

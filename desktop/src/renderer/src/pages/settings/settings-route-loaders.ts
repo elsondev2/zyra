@@ -1,16 +1,20 @@
+import { findSettingsDestination, getSettingsCategoryEntry, SETTINGS_NAVIGATION_ITEMS } from './settings-navigation'
+
 export const loadSettingsShell = () => import('./SettingsShell')
 export const loadSettingsOverview = () => import('./SettingsOverview')
 export const loadGeneralSettings = () => import('../Settings')
 export const loadAppearanceSettings = () => import('./AppearanceSettings')
 export const loadAccountSettings = () => import('./AccountSettings')
 export const loadAssistantSettings = () => import('./AssistantSettings')
+export const loadPermissionsSettings = () => import('./PermissionsSettings')
 export const loadSkillsSettings = () => import('./SkillsSettings')
 export const loadVoiceSettings = () => import('./VoiceSettings')
 export const loadConnectionsSettings = () => import('./ConnectionsSettings')
 export const loadBrowserControlSettings = () => import('./BrowserControlSettings')
 export const loadFilesEditorSettings = () => import('./FilesEditorSettings')
 export const loadTerminalRuntimeSettings = () => import('./TerminalRuntimeSettings')
-export const loadProviderSettings = () => import('./AISettings')
+export const loadProviderSettings = () => import('./ProvidersSettings')
+export const loadProviderWritingSettings = () => import('./AISettings')
 export const loadSourceControlSettings = () => import('./GitSettings')
 export const loadProjectsSettings = () => import('./ProjectsSettings')
 export const loadMemorySettings = () => import('./MemorySettings')
@@ -19,50 +23,54 @@ export const loadDiagnosticsSettings = () => import('./LogsSettings')
 export const loadDataPrivacySettings = () => import('./DataPrivacySettings')
 export const loadAboutSettings = () => import('./AboutSettings')
 
-const routeLoaders: Record<string, () => Promise<unknown>> = {
-    '/settings': loadSettingsOverview,
-    '/settings/app': loadSettingsOverview,
-    '/settings/account': loadSettingsOverview,
-    '/settings/assistant': loadSettingsOverview,
-    '/settings/workspace': loadSettingsOverview,
-    '/settings/data': loadSettingsOverview,
-    '/settings/app/general': loadGeneralSettings,
-    '/settings/app/appearance': loadAppearanceSettings,
-    '/settings/account/openai': loadAccountSettings,
-    '/settings/account/devices': loadConnectionsSettings,
-    '/settings/assistant/defaults': loadAssistantSettings,
-    '/settings/assistant/skills': loadSkillsSettings,
-    '/settings/assistant/voice': loadVoiceSettings,
-    '/settings/assistant/providers': loadProviderSettings,
-    '/settings/workspace/browser': loadBrowserControlSettings,
-    '/settings/workspace/files': loadFilesEditorSettings,
-    '/settings/workspace/terminal': loadTerminalRuntimeSettings,
-    '/settings/workspace/projects': loadProjectsSettings,
-    '/settings/workspace/source-control': loadSourceControlSettings,
-    '/settings/data/privacy': loadDataPrivacySettings,
-    '/settings/data/memory': loadMemorySettings,
-    '/settings/data/archived': loadArchivedChatsSettings,
-    '/settings/data/diagnostics': loadDiagnosticsSettings,
-    '/settings/about': loadAboutSettings,
-    '/settings/general': loadGeneralSettings,
-    '/settings/appearance': loadAppearanceSettings,
-    '/settings/connections': loadConnectionsSettings,
-    '/settings/skills': loadSkillsSettings,
-    '/settings/voice': loadVoiceSettings,
-    '/settings/browser-control': loadBrowserControlSettings,
-    '/settings/files-editor': loadFilesEditorSettings,
-    '/settings/terminal-runtime': loadTerminalRuntimeSettings,
-    '/settings/providers': loadProviderSettings,
-    '/settings/source-control': loadSourceControlSettings,
-    '/settings/projects': loadProjectsSettings,
-    '/settings/memory': loadMemorySettings,
-    '/settings/archived': loadArchivedChatsSettings,
-    '/settings/diagnostics': loadDiagnosticsSettings
+const destinationLoaders: Record<string, () => Promise<unknown>> = {
+    general: loadGeneralSettings,
+    appearance: loadAppearanceSettings,
+    'appearance-typography': loadAppearanceSettings,
+    'appearance-layout': loadAppearanceSettings,
+    'appearance-colors': loadAppearanceSettings,
+    usage: loadProviderSettings,
+    providers: loadProviderSettings,
+    'provider-models': loadProviderSettings,
+    account: loadProviderSettings,
+    'provider-writing': loadProviderWritingSettings,
+    assistant: loadAssistantSettings,
+    'chat-display': loadAssistantSettings,
+    permissions: loadPermissionsSettings,
+    archived: loadArchivedChatsSettings,
+    skills: loadSkillsSettings,
+    voice: loadVoiceSettings,
+    'voice-lab': loadVoiceSettings,
+    connections: loadConnectionsSettings,
+    'device-chrome': loadConnectionsSettings,
+    'device-mobile': loadConnectionsSettings,
+    'browser-control': loadBrowserControlSettings,
+    'browser-privacy': loadBrowserControlSettings,
+    'browser-data': loadBrowserControlSettings,
+    'files-editor': loadFilesEditorSettings,
+    'file-editor': loadFilesEditorSettings,
+    'file-run': loadFilesEditorSettings,
+    'terminal-runtime': loadTerminalRuntimeSettings,
+    projects: loadProjectsSettings,
+    'project-discovery': loadProjectsSettings,
+    'project-presentation': loadProjectsSettings,
+    'source-control': loadSourceControlSettings,
+    'git-pull-requests': loadSourceControlSettings,
+    'git-writing': loadSourceControlSettings,
+    'git-writing-connections': loadProviderWritingSettings,
+    'git-writing-logs': loadDiagnosticsSettings,
+    memory: loadMemorySettings,
+    'memory-inspect': loadMemorySettings,
+    privacy: loadDataPrivacySettings,
+    diagnostics: loadDiagnosticsSettings,
+    about: loadAboutSettings
 }
 
 export function preloadSettingsRoute(value: string): void {
     const pathname = value.split(/[?#]/, 1)[0] || '/settings'
-    const loader = routeLoaders[pathname] || null
+    const category = SETTINGS_NAVIGATION_ITEMS.find(item => item.to === pathname)
+    const destination = category ? getSettingsCategoryEntry(category.id) : findSettingsDestination(pathname)
+    const loader = destinationLoaders[destination?.id || 'general']
     void loadSettingsShell().catch(() => undefined)
     void loader?.().catch(() => undefined)
 }

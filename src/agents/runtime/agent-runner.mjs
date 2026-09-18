@@ -7,6 +7,7 @@ export class AgentRunner {
   }
 
   async run(run, options = {}) {
+    if (options.signal?.aborted) throw abortError(options.signal.reason);
     const host = new ChildSessionHost({
       factory: this.sessionFactory,
       maxTurns: run.maxTurns,
@@ -30,6 +31,7 @@ export class AgentRunner {
         controlClient: options.controlClient,
         controlLease: options.controlLease,
       });
+      if (options.signal?.aborted) throw abortError(options.signal.reason);
       options.onLinked?.({ ...linked, host });
       const result = await host.run(buildDelegatedPrompt(run), { signal: options.signal });
       return { ...result, host };
@@ -40,6 +42,12 @@ export class AgentRunner {
       clearInterval(heartbeat);
     }
   }
+}
+
+function abortError(reason) {
+  const error = new Error(`Child agent cancelled${reason ? `: ${reason}` : ""}.`);
+  error.name = "AbortError";
+  return error;
 }
 
 export function buildDelegatedPrompt(run) {

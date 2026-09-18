@@ -1,7 +1,7 @@
 import { memo, startTransition, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
-import type { AssistantChatDisplayMode } from '@/lib/settings'
+import { useSettings, type AssistantChatDisplayMode } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { formatWorkingTimer } from './assistant-timeline-helpers'
 import {
@@ -52,9 +52,8 @@ export function TimelineTurnInterruptionMarker() {
             aria-label="Interrupted"
             data-assistant-turn-interruption="true"
         >
-            <span className="h-px min-w-6 flex-1 bg-white/[0.06]" aria-hidden="true" />
-            <span className="shrink-0 text-[10px] font-medium tracking-[0.04em] text-white/24">Interrupted</span>
-            <span className="h-px min-w-6 flex-1 bg-white/[0.06]" aria-hidden="true" />
+            <span className="shrink-0 text-[11px] font-medium text-sparkle-text-secondary">Interrupted</span>
+            <span className="h-px min-w-6 flex-1 bg-[var(--surface-divider)]" aria-hidden="true" />
         </div>
     )
 }
@@ -82,9 +81,12 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     revealContent?: boolean
     renderChildren: () => ReactNode
 }) {
+    const { settings } = useSettings()
+    const activeCollapseLocked = running && !settings.assistantAllowCollapseWhileWorking
+    const visibleActionCount = settings.assistantShowActionStats ? actionCount : 0
     const initialExpandedRef = useRef<boolean | null>(null)
     if (initialExpandedRef.current === null) {
-        initialExpandedRef.current = running && readWorkSummaryExpandedPreference()
+        initialExpandedRef.current = running && (activeCollapseLocked || readWorkSummaryExpandedPreference())
     }
     const initialExpanded = initialExpandedRef.current
     const [expanded, setExpanded] = useState(initialExpanded)
@@ -99,18 +101,18 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     const contentUnmountTimerRef = useRef<number | null>(null)
     const pendingExpansionAnchorRef = useRef<HTMLElement | null>(null)
     const minimal = displayMode === 'minimal'
-    const statusText = formatWorkSummaryStatus(startedAt, completedAt, running, actionCount)
+    const statusText = formatWorkSummaryStatus(startedAt, completedAt, running, visibleActionCount)
     useEffect(() => {
         const updateStatusText = () => {
             if (statusTextRef.current) {
-                statusTextRef.current.textContent = formatWorkSummaryStatus(startedAt, completedAt, running, actionCount)
+                statusTextRef.current.textContent = formatWorkSummaryStatus(startedAt, completedAt, running, visibleActionCount)
             }
         }
         updateStatusText()
         if (!running) return
         const intervalId = window.setInterval(updateStatusText, 1000)
         return () => window.clearInterval(intervalId)
-    }, [actionCount, completedAt, displayMode, running, startedAt])
+    }, [visibleActionCount, completedAt, displayMode, running, startedAt])
     const outcomeLabel = outcome === 'failed'
         ? 'Failed'
         : outcome === 'no-response'
@@ -128,6 +130,7 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
         }
     }
     const setWorkExpanded = (nextExpanded: boolean, anchor: HTMLElement | null) => {
+        if (!nextExpanded && activeCollapseLocked) return
         cancelPendingContentWork()
         if (running) writeWorkSummaryExpandedPreference(nextExpanded)
         setExpanded(nextExpanded)
@@ -150,6 +153,10 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
             setContentMounted(false)
         }, WORK_SUMMARY_UNMOUNT_DELAY_MS)
     }
+
+    useEffect(() => {
+        if (activeCollapseLocked && !expanded) setWorkExpanded(true, triggerRef.current)
+    }, [activeCollapseLocked, expanded])
 
     const previousRevealContentRef = useRef(false)
     useEffect(() => {
@@ -179,10 +186,12 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
         previousRunningRef.current = running
         previousTerminalResponseRef.current = collapseForTerminalResponse
         if (!runningChanged && !terminalResponseBecameVisible) return
+        // A narration/compaction update must not cancel the pending reveal frame.
+        if (activeCollapseLocked && wasRunning) return
         cancelPendingContentWork()
         pendingExpansionAnchorRef.current = null
-        if (!wasRunning && running && !collapseForTerminalResponse) {
-            const restoreExpanded = readWorkSummaryExpandedPreference()
+        if (!wasRunning && running && (activeCollapseLocked || !collapseForTerminalResponse)) {
+            const restoreExpanded = !settings.assistantAllowCollapseWhileWorking || readWorkSummaryExpandedPreference()
             setExpanded(restoreExpanded)
             setContentVisible(false)
             setContentMounted(restoreExpanded)
@@ -199,7 +208,7 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
             contentUnmountTimerRef.current = null
             setContentMounted(false)
         }, WORK_SUMMARY_UNMOUNT_DELAY_MS)
-    }, [collapseForTerminalResponse, running])
+    }, [collapseForTerminalResponse, running, activeCollapseLocked])
 
     useEffect(() => () => {
         if (contentRevealFrameRef.current !== null) {
@@ -230,13 +239,14 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                     ref={triggerRef}
                     type="button"
                     onClick={() => setWorkExpanded(!expanded, triggerRef.current)}
+                    disabled={activeCollapseLocked}
                     aria-expanded={expanded}
                     aria-controls={panelId}
                     className={cn(
                         'group/work inline-flex min-h-7 items-center rounded-sm pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30',
                         minimal ? 'gap-1.5' : 'gap-1'
                     )}
-                    title={expanded ? 'Hide work' : 'Show work'}
+                    title={activeCollapseLocked ? 'Ongoing work stays visible' : expanded ? 'Hide work' : 'Show work'}
                 >
                     {running ? (
                         <span data-assistant-working-dots="true" className="inline-flex shrink-0 items-center gap-[3px]" aria-hidden="true">
@@ -259,15 +269,14 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                             · {outcomeLabel}
                         </span>
                     ) : null}
-                    <ChevronRight
+                    {!activeCollapseLocked ? <ChevronRight
                         size={12}
                         aria-hidden="true"
                         className={cn('shrink-0 text-white/20 transition-[transform,color] duration-[260ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] group-hover/work:text-white/35 motion-reduce:transition-none', expanded && 'rotate-90')}
-                    />
+                    /> : null}
                 </button>
                 {!minimal && outcome !== 'interrupted' ? <div className="h-px w-full bg-white/[0.07]" aria-hidden="true" /> : null}
             </div>
-            {interruptionMarker}
             <div id={panelId}>
                 <AnimatedHeight isOpen={contentVisible} duration={WORK_SUMMARY_MOTION_MS} crispContent>
                     {contentMounted ? (
@@ -277,6 +286,7 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                     ) : null}
                 </AnimatedHeight>
             </div>
+            {interruptionMarker}
         </div>
     )
 })

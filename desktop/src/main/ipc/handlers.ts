@@ -1,3 +1,8 @@
+import { MobileAccessManager } from '../mobile-access'
+import { MOBILE_ACCESS_IPC } from '../../shared/mobile-access'
+import { getAssistantService } from '../assistant'
+import { readRuntimeActivation, subscribeRuntimeActivation } from '../assistant/runtime-activation'
+import { RUNTIME_ACTIVATION_GET, RUNTIME_ACTIVATION_CHANGED } from '../../shared/runtime-activation'
 /**
  * Zyra - IPC Handler Registry
  */
@@ -22,7 +27,7 @@ import {
     handleTestGeminiConnection,
     handleTestGroqConnection
 } from './handlers/settings-ai-handlers'
-import { handleMemoryGetOverview } from './handlers/memory-handlers'
+import { handleMemoryGetOverview, handleMemoryGetJobStatus } from './handlers/memory-handlers'
 import {
     handleAssistantApprovePendingPlaygroundLabRequest,
     handleAssistantArchiveSession,
@@ -49,6 +54,7 @@ import {
     handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
+    handleAssistantGetUsageSummary,
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
     handleAssistantGetVoiceTranscriptionState,
@@ -95,6 +101,7 @@ import {
     handleAssistantSendPrompt,
     handleAssistantSetPlaygroundRoot,
     handleAssistantSetSessionProject,
+    handleAssistantUpdateSessionConfiguration,
     handleAssistantSetSessionProjectPath,
     handleAssistantSubscribe,
     handleAssistantUnsubscribe
@@ -194,6 +201,7 @@ import {
     handleStageBrowserPreviewArtifactForAssistant,
     handleStartBrowserPreviewAnnotation,
     handleStartBrowserPreviewRecording,
+    handlePrepareBrowserPreviewRecordingAudio,
     handleStopBrowserPreviewRecording
 } from './handlers/browser-preview-developer-handlers'
 import {
@@ -300,8 +308,25 @@ const ipcMain = createOnboardingGatedIpcMain(trustedIpcMain, {
     blockedResult: onboardingRequiredError
 })
 
-export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: DesktopSetupServices): void {
+export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: DesktopSetupServices, getMainWindow: () => BrowserWindow | null = () => mainWindow): void {
     log.info('Registering IPC handlers...')
+    const mobileAccess = new MobileAccessManager(app.getPath('userData'), getAssistantService, async () => {
+        const value = (await setupServices.preferences.get({ surface: 'desktop' })).settings.projectIconOverrides
+        return value && typeof value === 'object' ? value as Record<string, string> : {}
+    })
+    setupServices.preferences.subscribe(event => { if (event.changedKeys.includes('projectIconOverrides')) mobileAccess.invalidateProjectArtwork() })
+    ipcMain.handle(MOBILE_ACCESS_IPC, (_event, action, input) => {
+        if (action === 'state') return mobileAccess.state()
+        if (action === 'device-access') return mobileAccess.setDeviceAccess(input?.id, input?.access)
+        if (action === 'projects') return mobileAccess.projectChoices()
+        if (action === 'configure') return mobileAccess.configure(input)
+        if (action === 'pair') return mobileAccess.pair()
+        if (action === 'revoke') return mobileAccess.revoke(input)
+        throw new Error('Unknown mobile access action.')
+    })
+    if (setupServices.onboarding.isAccessAllowed()) void mobileAccess.restore()
+    setupServices.onboarding.subscribe(snapshot => { if (!snapshot.accessAllowed) void mobileAccess.stop() })
+    app.once('before-quit', () => { void mobileAccess.stop() })
 
     isOnboardingAccessAllowed = () => setupServices.onboarding.isAccessAllowed()
     configureHostedAiSecretResolver((provider) => setupServices.secrets.getHostedAiKey(provider))
@@ -328,7 +353,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
             ? handler(...args)
             : onboardingRequiredError()
     )
-    const controlHandlers = createAgentControlHandlers(mainWindow)
+    const controlHandlers = createAgentControlHandlers(mainWindow, getMainWindow)
     ipcMain.handle(AGENT_CONTROL_IPC.getState, controlHandlers.getState)
     ipcMain.handle(AGENT_CONTROL_IPC.bindBrowserTab, controlHandlers.bindBrowserTab)
     ipcMain.handle(AGENT_CONTROL_IPC.acknowledgeBrowserSurfaceRequest, controlHandlers.acknowledgeBrowserSurfaceRequest)
@@ -342,6 +367,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(AGENT_CONTROL_IPC.revokeGrant, controlHandlers.revokeGrant)
     ipcMain.handle(AGENT_CONTROL_IPC.emergencyStop, controlHandlers.emergencyStop)
     ipcMain.handle(AGENT_CONTROL_IPC.clearAudit, controlHandlers.clearAudit)
+    ipcMain.handle(AGENT_CONTROL_IPC.openChromeExtensionFolder, controlHandlers.openChromeExtensionFolder)
     ipcMain.handle(AGENT_CONTROL_IPC.startChromePairing, controlHandlers.startChromePairing)
     ipcMain.handle(AGENT_CONTROL_IPC.stopChromePairing, controlHandlers.stopChromePairing)
     ipcMain.handle(AGENT_CONTROL_IPC.listWindows, controlHandlers.listWindows)
@@ -369,6 +395,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:getAiDebugLogs', handleGetAiDebugLogs)
     ipcMain.handle('devscope:clearAiDebugLogs', handleClearAiDebugLogs)
     ipcMain.handle('zyra:memory:getOverview', handleMemoryGetOverview)
+    ipcMain.handle(RUNTIME_ACTIVATION_GET, () => readRuntimeActivation())
+    subscribeRuntimeActivation(state => {
+        for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(RUNTIME_ACTIVATION_CHANGED, state)
+    })
+    ipcMain.handle('zyra:memory:getJobStatus', () => handleMemoryGetJobStatus(app.getPath('userData')))
     ipcMain.handle(ASSISTANT_IPC.subscribe, requireCompletedSetup(handleAssistantSubscribe))
     ipcMain.handle(ASSISTANT_IPC.unsubscribe, requireCompletedSetup(handleAssistantUnsubscribe))
     ipcMain.handle(ASSISTANT_IPC.bootstrap, requireCompletedSetup(handleAssistantBootstrap))
@@ -379,6 +410,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.getStatus, requireCompletedSetup(handleAssistantGetStatus))
     ipcMain.handle(ASSISTANT_IPC.getAccountOverview, requireCompletedSetup(handleAssistantGetAccountOverview))
     ipcMain.handle(ASSISTANT_IPC.redeemAccountReset, requireCompletedSetup(handleAssistantRedeemAccountReset))
+    ipcMain.handle(ASSISTANT_IPC.getUsageSummary, requireCompletedSetup(handleAssistantGetUsageSummary))
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, requireCompletedSetup(handleAssistantGetSessionTurnUsage))
     ipcMain.handle(ASSISTANT_IPC.listModels, requireCompletedSetup(handleAssistantListModels))
     ipcMain.handle(ASSISTANT_IPC.listProjects, requireCompletedSetup(handleAssistantListProjects))
@@ -420,6 +452,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.deleteSession, requireCompletedSetup(handleAssistantDeleteSession))
     ipcMain.handle(ASSISTANT_IPC.deleteMessage, requireCompletedSetup(handleAssistantDeleteMessage))
     ipcMain.handle(ASSISTANT_IPC.clearLogs, requireCompletedSetup(handleAssistantClearLogs))
+    ipcMain.handle(ASSISTANT_IPC.updateSessionConfiguration, requireCompletedSetup(handleAssistantUpdateSessionConfiguration))
     ipcMain.handle(ASSISTANT_IPC.setSessionProject, requireCompletedSetup(handleAssistantSetSessionProject))
     ipcMain.handle(ASSISTANT_IPC.setSessionProjectPath, requireCompletedSetup(handleAssistantSetSessionProjectPath))
     ipcMain.handle(ASSISTANT_IPC.setPlaygroundRoot, requireCompletedSetup(handleAssistantSetPlaygroundRoot))
@@ -501,6 +534,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:browserPreview:startAnnotation', handleStartBrowserPreviewAnnotation)
     ipcMain.handle('devscope:browserPreview:cancelAnnotation', handleCancelBrowserPreviewAnnotation)
     ipcMain.handle('devscope:browserPreview:startRecording', handleStartBrowserPreviewRecording)
+    ipcMain.handle('devscope:browserPreview:prepareRecordingAudio', handlePrepareBrowserPreviewRecordingAudio)
     ipcMain.handle('devscope:browserPreview:stopRecording', handleStopBrowserPreviewRecording)
     ipcMain.handle('devscope:browserPreview:saveRecording', handleSaveBrowserPreviewRecording)
     ipcMain.handle('devscope:browserPreview:getLinkPreview', handleGetBrowserLinkPreview)

@@ -20,7 +20,7 @@ const sessionRef = { current: session }
 const calls = []
 const candidate = {
   windowToken: 'window-token:opaque-candidate',
-  title: 'Private document title',
+  title: 'Calculator - Standard',
   applicationName: 'ApplicationFrameHost',
   executableIdentity: 'fixture-identity',
   processId: 4242,
@@ -45,6 +45,8 @@ const client = {
     if (operation.operation === 'open_app') return { applicationName: 'Calculator', windows: [candidate] }
     if (operation.operation === 'list_windows') return { windows: [candidate] }
     if (operation.operation === 'use_app' || operation.operation === 'request_grant') return {
+      selectedWindow: { targetId: observation.targetId, candidateRef: candidate.windowToken,
+        processId: candidate.processId, applicationName: candidate.applicationName, title: candidate.title },
       grant: {
         grantId: 'control-grant:fixture',
         targetId: observation.targetId,
@@ -96,6 +98,8 @@ assert(!advertisedSequenceKeys.includes('Enter'), 'sequence schemas keep Enter o
 const initialSteps = [{ type: 'click', role: 'button', name: 'Seven', sideEffect: 'none' }]
 const used = await useApp.execute('tool:use-app', { application: 'Calculator', access: ['observe', 'click', 'key'], steps: initialSteps })
 assert.match(used.content[0].text, /Computer access granted/)
+assert.equal(used.details.selectedWindow.processId, 4242)
+assert.match(used.content[0].text, /selectedWindow/)
 assert.match(used.content[0].text, /Initial computer observation ready/)
 assert.deepEqual(calls.at(-1), {
   operation: 'use_app',
@@ -111,13 +115,13 @@ const openApp = tools.find((tool) => tool.name === 'computer_open_app')
 assert(openApp, 'computer tasks need a first-class registered-app launcher')
 const opened = await openApp.execute('tool:open-app', { application: 'Calculator' })
 assert.match(opened.content[0].text, /candidateRef window-token:opaque-candidate/)
-assert.doesNotMatch(opened.content[0].text, /Private document title/)
+assert.match(opened.content[0].text, /Calculator - Standard/)
 assert.deepEqual(calls.at(-1), { operation: 'open_app', application: 'Calculator' })
 
 const list = tools.find((tool) => tool.name === 'computer_list_windows')
 const listed = await list.execute('tool:list', { query: 'Calculator' })
 assert.match(listed.content[0].text, /candidateRef window-token:opaque-candidate/)
-assert.doesNotMatch(listed.content[0].text, /Private document title/, 'ambient titles stay out of pre-grant model content')
+assert.match(listed.content[0].text, /Calculator - Standard/, 'query-scoped window titles distinguish exact candidates before access')
 assert.deepEqual(listed.details, { matchCount: 1 }, 'raw ambient windows are not persisted in tool details')
 assert.deepEqual(calls.at(-1), { operation: 'list_windows', query: 'Calculator' })
 
@@ -139,6 +143,8 @@ assert.deepEqual(calls.at(-1), {
   durationMs: 10 * 60 * 1000,
   maxActions: 32,
 })
+assert.equal(access.details.selectedWindow.candidateRef, candidate.windowToken)
+assert.match(access.content[0].text, /selectedWindow/)
 assert.equal(access.details.observation.revision, 2, 'access returns a compact initial observation summary')
 
 const sequence = tools.find((tool) => tool.name === 'computer_sequence')
@@ -180,3 +186,55 @@ assert(COMPUTER_TOOLSET_NAMES.every((name) => !session.active.includes(name)), '
 assert(session.active.includes(COMPUTER_TOOL_SEARCH_NAME))
 
 console.log('Zyra deferred computer-tool feedback loop passed.')
+
+const dragStepSchema = sequence.parameters.properties.steps.items.anyOf.find((entry) => entry.properties?.type?.const === 'drag')
+assert(dragStepSchema, 'drawing gestures are available in the model-facing batch schema')
+assert.equal(dragStepSchema.properties.sideEffect.const, 'none')
+assert.equal(dragStepSchema.properties.durationMs.maximum, 5000)
+assert.equal(dragStepSchema.additionalProperties, false)
+assert.equal(sequence.parameters.properties.steps.maxItems, 16)
+const useAppForDrag = tools.find((tool) => tool.name === 'computer_use_app')
+assert(useAppForDrag.parameters.properties.steps.items.anyOf.some((entry) => entry.properties?.type?.const === 'drag'), 'computer_use_app shares the bounded drag sequence schema')
+
+
+const pointStepSchema = sequence.parameters.properties.steps.items.anyOf.find((entry) => entry.properties?.type?.const === 'click_point')
+assert(pointStepSchema, 'routine coordinate clicks must not require separate model round trips')
+assert.equal(pointStepSchema.properties.sideEffect.const, 'none')
+assert.equal(pointStepSchema.properties.x.minimum, 0)
+assert.equal(pointStepSchema.properties.y.maximum, 100000)
+assert.equal(pointStepSchema.additionalProperties, false)
+assert(useApp.parameters.properties.steps.items.anyOf.some((entry) => entry.properties?.type?.const === 'click_point'))
+const pointSteps = [
+  { type: 'click_point', x: 120, y: 140, sideEffect: 'none' },
+  { type: 'click_point', x: 220, y: 140, sideEffect: 'none' },
+  { type: 'click', name: 'Pencil', sideEffect: 'none' },
+]
+await sequence.execute('tool:point-sequence', {
+  targetId: observation.targetId, grantId: 'control-grant:fixture',
+  observationRevision: observation.revision, steps: pointSteps,
+})
+assert.deepEqual(calls.at(-1).steps, pointSteps, 'coordinates and the final semantic action reach the broker in one ordered batch')
+assert.equal(calls.at(-1).operation, 'act_sequence')
+
+const strokeTool = tools.find(tool => tool.name === 'computer_stroke')
+assert.ok(strokeTool, 'native continuous strokes are discoverable')
+assert.equal(strokeTool.parameters.properties.points.minItems, 2)
+assert.equal(strokeTool.parameters.properties.points.maxItems, 512)
+assert.ok(sequence.parameters.properties.steps.items.anyOf.some(step => step.properties.type.const === 'stroke'))
+
+const orderedPoints = [{ x: 20, y: 30 }, { x: 40, y: 60 }, { x: 80, y: 35 }]
+await strokeTool.execute('tool:stroke', { targetId: observation.targetId, grantId: 'control-grant:fixture', observationRevision: observation.revision, points: orderedPoints, durationMs: 600 })
+assert.deepEqual(calls.at(-1).action, { type: 'stroke', points: orderedPoints, durationMs: 600 })
+
+assert.equal(useApp.parameters.properties.steps.minItems, 0, 'an empty optional app setup must behave like omitted steps')
+assert.equal(sequence.parameters.properties.steps.minItems, 1, 'standalone execution still requires a step')
+await useApp.execute('tool:empty-setup', { application: 'Calculator', access: ['observe'], steps: [] })
+assert.equal('steps' in calls.at(-1), false, 'empty optional setup is omitted before the bridge call')
+
+await strokeTool.execute('tool:compact-stroke', { targetId: observation.targetId, grantId: 'control-grant:fixture', observationRevision: observation.revision, points: [[20,30],[40,60],[80,35]], durationMs: 600 })
+assert.deepEqual(calls.at(-1).action, { type: 'stroke', points: orderedPoints, durationMs: 600 })
+await sequence.execute('tool:compact-sequence', { targetId: observation.targetId, grantId: 'control-grant:fixture', observationRevision: observation.revision, steps: [{ type: 'stroke', points: [[20,30],[40,60]], sideEffect: 'none' }] })
+assert.deepEqual(calls.at(-1).steps, [{ type: 'stroke', points: [{x:20,y:30},{x:40,y:60}], sideEffect: 'none' }])
+await useApp.execute('tool:compact-app', { application: 'Calculator', access: ['observe','drag'], steps: [{ type: 'stroke', points: [[20,30],[40,60]], sideEffect: 'none' }] })
+assert.deepEqual(calls.at(-1).steps, [{ type: 'stroke', points: [{x:20,y:30},{x:40,y:60}], sideEffect: 'none' }])
+await assert.rejects(() => strokeTool.execute('tool:invalid-point', { targetId: observation.targetId, grantId: 'control-grant:fixture', observationRevision: observation.revision, points: [[20,30,40],[40,60]] }), /exactly/)

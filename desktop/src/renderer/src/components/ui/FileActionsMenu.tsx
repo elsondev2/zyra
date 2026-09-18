@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import { addOverlayEventListener, addOverlayWindowBlurListener, createOverlayPortal as createPortal, isOverlayEventInside } from './native-overlay-portal'
+import { supportsNativeOverlay } from './native-overlay-host'
 import { Check, ChevronRight, MoreVertical, Plus } from 'lucide-react'
 import { dismissTransientMenus, TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import { cn } from '@/lib/utils'
+import { FileActionsMenuSecondaryAction } from './FileActionsMenuSecondaryAction'
+import { resolveFileActionsMenuWidth } from './file-actions-menu-layout'
 
 export interface FileActionsMenuChoice {
     id: string
@@ -16,6 +19,8 @@ export interface FileActionsMenuChoice {
 }
 
 export interface FileActionsMenuItem extends FileActionsMenuChoice {
+    ariaLabel?: string
+    secondaryAction?: FileActionsMenuChoice
     choices?: FileActionsMenuChoice[]
     choicesLabel?: string
 }
@@ -27,13 +32,23 @@ interface FileActionsMenuProps {
     openButtonClassName?: string
     menuClassName?: string
     title?: string
+    disabled?: boolean
     triggerIcon?: React.ReactNode
     presentation?: 'portal' | 'inline'
     preferredDirection?: 'up' | 'down'
     density?: 'default' | 'compact'
     menuWidth?: number
+    matchTriggerWidth?: boolean
+    anchorRef?: RefObject<HTMLElement | null>
     menuLabel?: string
+    selectionMode?: 'radio'
+    containEscape?: boolean
     accentColor?: string
+}
+
+function initialMenuButton(element: HTMLDivElement | null, radioSelection: boolean): HTMLButtonElement | null | undefined {
+    return (radioSelection ? element?.querySelector<HTMLButtonElement>('button[aria-checked="true"]:not(:disabled)') : null)
+        || element?.querySelector<HTMLButtonElement>('button:not(:disabled)')
 }
 
 export function FileActionsMenu({
@@ -43,15 +58,22 @@ export function FileActionsMenu({
     openButtonClassName,
     menuClassName,
     title = 'Actions',
+    disabled = false,
     triggerIcon,
     presentation = 'portal',
     preferredDirection,
     density = 'default',
     menuWidth,
+    matchTriggerWidth = false,
+    anchorRef,
     menuLabel,
+    selectionMode,
+    containEscape = false,
     accentColor
 }: FileActionsMenuProps) {
     const [open, setOpen] = useState(false)
+    const focusAfterOpen = useRef(false)
+    const effectivePresentation = supportsNativeOverlay() ? 'portal' : presentation
     const [expandedItemId, setExpandedItemId] = useState<string | null>(null)
     const rootRef = useRef<HTMLDivElement | null>(null)
     const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -63,6 +85,7 @@ export function FileActionsMenu({
         top?: number
         bottom?: number
         left: number
+        width: number
         maxHeight: number
     } | null>(null)
     const [submenuPosition, setSubmenuPosition] = useState<{
@@ -71,7 +94,32 @@ export function FileActionsMenu({
         side: 'left' | 'right'
     } | null>(null)
     const compact = density === 'compact'
+    const radioSelection = selectionMode === 'radio'
+    const handleEscapeLocally = radioSelection || containEscape
     const resolvedMenuWidth = menuWidth || (compact ? 176 : 180)
+    const closeMenu = useCallback(() => {
+        focusAfterOpen.current = false
+        setOpen(false)
+    }, [])
+    const requestOpen = useCallback((focus = false) => {
+        if (disabled || open) return
+        dismissTransientMenus()
+        setMenuPosition(null)
+        focusAfterOpen.current = focus
+        setOpen(true)
+    }, [disabled, open])
+    useLayoutEffect(() => {
+        closeMenu()
+    }, [closeMenu, disabled])
+    const setMenuElement = useCallback((element: HTMLDivElement | null) => {
+        menuRef.current = element
+        if (element && focusAfterOpen.current) {
+            focusAfterOpen.current = false
+            const first = initialMenuButton(element, radioSelection)
+            first?.setAttribute('data-native-overlay-autofocus', '')
+            first?.focus()
+        }
+    }, [radioSelection])
     const accentedMenuStyle = accentColor ? ({
         '--file-actions-menu-accent': accentColor,
         borderColor: `color-mix(in srgb, ${accentColor} 30%, var(--surface-divider))`,
@@ -79,8 +127,8 @@ export function FileActionsMenu({
         boxShadow: `inset 0 2px 0 color-mix(in srgb, ${accentColor} 72%, transparent), 0 14px 34px rgba(0,0,0,0.32), 0 0 0 1px color-mix(in srgb, ${accentColor} 7%, transparent)`
     } as CSSProperties) : undefined
 
-    const updatePosition = (menuWidth = resolvedMenuWidth) => {
-        const button = buttonRef.current
+    const updatePosition = (preferredWidth = resolvedMenuWidth) => {
+        const button = anchorRef?.current || buttonRef.current
         if (!button) return
 
         const viewportPadding = 12
@@ -88,6 +136,7 @@ export function FileActionsMenu({
         const separatorCount = items.filter((item) => item.separatorBefore).length
         const estimatedMenuHeight = Math.min(360, items.length * (compact ? 32 : 34) + separatorCount * 5 + 14 + (menuLabel ? 36 : 0))
         const rect = button.getBoundingClientRect()
+        const measuredWidth = resolveFileActionsMenuWidth(preferredWidth, rect.width, window.innerWidth, matchTriggerWidth)
         const spaceBelow = window.innerHeight - rect.bottom - viewportPadding
         const spaceAbove = rect.top - viewportPadding
         let direction: 'up' | 'down' = preferredDirection
@@ -95,25 +144,27 @@ export function FileActionsMenu({
         if (direction === 'down' && spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow) direction = 'up'
         if (direction === 'up' && spaceAbove < estimatedMenuHeight && spaceBelow > spaceAbove) direction = 'down'
 
-        if (presentation === 'inline') {
+        if (effectivePresentation === 'inline') {
             setInlineDirection(direction)
             setMenuPosition(null)
             return
         }
 
-        const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding)
-        const left = Math.max(viewportPadding, Math.min(rect.right - menuWidth, maxLeft))
+        const maxLeft = Math.max(viewportPadding, window.innerWidth - measuredWidth - viewportPadding)
+        const left = Math.max(viewportPadding, Math.min(rect.right - measuredWidth, maxLeft))
         setMenuPosition(direction === 'up'
             ? {
                 direction,
                 bottom: Math.max(viewportPadding, window.innerHeight - rect.top + gap),
                 left,
+                width: measuredWidth,
                 maxHeight: Math.max(1, spaceAbove - gap)
             }
             : {
                 direction,
                 top: Math.max(viewportPadding, rect.bottom + gap),
                 left,
+                width: measuredWidth,
                 maxHeight: Math.max(1, spaceBelow - gap)
             })
     }
@@ -129,11 +180,15 @@ export function FileActionsMenu({
         }
         const rafId = window.requestAnimationFrame(handleResize)
         window.addEventListener('resize', handleResize)
+        const observer = matchTriggerWidth && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
+        const anchor = anchorRef?.current || buttonRef.current
+        if (anchor) observer?.observe(anchor)
         return () => {
             window.cancelAnimationFrame(rafId)
             window.removeEventListener('resize', handleResize)
+            observer?.disconnect()
         }
-    }, [compact, items, menuLabel, open, preferredDirection, presentation, resolvedMenuWidth])
+    }, [compact, items, menuLabel, open, preferredDirection, effectivePresentation, resolvedMenuWidth, matchTriggerWidth, anchorRef])
 
     useEffect(() => {
         if (!open) {
@@ -143,37 +198,31 @@ export function FileActionsMenu({
     }, [open])
 
     useEffect(() => {
-        if (!open || presentation !== 'portal') return
+        if (!open || effectivePresentation !== 'portal') return
 
         const handleScroll = () => setOpen(false)
 
         window.addEventListener('scroll', handleScroll, true)
         return () => window.removeEventListener('scroll', handleScroll, true)
-    }, [open, presentation])
+    }, [open, effectivePresentation])
 
     useEffect(() => {
         if (!open) return
 
-        const dismiss = () => setOpen(false)
+        const dismiss = closeMenu
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target
-            if (!(target instanceof Node)) {
-                dismiss()
-                return
-            }
-            const isInsideButton = Boolean(rootRef.current?.contains(target))
-            const isInsideMenu = Boolean(menuRef.current?.contains(target))
-            const isInsideSubmenu = Boolean(submenuRef.current?.contains(target))
-            if (!isInsideButton && !isInsideMenu && !isInsideSubmenu) dismiss()
+            if (!isOverlayEventInside(event, rootRef.current, menuRef.current, submenuRef.current)) dismiss()
         }
         const handleFocusIn = (event: FocusEvent) => {
-            const target = event.target
-            if (!(target instanceof Node)) return
-            if (rootRef.current?.contains(target) || menuRef.current?.contains(target) || submenuRef.current?.contains(target)) return
+            if (isOverlayEventInside(event, rootRef.current, menuRef.current, submenuRef.current)) return
             dismiss()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key !== 'Escape') return
+            if (handleEscapeLocally) {
+                event.preventDefault()
+                event.stopPropagation()
+            }
             if (expandedItemId) {
                 event.preventDefault()
                 setExpandedItemId(null)
@@ -181,28 +230,30 @@ export function FileActionsMenu({
                 return
             }
             dismiss()
+            if (handleEscapeLocally) buttonRef.current?.focus()
         }
 
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        document.addEventListener('focusin', handleFocusIn)
-        document.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismiss)
+        const removePointer = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeFocus = addOverlayEventListener('focusin', handleFocusIn)
+        const removeEscape = addOverlayEventListener('keydown', handleEscape, handleEscapeLocally)
+        const removeBlur = addOverlayWindowBlurListener(dismiss)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismiss)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            document.removeEventListener('focusin', handleFocusIn)
-            document.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismiss)
+            removePointer()
+            removeFocus()
+            removeEscape()
+            removeBlur()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismiss)
         }
-    }, [expandedItemId, open])
+    }, [closeMenu, expandedItemId, open, handleEscapeLocally])
 
     if (items.length === 0) return null
 
-    const menuDirection = presentation === 'inline' ? inlineDirection : menuPosition?.direction
+    const menuDirection = effectivePresentation === 'inline' ? inlineDirection : menuPosition?.direction
     const menuBody = (
         <div
             role="menu"
+            aria-label={radioSelection ? title : undefined}
             className={cn(
                 'relative overflow-y-auto overscroll-contain shadow-[0_18px_48px_rgba(0,0,0,0.34)] backdrop-blur-xl',
                 compact
@@ -220,7 +271,7 @@ export function FileActionsMenu({
                 const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
                 if (buttons.length === 0) return
                 event.preventDefault()
-                const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                const currentIndex = buttons.indexOf(event.currentTarget.ownerDocument.activeElement as HTMLButtonElement)
                 const nextIndex = event.key === 'Home'
                     ? 0
                     : event.key === 'End'
@@ -248,14 +299,20 @@ export function FileActionsMenu({
             {items.map((item) => (
                 <div key={item.id}>
                     {item.separatorBefore ? <div className="mx-1 my-1 h-px bg-[var(--surface-divider)]" role="separator" /> : null}
-                    <div className="flex w-full items-stretch">
+                    <div
+                        className={cn('flex w-full items-stretch', !item.disabled && !item.danger && 'file-actions-menu-row')}
+                        data-expanded={expandedItemId === item.id ? 'true' : undefined}
+                    >
                         <button
                             type="button"
-                            role={typeof item.checked === 'boolean' ? 'menuitemcheckbox' : 'menuitem'}
+                            role={typeof item.checked === 'boolean' ? (radioSelection ? 'menuitemradio' : 'menuitemcheckbox') : 'menuitem'}
                             aria-checked={typeof item.checked === 'boolean' ? item.checked : undefined}
+                            aria-label={item.ariaLabel}
+                            title={item.ariaLabel}
                             disabled={item.disabled}
                             onClick={() => {
                                 setOpen(false)
+                                if (radioSelection) buttonRef.current?.focus()
                                 void item.onSelect()
                             }}
                             className={cn(
@@ -263,24 +320,21 @@ export function FileActionsMenu({
                                 compact
                                     ? 'min-h-8 px-2 py-1.5 text-[11px] leading-none'
                                     : 'px-2.5 py-2 text-xs',
-                                item.choices?.length
+                                item.choices?.length || item.secondaryAction
                                     ? 'rounded-l-[4px] rounded-r-none'
                                     : compact ? 'rounded-[4px]' : 'rounded-md',
                                 item.disabled
                                     ? compact ? 'cursor-not-allowed text-sparkle-text-muted/35' : 'cursor-not-allowed text-white/20'
                                     : item.danger
                                         ? 'text-red-200 hover:bg-red-500/15 hover:text-red-100'
-                                        : compact
-                                            ? accentColor
-                                                ? 'text-[color-mix(in_srgb,var(--color-text)_80%,transparent)] hover:bg-[color-mix(in_srgb,var(--file-actions-menu-accent)_12%,transparent)] hover:text-[var(--color-text)]'
-                                                : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
-                                            : 'text-white/75 hover:bg-white/10 hover:text-white'
+                                        : 'text-sparkle-text-secondary hover:text-sparkle-text'
                             )}
                         >
-                            <span className="inline-flex size-4 shrink-0 items-center justify-center" style={accentColor && !item.danger ? { color: `color-mix(in srgb, ${accentColor} 76%, var(--color-text))` } : undefined}>{item.icon}</span>
+                            {!radioSelection || item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center" style={accentColor && !item.danger ? { color: `color-mix(in srgb, ${accentColor} 76%, var(--color-text))` } : undefined}>{item.icon}</span> : null}
                             <span className="min-w-0 flex-1 truncate">{item.label}</span>
                             {item.checked ? <Check className="size-3.5 shrink-0 text-[var(--accent-primary)]" strokeWidth={2.2} /> : null}
                         </button>
+                        {item.secondaryAction ? <FileActionsMenuSecondaryAction action={item.secondaryAction} onClose={() => setOpen(false)} /> : null}
                         {item.choices?.length ? (
                             <button
                                 type="button"
@@ -315,8 +369,8 @@ export function FileActionsMenu({
                                     setSubmenuPosition({ top, left, side })
                                 }}
                                 className={cn(
-                                    'inline-flex w-7 shrink-0 items-center justify-center rounded-r-[4px] border-l border-[color-mix(in_srgb,var(--color-text)_8%,transparent)] text-sparkle-text-muted/55 transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
-                                    expandedItemId === item.id && 'bg-[var(--surface-hover)] text-sparkle-text',
+                                    'inline-flex w-7 shrink-0 items-center justify-center rounded-r-[4px] text-sparkle-text-muted transition-colors hover:text-sparkle-text',
+                                    expandedItemId === item.id && 'text-sparkle-text',
                                     item.disabled && 'cursor-not-allowed opacity-35'
                                 )}
                             >
@@ -340,25 +394,17 @@ export function FileActionsMenu({
             <button
                 ref={buttonRef}
                 type="button"
+                disabled={disabled}
                 onClick={(event) => {
                     event.stopPropagation()
-                    if (!open) {
-                        dismissTransientMenus()
-                        setMenuPosition(null)
-                    }
-                    setOpen(!open)
+                    if (open) closeMenu()
+                    else requestOpen(radioSelection && event.detail === 0)
                 }}
                 onKeyDown={(event) => {
-                    if (event.key !== 'ArrowDown') return
+                    if (event.key !== 'ArrowDown' && !(radioSelection && event.key === 'ArrowUp')) return
                     event.preventDefault()
-                    if (!open) {
-                        dismissTransientMenus()
-                        setMenuPosition(null)
-                        setOpen(true)
-                    }
-                    window.requestAnimationFrame(() => {
-                        window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
-                    })
+                    if (!open) requestOpen(true)
+                    else initialMenuButton(menuRef.current, radioSelection)?.focus()
                 }}
                 className={cn(
                     'group/file-menu h-7 w-7 inline-flex items-center justify-center rounded-md border-0 text-white/45 transition-colors hover:bg-white/10 hover:text-white',
@@ -374,9 +420,9 @@ export function FileActionsMenu({
                 {triggerIcon || <MoreVertical size={15} className="mx-auto" />}
             </button>
 
-            {open && presentation === 'inline' ? (
+            {open && effectivePresentation === 'inline' ? (
                 <div
-                    ref={menuRef}
+                    ref={setMenuElement}
                     className={cn(
                         'absolute right-0 z-[140]',
                         compact ? 'w-44' : 'min-w-[180px]',
@@ -390,20 +436,19 @@ export function FileActionsMenu({
                 </div>
             ) : null}
 
-            {open && presentation === 'portal' && menuPosition && typeof document !== 'undefined' && createPortal(
+            {open && effectivePresentation === 'portal' && menuPosition && typeof document !== 'undefined' && createPortal(
                 <div
-                    ref={menuRef}
-                    data-zyra-native-view-occluder="true"
+                    ref={setMenuElement}
                     className={cn(
                         'fixed z-[340]',
-                        compact ? 'w-44' : 'min-w-[180px]',
+                        matchTriggerWidth ? 'min-w-0' : compact ? 'w-44' : 'min-w-[180px]',
                         menuClassName
                     )}
                     style={{
                         top: menuPosition.top == null ? undefined : `${menuPosition.top}px`,
                         bottom: menuPosition.bottom == null ? undefined : `${menuPosition.bottom}px`,
                         left: `${menuPosition.left}px`,
-                        width: menuWidth ? `${menuWidth}px` : undefined
+                        width: matchTriggerWidth ? `${menuPosition.width}px` : menuWidth ? `${menuWidth}px` : undefined
                     }}
                     onClick={(event) => event.stopPropagation()}
                 >
@@ -417,16 +462,15 @@ export function FileActionsMenu({
                     ref={submenuRef}
                     role="menu"
                     aria-label={items.find((item) => item.id === expandedItemId)?.choicesLabel || 'Choose tab type'}
-                    data-zyra-native-view-occluder="true"
-                    className="assistant-menu-in-right fixed z-[350] w-[168px] rounded-[7px] border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_18px_48px_rgba(0,0,0,0.38)] backdrop-blur-xl"
-                    style={{ top: `${submenuPosition.top}px`, left: `${submenuPosition.left}px` }}
+                    className="file-actions-menu-flyout fixed z-[350] w-[168px] rounded-[7px] border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_18px_48px_rgba(0,0,0,0.38)] backdrop-blur-xl"
+                    style={{ top: `${submenuPosition.top}px`, left: `${submenuPosition.left}px`, ...accentedMenuStyle }}
                     onClick={(event) => event.stopPropagation()}
                     onKeyDown={(event) => {
                         if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
                         const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
                         if (buttons.length === 0) return
                         event.preventDefault()
-                        const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                        const currentIndex = buttons.indexOf(event.currentTarget.ownerDocument.activeElement as HTMLButtonElement)
                         const nextIndex = event.key === 'Home'
                             ? 0
                             : event.key === 'End'
@@ -454,7 +498,7 @@ export function FileActionsMenu({
                                     ? 'cursor-not-allowed text-sparkle-text-muted/35'
                                     : choice.danger
                                         ? 'text-red-200 hover:bg-red-500/15 hover:text-red-100'
-                                        : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
+                                        : 'file-actions-menu-row text-sparkle-text-secondary hover:text-sparkle-text'
                             )}
                         >
                             <span className="inline-flex size-4 shrink-0 items-center justify-center">{choice.icon}</span>

@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import {
     Calendar,
@@ -172,7 +173,7 @@ export function CommitDiffModal({ commit, diff, loading, onClose }: { commit: Gi
     }, [])
 
     return (
-        <div
+        <NativeOverlayPortal><div
             className="fixed inset-0 z-50 flex items-center justify-center overscroll-none bg-black/60 backdrop-blur-md animate-fadeIn"
             onClick={onClose}
         >
@@ -446,6 +447,6 @@ export function CommitDiffModal({ commit, diff, loading, onClose }: { commit: Gi
                     onClose={() => setSelectedFilePath(null)}
                 />
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { localPrivacyExemption } from "./privacy-vendor-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const localPatternsPath = path.join(repoRoot, ".zyra", "privacy-patterns.json");
@@ -67,10 +68,12 @@ for (const file of publicFiles.filter(shouldScan)) {
   if (!existsSync(absoluteFile)) continue;
 
   let text = "";
+  let localExemption;
   try {
     const buffer = readFileSync(absoluteFile);
     if (buffer.includes(0)) continue;
     text = buffer.toString("utf8");
+    localExemption = localPrivacyExemption(file, buffer);
   } catch {
     continue;
   }
@@ -78,7 +81,8 @@ for (const file of publicFiles.filter(shouldScan)) {
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const scannableLine = redactOpaqueLockIntegrity(file, lines[index]);
-    for (const check of checks) {
+    const lineChecks = localExemption(index + 1, lines[index]) ? genericChecks : checks;
+    for (const check of lineChecks) {
       check.pattern.lastIndex = 0;
       if (!check.pattern.test(scannableLine)) continue;
       findings.push({ file, line: index + 1, label: check.label });

@@ -177,6 +177,7 @@ export function getAssistantActionTitle(
     activity: AssistantActivity,
     projectRootPath?: string | null
 ): string {
+    if (getAssistantActivityToolName(activity) === 'tool_search') return 'Getting computer use tools'
     const family = getAssistantActionFamily(activity)
     const args = getAssistantActivityArgs(activity)
     const paths = getActivityPaths(activity)
@@ -194,10 +195,24 @@ export function getAssistantActionTitle(
         return `Reading ${pageTitle || hostLabel(readActionUrl(activity)) || 'web page'}`
     }
     if (family === 'search') return query ? `Searching ${query}` : 'Searching the project'
-    if (family === 'browser') return operationIntent(operation, hostLabel(readActionUrl(activity)), 'browser')
+    if (family === 'browser') {
+        if (getAssistantActivityToolName(activity) === 'browser_use') return 'Getting browser tools'
+        const stageIntent = shortIntentTarget(text(record(args.stage)?.summary))
+        return stageIntent || operationIntent(text(record(args.action)?.type) || operation || getAssistantActivityToolName(activity).replace(/^browser_/, ''), hostLabel(readActionUrl(activity)), 'browser')
+    }
     if (family === 'computer') {
-        const target = shortIntentTarget(text(args.name) || text(args.targetId) || text(activity.payload?.targetId), 36)
-        return operationIntent(operation, target, 'computer')
+        const target = shortIntentTarget(text(args.application) || text(args.name) || text(args.targetId) || text(activity.payload?.targetId), 36)
+        const controlOperation = operation || getAssistantActivityToolName(activity).replace(/^computer_/, '')
+        const steps = Array.isArray(args.steps) ? args.steps : []
+        if (steps.length > 0) {
+            if (steps.every((step) => record(step)?.type === 'drag')) return 'Dragging'
+            if (steps.every((step) => ['stroke', 'drag'].includes(String(record(step)?.type)))) return 'Drawing strokes'
+            return `Performing ${steps.length} computer ${steps.length === 1 ? 'step' : 'steps'}`
+        }
+        if (controlOperation === 'list_windows') return 'Finding an app window'
+        if (controlOperation === 'request_access' || controlOperation === 'request_grant') return 'Requesting app access'
+        if (controlOperation === 'use_app') return target ? `Using ${target}` : 'Using an app'
+        return operationIntent(controlOperation, target, 'computer')
     }
     if (family === 'agent') {
         const evidence = getAssistantAgentActionEvidence(activity)

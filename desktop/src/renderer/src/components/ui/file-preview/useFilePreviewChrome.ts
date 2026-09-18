@@ -1,3 +1,4 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LEFT_PANEL_MAX_WIDTH, LEFT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH, RIGHT_PANEL_MIN_WIDTH } from './modalShared'
 import { VIEWPORT_PRESETS, type ViewportPreset } from './viewport'
@@ -101,19 +102,24 @@ export function useFilePreviewChrome({
 
     useEffect(() => {
         if (!active) return
+        let resizeDocument: Document | null = null
+        let removeMove: (() => void) | undefined
+        let removeUp: (() => void) | undefined
+        let removeCancel: (() => void) | undefined
         const applyBodyDragState = (active: boolean) => {
+            const ownerDocument = resizeDocument ?? previewSurfaceRef.current?.ownerDocument ?? document
             if (active) {
-                document.documentElement.style.setProperty('cursor', 'col-resize', 'important')
-                document.documentElement.style.setProperty('user-select', 'none', 'important')
-                document.body.style.setProperty('cursor', 'col-resize', 'important')
-                document.body.style.setProperty('user-select', 'none', 'important')
+                ownerDocument.documentElement.style.setProperty('cursor', 'col-resize', 'important')
+                ownerDocument.documentElement.style.setProperty('user-select', 'none', 'important')
+                ownerDocument.body.style.setProperty('cursor', 'col-resize', 'important')
+                ownerDocument.body.style.setProperty('user-select', 'none', 'important')
                 return
             }
 
-            document.documentElement.style.removeProperty('cursor')
-            document.documentElement.style.removeProperty('user-select')
-            document.body.style.removeProperty('cursor')
-            document.body.style.removeProperty('user-select')
+            ownerDocument.documentElement.style.removeProperty('cursor')
+            ownerDocument.documentElement.style.removeProperty('user-select')
+            ownerDocument.body.style.removeProperty('cursor')
+            ownerDocument.body.style.removeProperty('user-select')
         }
 
         const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
@@ -161,17 +167,18 @@ export function useFilePreviewChrome({
             setIsResizingPanels(false)
             applyBodyDragState(false)
             if (resize) onPanelWidthCommit?.(resize.side, resize.side === 'left' ? leftPanelWidthRef.current : rightPanelWidthRef.current)
-            window.removeEventListener('pointermove', handlePointerMove)
-            window.removeEventListener('pointerup', stopResize)
-            window.removeEventListener('pointercancel', stopResize)
+            removeMove?.(); removeUp?.(); removeCancel?.()
+            removeMove = removeUp = removeCancel = undefined
+            resizeDocument = null
         }
 
         const handlePointerDown = (event: PointerEvent) => {
             const target = event.target as HTMLElement | null
             const side = target?.dataset?.previewResizeSide
-            if (side !== 'left' && side !== 'right') return
+            if (!target || (side !== 'left' && side !== 'right')) return
 
             event.preventDefault()
+            resizeDocument = target.ownerDocument
             panelResizeRef.current = {
                 side,
                 startX: event.clientX,
@@ -179,9 +186,9 @@ export function useFilePreviewChrome({
             }
             setIsResizingPanels(true)
             applyBodyDragState(true)
-            window.addEventListener('pointermove', handlePointerMove)
-            window.addEventListener('pointerup', stopResize)
-            window.addEventListener('pointercancel', stopResize)
+            removeMove = addOverlayEventListener('pointermove', handlePointerMove)
+            removeUp = addOverlayEventListener('pointerup', stopResize)
+            removeCancel = addOverlayEventListener('pointercancel', stopResize)
         }
 
         const handleSeparatorKeyDown = (event: KeyboardEvent) => {
@@ -204,11 +211,11 @@ export function useFilePreviewChrome({
             onPanelWidthCommit?.('right', nextWidth)
         }
 
-        window.addEventListener('pointerdown', handlePointerDown)
-        window.addEventListener('keydown', handleSeparatorKeyDown)
+        const removeDown = addOverlayEventListener('pointerdown', handlePointerDown)
+        const removeKey = addOverlayEventListener('keydown', handleSeparatorKeyDown)
         return () => {
-            window.removeEventListener('pointerdown', handlePointerDown)
-            window.removeEventListener('keydown', handleSeparatorKeyDown)
+            removeDown()
+            removeKey()
             stopResize()
         }
     }, [active, onPanelWidthCommit])

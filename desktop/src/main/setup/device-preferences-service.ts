@@ -57,7 +57,7 @@ const BOOLEAN_KEYS = new Set<string>([
     'filePreviewFullscreenShowLeftPanel', 'filePreviewFullscreenShowRightPanel',
     'assistantBrowserRestoreTabs', 'assistantBrowserGoogleSuggestions', 'assistantBrowserAdBlockEnabled',
     'assistantBrowserAdBlockPromptDismissed', 'assistantAutoReconnect', 'assistantHistoryPrefetch',
-    'assistantShowStatusDetails', 'assistantShowDiagnostics', 'assistantTranscriptionEnabled'
+    'assistantAllowCollapseWhileWorking', 'assistantShowActionStats', 'assistantShowStatusDetails', 'assistantShowDiagnostics', 'assistantTranscriptionEnabled'
 ])
 
 const STRING_LIMITS: Record<string, number> = {
@@ -88,7 +88,7 @@ const ENUMS: Record<string, ReadonlySet<string>> = {
     gitPullRequestDefaultGuideSource: new Set(['project', 'global', 'repo-template', 'none']),
     gitPullRequestDefaultChangeSource: new Set(['unstaged', 'staged', 'local-commits', 'all-local-work']),
     commitAIProvider: new Set(['groq', 'gemini', 'codex']),
-    assistantProductProfile: new Set(['default', 'builder']),
+    assistantProductProfile: new Set(['concise', 'friendly', 'direct', 'thoughtful', 'playful']),
     assistantDefaultRuntimeMode: new Set(['approval-required', 'auto-review', 'edits-only', 'full-access']),
     assistantDefaultEffort: new Set(['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
     assistantReasoningSummary: new Set(['auto', 'detailed', 'concise']),
@@ -179,7 +179,7 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
 
 export function sanitizeDevicePreferenceValue(key: string, value: unknown): unknown {
     if (key === 'appearanceLightTheme') return isLightThemeId(value) ? value : undefined
-    if (key === 'appearanceDarkTheme') return isDarkThemeId(value) ? value : undefined
+    if (key === 'appearanceDarkTheme') return value === 'dark' ? 'vercel' : isDarkThemeId(value) ? value : undefined
     if (BOOLEAN_KEYS.has(key)) return typeof value === 'boolean' ? value : undefined
     if (Object.prototype.hasOwnProperty.call(STRING_LIMITS, key)) {
         return sanitizeString(value, STRING_LIMITS[key]!, key === 'assistantDefaultPromptTemplate')
@@ -345,6 +345,12 @@ export class DevicePreferencesService {
             ? record.shared.additionalFolders.map((value) => String(value || '').trim()).filter(Boolean)
             : []
         return [...new Set([primary, ...additional].filter(Boolean))]
+    }
+
+    /** Setup hydrates preferences before starting the assistant. No disk reads on cwd resolution. */
+    getConfiguredProjectsFolder(): string | null {
+        const value = this.hydrated?.kind === 'ready' ? this.hydrated.record.shared.projectsFolder : null
+        return typeof value === 'string' ? value.trim() || null : null
     }
 
     async getNewChatWebDefaults(): Promise<{ webSearch: boolean; webFetch: boolean }> {

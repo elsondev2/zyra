@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { addNativeWindowView } from './native-view-layers'
 import {
     BrowserWindow,
     Menu,
@@ -465,7 +466,7 @@ export class BrowserPopupManager {
             this.publishWindowList(ownerWindow)
             if (sourceContents.session === getGlobalBrowserSession()) this.options.captureAnalytics?.({ action: 'popup', outcome: 'allowed' })
 
-            shellWindow.contentView.addChildView(pageView)
+            addNativeWindowView(shellWindow, pageView, 'browser')
             pageView.setBackgroundColor('#111318')
             this.layoutPopup(popup)
             this.configurePopupLifecycle(popup, sourceContents)

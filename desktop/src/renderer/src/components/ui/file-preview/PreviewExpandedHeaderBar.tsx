@@ -1,5 +1,5 @@
 import { Check, Copy, Globe2, List, Minimize2, Palette, PanelLeftClose, PanelLeftOpen, PanelRight, Play, Square, SquareTerminal, Trash2, X } from 'lucide-react'
-import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import { type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
 import { useSettings } from '@/lib/settings'
@@ -10,6 +10,7 @@ import { PreviewHeaderEditMenu, type PreviewHeaderEditMenuAction } from './Previ
 import { PreviewHeaderHtmlControls } from './PreviewHeaderHtmlControls'
 import { PreviewHistoryNavigation } from './PreviewHistoryNavigation'
 import { PreviewTabStrip } from './PreviewTabStrip'
+import { usePreviewPathCopy } from './usePreviewPathCopy'
 
 type PreviewExpandedHeaderBarProps = {
     file: PreviewFile
@@ -150,13 +151,7 @@ export function PreviewExpandedHeaderBar({
     const isEditMode = mode === 'edit'
     const isPythonRunning = pythonRunState === 'running'
     const showFileTabs = showPreviewTabs && previewTabs.length > 1
-    const [copiedPath, setCopiedPath] = useState(false)
-
-    const handleCopyPath = () => {
-        void navigator.clipboard.writeText(file.path)
-        setCopiedPath(true)
-        window.setTimeout(() => setCopiedPath(false), 1500)
-    }
+    const { copied: copiedPath, copyFailed, copyPath } = usePreviewPathCopy(file.path)
 
     const contextualActions: PreviewHeaderEditMenuAction[] = [
         ...(isHtml ? [{
@@ -256,33 +251,21 @@ export function PreviewExpandedHeaderBar({
                         {isDirty ? <span className="size-1.5 shrink-0 rounded-full bg-amber-300/85" aria-label="Unsaved changes" /> : null}
                         <button
                             type="button"
-                            onClick={handleCopyPath}
+                            onClick={() => void copyPath()}
                             className={cn(
                                 'no-drag inline-flex size-5 shrink-0 items-center justify-center rounded-[4px] opacity-0 transition-[opacity,color,background-color] group-hover/file:opacity-100 focus-visible:opacity-100',
                                 copiedPath
                                     ? 'bg-emerald-400/10 text-emerald-400 opacity-100'
                                     : 'text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
                             )}
-                            title={copiedPath ? 'Copied!' : `Copy path: ${file.path}`}
-                            aria-label={copiedPath ? 'Path copied' : `Copy path: ${file.path}`}
+                            title={copyFailed ? 'Could not copy path' : copiedPath ? 'Copied!' : `Copy path: ${file.path}`}
+                            aria-label={copyFailed ? 'Could not copy path' : copiedPath ? 'Path copied' : `Copy path: ${file.path}`}
                         >
                             {copiedPath ? <Check size={12} /> : <Copy size={12} />}
                         </button>
                     </div>
                 )}
 
-                {isHtml && !isEditMode ? (
-                    <div className="no-drag flex shrink-0 items-center">
-                        <PreviewHeaderHtmlControls
-                            isCompactHtmlHeader={false}
-                            isVeryCompactHtmlHeader={false}
-                            isUltraCompactHtmlHeader={false}
-                            isIdeChrome
-                            viewport={viewport}
-                            onViewportChange={onViewportChange}
-                        />
-                    </div>
-                ) : null}
             </div>
 
             <div className="no-drag flex shrink-0 items-center gap-0.5 px-1">
@@ -315,6 +298,16 @@ export function PreviewExpandedHeaderBar({
                 <HeaderIconButton title="Exit file focus mode" onClick={onToggleExpanded}>
                     <Minimize2 size={15} />
                 </HeaderIconButton>
+                {isHtml && !isEditMode ? (
+                    <PreviewHeaderHtmlControls
+                        isCompactHtmlHeader={false}
+                        isVeryCompactHtmlHeader={false}
+                        isUltraCompactHtmlHeader={false}
+                        isIdeChrome
+                        viewport={viewport}
+                        onViewportChange={onViewportChange}
+                    />
+                ) : null}
                 {previewModeEnabled ? (
                     <div className="no-drag">
                         <PreviewHeaderEditMenu

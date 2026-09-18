@@ -1,3 +1,4 @@
+import type { AssistantTextUpdate } from '../stream-text-update'
 export type AssistantRuntimeMode = 'approval-required' | 'auto-review' | 'edits-only' | 'full-access'
 
 export function isAssistantRuntimeMode(value: unknown): value is AssistantRuntimeMode {
@@ -28,6 +29,8 @@ export type AssistantContentStreamKind =
     | 'file_change_output'
 
 export interface AssistantTurnUsage {
+    /** Whether inputTokens already includes cache reads (legacy Codex). */
+    inputIncludesCachedTokens?: boolean
     inputTokens?: number | null
     outputTokens?: number | null
     reasoningOutputTokens?: number | null
@@ -189,7 +192,8 @@ export type AssistantRuntimeEvent =
         type: 'content.delta'
         payload: {
             streamKind: AssistantContentStreamKind
-            delta: string
+            delta: AssistantTextUpdate['delta']
+            replaceText?: AssistantTextUpdate['replaceText']
         }
     })
     | (AssistantRuntimeEventBase & {
@@ -210,6 +214,8 @@ export type AssistantRuntimeEvent =
         type: 'approval.requested'
         payload: {
             requestType: AssistantApprovalRequestType
+            toolCallId?: string
+            grantLabel?: string
             title?: string
             detail?: string
             command?: string

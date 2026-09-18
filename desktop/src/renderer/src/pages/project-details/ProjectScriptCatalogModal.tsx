@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useMemo } from 'react'
 import { Command, Play, X } from 'lucide-react'
 
@@ -22,7 +23,7 @@ export function ProjectScriptCatalogModal({
     )
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
+        <NativeOverlayPortal><div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
             <div
                 className="m-4 flex max-h-[95vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-sparkle-card shadow-2xl"
                 onClick={(event) => event.stopPropagation()}
@@ -91,6 +92,6 @@ export function ProjectScriptCatalogModal({
                     )}
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

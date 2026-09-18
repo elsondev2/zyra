@@ -47,6 +47,8 @@ export type OnboardingRecord = {
     data: {
         auth?: {
             method: OnboardingAuthMethod
+            provider?: string
+            label?: string
             verifiedAt: string
         }
         appearance?: OnboardingAppearanceSelection
@@ -74,7 +76,7 @@ export type OnboardingAuthStatus = {
     checking: boolean
     verified: boolean
     method: OnboardingAuthMethod | null
-    provider: 'openai-codex' | 'openai' | null
+    provider: string | null
     label: string
     detail: string | null
     checkedAt: string
@@ -138,7 +140,24 @@ export type CancelOnboardingReviewInput = {
     expectedRevision: number
 }
 
+export type DelegationPreset = 'balanced' | 'cost' | 'quality' | 'speed'
+export type DelegationPreferences = { version: 1; preset: DelegationPreset; notes: string }
+export type DelegationPreferencesUpdate = Partial<Pick<DelegationPreferences, 'preset' | 'notes'>>
+export type DelegationSettingsSnapshot = { preferences: DelegationPreferences; presets: Array<{ id: DelegationPreset; label: string; description: string }> }
+
+export type AgentRoleModels = Record<string, Partial<Record<'planner' | 'implementer' | 'reviewer' | 'debugger' | 'verifier' | 'researcher' | 'specialist', string>>>
+export type AgentRoleModelInput = { provider: string; role: string; model: string }
+
+export type ModelProviderInput = { provider: 'opencode' | 'anthropic' | 'custom'; apiKey: string; name?: string; baseUrl?: string; model?: string; api?: 'openai-completions' | 'openai-responses' | 'anthropic-messages' }
+export type ModelProviderConnection = { provider: string; label: string; model: string; verified: boolean; verifiedAt?: string }
 export const ONBOARDING_IPC = {
+    connectModelProvider: 'zyra:providers:connect',
+    disconnectModelProvider: 'zyra:providers:disconnect',
+    listModelProviders: 'zyra:providers:list',
+    getDelegationPreferences: 'zyra:providers:delegationPreferences',
+    saveDelegationPreferences: 'zyra:providers:saveDelegationPreferences',
+    getAgentRoleModels: 'zyra:providers:roleModels',
+    setAgentRoleModel: 'zyra:providers:saveRoleModel',
     getState: 'zyra:onboarding:get-state',
     getAuthStatus: 'zyra:onboarding:get-auth-status',
     getConnectionsStatus: 'zyra:account:get-openai-connections',

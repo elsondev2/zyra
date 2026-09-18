@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { renderToStaticMarkup } from 'react-dom/server'
+
+const source = (path: string) => readFileSync(new URL(`../src/renderer/src/pages/settings/${path}`, import.meta.url), 'utf8')
+const about = source('AboutSettings.tsx')
+assert.doesNotMatch(about, /<SettingsPageContainer title="About & updates"/, 'the crossed-out About page heading is removed')
+assert.match(about, /flex flex-col items-center[^"\n]*text-center/, 'the brand and description share a centered layout')
+assert.match(about, /<pre[^>]*text-left/, 'ASCII lines keep their original alignment inside the centered logo')
+assert.match(about, /<\/pre>\s*<div[^>]*items-baseline[\s\S]{0,420}aria-label="App version"[^>]*>\{displayVersion\}/, 'the centered name/version line follows the logo and uses the real display version')
+assert.match(about, /<AboutLinks \/>/)
+assert.doesNotMatch(about, /function ExternalRow/)
+const { AboutLinks } = await import('../src/renderer/src/pages/settings/AboutLinks')
+const html = renderToStaticMarkup(<AboutLinks />)
+assert.equal((html.match(/<a\b/g) || []).length, 3)
+assert.match(html, /grid-cols-3/, 'all three links occupy one row')
+for (const url of ['https://github.com/justelson', 'https://github.com/justelson/zyra', 'https://github.com/justelson/zyra/issues']) assert.ok(html.includes(`href="${url}"`))
+for (const target of ['settings-row-links-creator-github', 'settings-row-links-source-code', 'settings-row-links-report-an-issue']) assert.ok(html.includes(target), 'link search targets stay intact')
+assert.equal((html.match(/target="_blank"/g) || []).length, 3)
+assert.equal((html.match(/rel="noopener noreferrer"/g) || []).length, 3)
+assert.equal(new Set([...html.matchAll(/--about-link-color:([^;"]+)/g)].map(match => match[1])).size, 3, 'each card has its own accent color')
+for (const icon of ['UserRound', 'CodeXml', 'Bug']) assert.ok(source('AboutLinks.tsx').includes(icon))
+const fonts = source('appearance/AppearanceFontManagerDialog.tsx')
+assert.match(fonts, /className="flex h-\[640px\] max-h-\[calc\(100vh-40px\)\] !max-w-\[700px\] flex-col"/, 'one viewport-bounded shell applies to every font state')
+assert.match(fonts, /contentClassName="flex min-h-0 flex-1 flex-col !space-y-0 gap-3 overflow-y-auto"/)
+assert.doesNotMatch(fonts, /(?:className|contentClassName)=\{source === 'manual'/)
+for (const file of ['AboutSettings.tsx', 'AboutLinks.tsx', 'appearance/AppearanceFontManagerDialog.tsx']) new Bun.Transpiler({ loader: 'tsx' }).transformSync(source(file))
+console.log('About/font layout: centered authentic brand, three distinct link cards, preserved URLs/search and constant viewport-bounded modal size: ok')

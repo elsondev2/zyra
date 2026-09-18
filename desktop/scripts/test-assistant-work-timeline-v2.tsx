@@ -1,6 +1,9 @@
+import { groupTimelineRowsIntoWorkSummaries } from '../src/renderer/src/pages/assistant/assistant-turn-work'
+import { settleActivityAtTurnEnd } from '../src/shared/assistant/activity-settlement'
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { renderToStaticMarkup as renderMarkup } from 'react-dom/server'
+import type { ReactNode } from 'react'
 import type { AssistantActivity, AssistantMessage } from '../src/shared/assistant/contracts'
 import { TimelineToolCallList } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCalls'
 import { AssistantTimelineActionShell } from '../src/renderer/src/pages/assistant/AssistantTimelineActionShell'
@@ -8,7 +11,7 @@ import { AssistantQuestionResponse } from '../src/renderer/src/pages/assistant/A
 import { AssistantCapturedReadPreview } from '../src/renderer/src/pages/assistant/AssistantTimelineReadAction'
 import { AssistantSkillSnapshotPreview } from '../src/renderer/src/pages/assistant/AssistantTimelineSkillAction'
 import { AssistantWebResultPreviewCard } from '../src/renderer/src/pages/assistant/AssistantTimelineWebAction'
-import { TimelineTurnInterruptionMarker } from '../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary'
+import { TimelineTurnInterruptionMarker, TimelineTurnWorkSummary } from '../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary'
 import { TimelineMessage } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
 import {
     getAssistantActionFamily,
@@ -18,14 +21,24 @@ import {
     stripAssistantCommandEnvelope
 } from '../src/renderer/src/pages/assistant/assistant-action-presentation'
 import { parseAssistantSkillSnapshot } from '../src/renderer/src/pages/assistant/assistant-skill-snapshot'
+import { groupAssistantControlActionRuns } from '../src/renderer/src/pages/assistant/assistant-control-action-runs'
 import { getTerminalOutputHeightClass } from '../src/renderer/src/pages/assistant/assistant-timeline-layout'
-import { areActivitiesEquivalent } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
-import { SettingsProvider } from '../src/renderer/src/lib/settings'
+import { areActivitiesEquivalent, estimateTimelineRowHeight, getTimelineEntries, getActivityStatus } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
+import { SettingsProvider, loadSettings } from '../src/renderer/src/lib/settings'
 import {
     acknowledgeAssistantInspectorNavigation,
     requestAssistantInspectorNavigation,
     subscribeAssistantInspectorNavigation
 } from '../src/renderer/src/pages/assistant/assistant-inspector-navigation'
+
+assert.equal(loadSettings({}).assistantShowActionStats, false)
+assert.equal(loadSettings({ assistantShowActionStats: true }).assistantShowActionStats, true)
+assert.equal(loadSettings({ assistantShowActionStats: 'true' }).assistantShowActionStats, false)
+assert.equal(loadSettings({}).assistantAllowCollapseWhileWorking, false)
+assert.equal(loadSettings({ assistantAllowCollapseWhileWorking: true }).assistantAllowCollapseWhileWorking, true)
+assert.equal(loadSettings({ assistantAllowCollapseWhileWorking: 'true' }).assistantAllowCollapseWhileWorking, false)
+
+const renderToStaticMarkup = (node: ReactNode) => renderMarkup(createElement(SettingsProvider, null, node))
 
 const createdAt = '2026-09-03T12:00:00.000Z'
 function activity(input: Partial<AssistantActivity> & Pick<AssistantActivity, 'id' | 'kind'>): AssistantActivity {
@@ -46,6 +59,28 @@ const narration: AssistantMessage = {
     streaming: false,
     createdAt,
     updatedAt: createdAt
+}
+const durationResponse = createElement(TimelineMessage, {
+    message: { ...narration, text: 'Hello.', updatedAt: '2026-09-03T12:00:03.000Z' },
+    isLatestAssistant: true,
+    isLastAssistantInTurn: true,
+    latestTurnStartedAt: createdAt
+})
+const defaultDurationMarkup = renderToStaticMarkup(durationResponse)
+assert.doesNotMatch(defaultDurationMarkup, /\| 3s/, 'response duration is hidden by default')
+assert.match(defaultDurationMarkup, /data-assistant-message-timestamp/, 'hiding duration preserves the response timestamp')
+const durationGlobals = ['navigator', 'localStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
+try {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent: 'Electron/43' } })
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+        getItem: (key: string) => key === 'devscope-settings' ? JSON.stringify({ settingsSchemaVersion: 4, assistantShowActionStats: true }) : null
+    } })
+    assert.match(renderToStaticMarkup(durationResponse), /\| 3s/, 'enabling Action statistics restores response duration')
+} finally {
+    for (const [key, descriptor] of durationGlobals) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+        else Reflect.deleteProperty(globalThis, key)
+    }
 }
 const command = activity({
     id: 'action:command',
@@ -226,8 +261,42 @@ const runningBatchMarkup = renderToStaticMarkup(createElement(TimelineToolCallLi
     })
 ] }))
 assert.match(runningBatchMarkup, /data-current-action-intent="Inspecting example\.com"/, 'a live batch follows the currently running Action')
+assert.match(runningBatchMarkup.split('data-assistant-action-batch-trigger="true"')[1]?.split('</button>')[0] || '', />Inspecting example\.com</, 'the visible live heading follows the action rather than the settled intent')
 assert.doesNotMatch(runningBatchMarkup, /data-settled-action-intent="Reviewing timeline behavior"/, 'the shared block intent waits until every Action settles')
 assert.match(runningBatchMarkup, /assistant-title-shimmer/, 'the current Action uses the full title-regeneration shimmer')
+assert.match(runningBatchMarkup, /data-action-batch-intent="Reviewing timeline behavior"/, 'live and settled batches both show their recorded purpose')
+const mixedActions = [command, activity({ id: 'check', kind: 'command.checkpoint', payload: { commandAction: 'status', jobId: 'job-1' } }), computer, agent]
+const mixedEntries = getTimelineEntries([], mixedActions.map((entry, index) => ({ ...entry, timelineSequence: index + 1 })).reverse())
+assert.equal(mixedEntries.length, 1, 'checks, computer use, and agent actions stay in one consecutive block')
+assert.deepEqual(mixedEntries[0]?.type === 'activity-group' ? mixedEntries[0].activities.map((entry) => entry.id) : [], mixedActions.map((entry) => entry.id))
+const drawingActions = [1, 2, 3].map((index) => activity({ id: `drawing:${index}`, kind: 'computer-control', payload: { actionBatchIntent: 'Drawing an owl in Paint', status: index === 3 ? 'running' : 'completed' } }))
+const drawingMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [webSearch, ...drawingActions] }))
+assert.equal((drawingMarkup.match(/data-assistant-control-run="true"/g) || []).length, 1, 'repeated computer calls become one collapsed intent row inside Actions')
+assert.match(drawingMarkup, /Drawing an owl in Paint/)
+assert.equal((drawingMarkup.match(/data-assistant-typed-action="drawing:/g) || []).length, 3, 'individual calls remain available within the disclosure')
+assert.deepEqual(groupAssistantControlActionRuns([drawingActions[0]!, command, drawingActions[1]!]).map((run) => run.length), [1, 1, 1], 'unrelated actions cannot be moved inside a computer run')
+assert.deepEqual(groupAssistantControlActionRuns([drawingActions[0]!, { ...drawingActions[1]!, payload: { actionBatchIntent: 'Saving the drawing' } }, { ...drawingActions[2]!, turnId: 'next-turn' }]).map((run) => run.length), [1, 1, 1], 'a new purpose or turn starts its own computer run')
+const browsingActions = [1, 2, 3].map(index => activity({ id: `browsing:${index}`, kind: 'browser-control', payload: { toolName: index === 1 ? 'browser_observe' : 'browser_perform', actionBatchIntent: 'Drawing a fish in the browser', status: 'completed' } }))
+const browsingMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [webSearch, ...browsingActions] }))
+assert.equal((browsingMarkup.match(/data-assistant-control-run="true"/g) || []).length, 1, 'browser observations and input share a collapsed intent row')
+assert.equal((browsingMarkup.match(/data-assistant-typed-action="browsing:/g) || []).length, 3, 'all individual browser actions remain accessible')
+assert.deepEqual(groupAssistantControlActionRuns([browsingActions[0]!, drawingActions[0]!, browsingActions[1]!]).map(run => run.length), [1, 1, 1], 'different surfaces do not merge across each other')
+assert.doesNotMatch(browsingMarkup.split('data-assistant-action-batch-trigger="true"')[1]?.split('</button>')[0] || '', /3 actions|tabular-nums/, 'aggregate stats are hidden by default')
+const onlyDrawingMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: drawingActions }))
+assert.equal((onlyDrawingMarkup.match(/data-assistant-action-batch="true"/g) || []).length, 1, 'a computer-only block avoids a redundant outer disclosure')
+const recovery = activity({ id: 'recovery', kind: 'connection.recovery', payload: { status: 'recovered' } })
+assert.equal(getTimelineEntries([], [command, recovery, computer].map((entry, index) => ({ ...entry, timelineSequence: index + 1 })).reverse()).length, 1, 'recovery stays inside consecutive action blocks without splitting them')
+const reconnectMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [command, { ...recovery, payload: { status: 'retrying' } }] }))
+assert.match(reconnectMarkup.split('data-assistant-action-batch-trigger="true"')[1]?.split('</button>')[0] || '', />Reconnecting</, 'reconnect is the live batch heading')
+const recoveredBatchMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [command, { ...recovery, payload: { status: 'retrying' } }, { ...computer, payload: { ...(computer.payload || {}), status: 'completed', actionBatchIntent: 'Finished checking' } }] }))
+assert.match(recoveredBatchMarkup, /data-settled-action-intent="Finished checking"/, 'later actions supersede stale recovery state without requiring a refresh')
+const activeWorkMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, { startedAt: createdAt, completedAt: null, running: true, renderChildren: () => 'Current work' }))
+assert.match(activeWorkMarkup, /disabled=""/, 'running work cannot be collapsed by default')
+assert.match(activeWorkMarkup, /aria-expanded="true"/, 'running work remains expanded by default')
+assert.equal(getAssistantActionTitle(activity({ id: 'stroke', kind: 'computer-control', payload: { toolName: 'computer_sequence', args: { steps: [{ type: 'stroke' }, { type: 'drag' }] } } })), 'Drawing strokes', 'computer sequence details describe the actual input')
+assert.equal(getAssistantActionTitle(activity({ id: 'observe', kind: 'computer-control', payload: { toolName: 'computer_observe' } })), 'Inspecting app', 'named computer tools do not fall back to generic control rows')
+assert.equal(getAssistantActionTitle(activity({ id: 'drag', kind: 'computer-control', payload: { toolName: 'computer_sequence', args: { steps: [{ type: 'drag' }] } } })), 'Dragging', 'a generic drag does not imply drawing')
+assert.equal(estimateTimelineRowHeight({ kind: 'activity-group', id: 'mixed', createdAt, activities: mixedActions }), 36, 'the virtual list reserves one collapsed header for a mixed action block')
 const failedSettledBatchMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [
     { ...command, payload: { ...(command.payload || {}), actionBatchIntent: 'Checking failure handling' } },
     activity({ id: 'action:failed-settled', kind: 'web-fetch', tone: 'error', payload: { status: 'failed', url: 'https://example.com/fail', actionBatchIntent: 'Checking failure handling' } })
@@ -285,10 +354,39 @@ const pendingQuestions = {
 const answeredMarkup = renderToStaticMarkup(createElement(AssistantQuestionResponse, {
     input: { ...pendingQuestions, status: 'resolved', answers: { scope: 'Both', note: '' }, responseMessageId: 'message:answer', resolvedAt: createdAt }
 }))
-assert.match(answeredMarkup, /Responded to agent question/)
+assert.match(answeredMarkup, /Answered 2 agent questions/)
 assert.match(answeredMarkup, /Which surface\?/)
 assert.match(answeredMarkup, /Both/)
-assert.match(answeredMarkup, /Show more \(1 more\)/)
+assert.match(answeredMarkup, /View full responses to 2 agent questions/)
 assert.doesNotMatch(answeredMarkup, /Anything else\?/, 'multiple answers stay compact until the dedicated modal opens')
+
+const recoverySequence = [
+    activity({ id:'sequence:first', kind:'browser', payload:{toolName:'browser_act',status:'completed',actionBatchIntent:'Drawing an illustration'} }),
+    activity({ id:'sequence:error', kind:'error', tone:'error', summary:'Temporary provider failure' }),
+    activity({ id:'sequence:lost', kind:'browser', payload:{toolName:'browser_act',status:'running',actionBatchIntent:'Drawing details'} }),
+    activity({ id:'sequence:reconnect', kind:'connection.recovery', summary:'Reconnecting', payload:{status:'retrying'} }),
+    activity({ id:'sequence:last', kind:'browser', payload:{toolName:'browser_act',status:'completed',actionBatchIntent:'Finishing the illustration'} })
+]
+const userBoundary = {...narration,id:'sequence:user',role:'user' as const,text:'Draw something'}
+const finalBoundary = {...narration,id:'sequence:final',text:'Finished',updatedAt:'2026-09-03T12:01:00.000Z'}
+const recoveredRows = groupTimelineRowsIntoWorkSummaries({
+    rows:[{kind:'message',id:userBoundary.id,createdAt,message:userBoundary}, ...recoverySequence.map(item => ({kind:'activity' as const,id:item.id,createdAt,activity:item})),{kind:'message',id:finalBoundary.id,createdAt,message:finalBoundary}],
+    messages:[userBoundary,finalBoundary], latestAssistantMessageId:finalBoundary.id,latestTurnStartedAt:createdAt,isWorking:false
+})
+const recoveredWork = recoveredRows.find(row => row.kind === 'turn-work-summary')!
+assert.equal(recoveredWork.kind, 'turn-work-summary')
+if (recoveredWork.kind === 'turn-work-summary') {
+    assert.equal(recoveredWork.rows.length, 1, 'errors and reconnects do not split consecutive actions')
+    const batch = recoveredWork.rows[0]!
+    assert.equal(batch.kind, 'activity-group')
+    if (batch.kind === 'activity-group') {
+        assert.deepEqual(batch.activities.map(item => item.id), recoverySequence.map(item => item.id), 'evidence stays in chronological order')
+        assert.equal(getActivityStatus(batch.activities[2]!), 'failed', 'a completed turn cannot retain a running foreground action')
+        assert.equal(batch.activities[2]!.payload?.completionSource, 'turn-boundary', 'missing completion is not presented as successful execution')
+        assert.equal(batch.activities[3]!.payload?.status, 'recovered', 'historical reconnects stop spinning after completion')
+    }
+}
+const backgroundJob = activity({id:'background:1',kind:'command',payload:{status:'running',jobId:'job:1'}})
+assert.equal(settleActivityAtTurnEnd(backgroundJob, createdAt,'completed'),backgroundJob,'independent managed jobs retain their actual status')
 
 console.log('Assistant Work Timeline v2 contract: ok')

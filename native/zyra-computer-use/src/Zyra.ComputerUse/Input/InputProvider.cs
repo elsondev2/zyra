@@ -6,15 +6,16 @@ namespace Zyra.ComputerUse.Input;
 
 public sealed class InputProvider
 {
-    private volatile bool _stopped;
-    public void Resume() => _stopped = false;
-    public void EmergencyStop() => _stopped = true;
+    private readonly InputStopController _stop = new(flags => NativeMethods.mouse_event(flags, 0, 0, 0, 0));
+    public Action<int, int, string>? PointerProgress { get; set; }
+    public void EmergencyStop() => _stop.Stop();
 
     public void Focus(WindowHandleEntry window)
     {
         ThrowIfStopped();
+        AssertSelectedProcess(window);
         if (NativeMethods.GetForegroundWindow() == window.Handle) return;
-        NativeMethods.ShowWindowAsync(window.Handle, 9);
+        if (NativeMethods.IsIconic(window.Handle)) NativeMethods.ShowWindowAsync(window.Handle, 9);
         NativeMethods.SetForegroundWindow(window.Handle);
         if (NativeMethods.GetForegroundWindow() != window.Handle)
         {
@@ -33,15 +34,55 @@ public sealed class InputProvider
             }
         }
         Thread.Sleep(20);
+        ThrowIfStopped();
+        AssertSelectedProcess(window);
         if (NativeMethods.GetForegroundWindow() != window.Handle)
             throw new InvalidOperationException("The selected window could not be focused.");
+    }
+
+    public void PreparePointerFocus(WindowHandleEntry window, Bounds? observedBounds, bool allowWindowFocus) =>
+        WindowPointerFocusPolicy.Prepare(allowWindowFocus, observedBounds, () => ReadWindowBounds(window), () => Focus(window), ThrowIfStopped);
+
+    internal static Bounds ReadWindowBounds(WindowHandleEntry window)
+    {
+        AssertSelectedProcess(window);
+        if (!NativeMethods.GetWindowRect(window.Handle, out var rectangle) || rectangle.Right <= rectangle.Left || rectangle.Bottom <= rectangle.Top)
+            throw new InvalidOperationException("Selected-window bounds are unavailable.");
+        return new Bounds(rectangle.Left, rectangle.Top, rectangle.Right - rectangle.Left, rectangle.Bottom - rectangle.Top);
+    }
+
+    private static void AssertSelectedProcess(WindowHandleEntry window)
+    {
+        NativeMethods.GetWindowThreadProcessId(window.Handle, out var processId);
+        if (processId != window.ProcessId) throw new InvalidOperationException("The selected window process changed after selection.");
     }
 
     public void Move(WindowHandleEntry window, double xValue, double yValue)
     {
         var (x, y) = ValidatePoint(window, xValue, yValue);
         ThrowIfStopped();
-        PositionPointer(x, y);
+        // Animate only inside the selected unobscured window. Entering from
+        // another app snaps to the authorized point without crossing its UI.
+        if (NativeMethods.GetCursorPos(out var start))
+        {
+            try { ValidatePoint(window, start.X, start.Y); }
+            catch (UnauthorizedAccessException) { PositionPointer(window, x, y); PointerProgress?.Invoke(x, y, "moving"); return; }
+            var distance = Math.Sqrt(Math.Pow(x - start.X, 2) + Math.Pow(y - start.Y, 2));
+            var steps = Math.Clamp((int)(distance / 35), 1, 8);
+            for (var step = 1; step < steps; step++)
+            {
+                ThrowIfStopped();
+                var progress = step / (double)steps;
+                progress = progress * progress * (3 - 2 * progress);
+                var point = ValidatePoint(window, start.X + (x - start.X) * progress, start.Y + (y - start.Y) * progress);
+                PositionPointer(window, point.X, point.Y);
+                PointerProgress?.Invoke(point.X, point.Y, "moving");
+                Thread.Sleep(12);
+            }
+        }
+        ThrowIfStopped();
+        PositionPointer(window, x, y);
+        PointerProgress?.Invoke(x, y, "moving");
     }
 
     public void Click(WindowHandleEntry window, double xValue, double yValue, string? button, int clickCount)
@@ -49,13 +90,13 @@ public sealed class InputProvider
         var (x, y) = ValidatePoint(window, xValue, yValue);
         var (down, up) = MouseButtonFlags(button);
         var count = Math.Clamp(clickCount, 1, 3);
-        PositionPointer(x, y);
+        Move(window, x, y);
         for (var index = 0; index < count; index++)
         {
             ThrowIfStopped();
             ValidatePoint(window, x, y);
-            NativeMethods.mouse_event(down, 0, 0, 0, 0);
-            NativeMethods.mouse_event(up, 0, 0, 0, 0);
+            PointerProgress?.Invoke(x, y, "pressing");
+            _stop.WithButton(down, up, () => { });
             if (index + 1 < count) Thread.Sleep(40);
         }
     }
@@ -66,27 +107,43 @@ public sealed class InputProvider
         var (toX, toY) = ValidatePoint(window, toXValue, toYValue);
         var (down, up) = MouseButtonFlags(button);
         var duration = Math.Clamp(durationMs <= 0 ? 300 : durationMs, 50, 2_000);
-        var steps = Math.Clamp(duration / 16, 2, 120);
-        PositionPointer(fromX, fromY);
+        Move(window, fromX, fromY);
         ValidatePoint(window, fromX, fromY);
-        NativeMethods.mouse_event(down, 0, 0, 0, 0);
-        try
+        ThrowIfStopped();
+        _stop.WithButton(down, up, () =>
         {
-            for (var step = 1; step <= steps; step++)
+            PointerMotionPacer.Run(duration, progress =>
             {
-                ThrowIfStopped();
-                var progress = step / (double)steps;
                 var x = checked((int)Math.Round(fromX + (toX - fromX) * progress));
                 var y = checked((int)Math.Round(fromY + (toY - fromY) * progress));
                 var validated = ValidatePoint(window, x, y);
-                PositionPointer(validated.X, validated.Y);
-                Thread.Sleep(Math.Max(1, duration / steps));
-            }
-        }
-        finally
+                PositionPointer(window, validated.X, validated.Y);
+                PointerProgress?.Invoke(validated.X, validated.Y, "dragging");
+            }, ThrowIfStopped);
+        });
+    }
+
+    public void Stroke(WindowHandleEntry window, PointerPathPoint[]? points, string? button, int durationMs)
+    {
+        var path = new PointerStrokePath(points);
+        if (durationMs is < 0 or > 12_000) throw new InvalidOperationException("Stroke duration must be 0 to 12000 milliseconds.");
+        var duration = Math.Max(50, durationMs == 0 ? 600 : durationMs);
+        foreach (var point in path.Points) ValidatePoint(window, point.X, point.Y);
+        var first = path.Points[0];
+        Move(window, first.X, first.Y);
+        ValidatePoint(window, first.X, first.Y);
+        ThrowIfStopped();
+        var (down, up) = MouseButtonFlags(button);
+        _stop.WithButton(down, up, () =>
         {
-            NativeMethods.mouse_event(up, 0, 0, 0, 0);
-        }
+            PointerMotionPacer.Run(duration, progress => path.Advance(progress, point =>
+            {
+                ThrowIfStopped();
+                var validated = ValidatePoint(window, point.X, point.Y);
+                PositionPointer(window, validated.X, validated.Y);
+                PointerProgress?.Invoke(validated.X, validated.Y, "dragging");
+            }), ThrowIfStopped);
+        });
     }
 
     public void TypeText(WindowHandleEntry window, string text)
@@ -109,16 +166,22 @@ public sealed class InputProvider
     public void Key(WindowHandleEntry window, string key, string[]? modifiers)
     {
         Focus(window);
-        var virtualKey = key.ToUpperInvariant() switch
-        {
-            "ENTER" => (ushort)0x0D, "TAB" => (ushort)0x09, "ESCAPE" => (ushort)0x1B,
-            "BACKSPACE" => (ushort)0x08, "DELETE" => (ushort)0x2E, "HOME" => (ushort)0x24,
-            "END" => (ushort)0x23, "ARROWUP" => (ushort)0x26, "ARROWDOWN" => (ushort)0x28,
-            "ARROWLEFT" => (ushort)0x25, "ARROWRIGHT" => (ushort)0x27,
-            _ when key.Length == 1 => (ushort)char.ToUpperInvariant(key[0]),
-            _ => throw new InvalidOperationException("The requested key is not in the bounded key allowlist.")
-        };
+        var virtualKey = ResolveVirtualKey(key);
         var modifierKeys = (modifiers ?? []).Select(ModifierVirtualKey).Distinct().Take(4).ToArray();
+        if (virtualKey == 0x1B && modifierKeys.Length == 0)
+        {
+            TargetedEscapeDispatcher.Dispatch(window.Handle, window.ProcessId,
+                () => ReadSelectedFocusedWindow(window),
+                handle => NativeMethods.GetAncestor(handle, 2),
+                handle => { NativeMethods.GetWindowThreadProcessId(handle, out var process); return checked((int)process); },
+                NativeMethods.PostMessage,
+                () => {
+                    ThrowIfStopped();
+                    if (NativeMethods.GetForegroundWindow() != window.Handle)
+                        throw new InvalidOperationException("The selected window lost focus before Escape.");
+                });
+            return;
+        }
         var inputs = new List<NativeMethods.Input>(modifierKeys.Length * 2 + 2);
         inputs.AddRange(modifierKeys.Select(value => VirtualKeyInput(value, 0)));
         inputs.Add(VirtualKeyInput(virtualKey, 0));
@@ -126,6 +189,17 @@ public sealed class InputProvider
         inputs.AddRange(modifierKeys.Reverse().Select(value => VirtualKeyInput(value, 0x0002)));
         if (NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.Input>()) != inputs.Count)
             throw new InvalidOperationException("Windows rejected synthesized key input.");
+    }
+
+    private static nint ReadSelectedFocusedWindow(WindowHandleEntry window)
+    {
+        var threadId = NativeMethods.GetWindowThreadProcessId(window.Handle, out var processId);
+        if (threadId == 0 || processId != window.ProcessId)
+            throw new InvalidOperationException("The selected window identity changed before Escape.");
+        var info = new NativeMethods.GuiThreadInfo { Size = (uint)Marshal.SizeOf<NativeMethods.GuiThreadInfo>() };
+        if (!NativeMethods.GetGUIThreadInfo(threadId, ref info))
+            throw new InvalidOperationException("The selected window's focused control is unavailable.");
+        return info.Focus;
     }
 
     public void Scroll(WindowHandleEntry window, double deltaY)
@@ -136,37 +210,36 @@ public sealed class InputProvider
         NativeMethods.mouse_event(0x0800, 0, 0, unchecked((uint)amount), 0);
     }
 
-    private static void PositionPointer(int x, int y)
+    private void PositionPointer(WindowHandleEntry window, int x, int y)
     {
-        if (!NativeMethods.SetCursorPos(x, y))
+        ThrowIfStopped();
+        if (!NativeMethods.GetCursorPos(out var previous))
+            throw new InvalidOperationException("Windows could not read the pointer before positioning.");
+        // Cursor relocation alone does not supply the motion history consumed by
+        // native drawing controls. Deliver real uncoalesced absolute movement.
+        var normalizedX = AbsolutePointerCoordinates.Normalize(x, NativeMethods.GetSystemMetrics(76), NativeMethods.GetSystemMetrics(78));
+        var normalizedY = AbsolutePointerCoordinates.Normalize(y, NativeMethods.GetSystemMetrics(77), NativeMethods.GetSystemMetrics(79));
+        var input = new[]
         {
-            var left = NativeMethods.GetSystemMetrics(76);
-            var top = NativeMethods.GetSystemMetrics(77);
-            var width = Math.Max(2, NativeMethods.GetSystemMetrics(78));
-            var height = Math.Max(2, NativeMethods.GetSystemMetrics(79));
-            var normalizedX = checked((int)Math.Round((x - left) * 65_535d / (width - 1)));
-            var normalizedY = checked((int)Math.Round((y - top) * 65_535d / (height - 1)));
-            var input = new[]
+            new NativeMethods.Input
             {
-                new NativeMethods.Input
+                Type = 0,
+                Data = new NativeMethods.InputUnion
                 {
-                    Type = 0,
-                    Data = new NativeMethods.InputUnion
-                    {
-                        Mouse = new NativeMethods.MouseInput { X = normalizedX, Y = normalizedY, Flags = 0x0001 | 0x4000 | 0x8000 }
-                    }
+                    Mouse = new NativeMethods.MouseInput { X = normalizedX, Y = normalizedY, Flags = 0x0001 | 0x2000 | 0x4000 | 0x8000 }
                 }
-            };
-            if (NativeMethods.SendInput(1, input, Marshal.SizeOf<NativeMethods.Input>()) != 1)
-                throw new InvalidOperationException("Windows rejected pointer positioning.");
-            Thread.Sleep(12);
-        }
-        if (!NativeMethods.GetCursorPos(out var actual) || Math.Abs(actual.X - x) > 2 || Math.Abs(actual.Y - y) > 2)
-            throw new InvalidOperationException($"Windows did not position the pointer on the selected target ({actual.X},{actual.Y} instead of {x},{y}).");
+            }
+        };
+        if (NativeMethods.SendInput(1, input, Marshal.SizeOf<NativeMethods.Input>()) != 1)
+            throw new InvalidOperationException("Windows rejected pointer movement.");
+        PointerPositionConfirmation.Confirm(x, y, (previous.X, previous.Y),
+            () => NativeMethods.GetCursorPos(out var actual) ? (actual.X, actual.Y) : null,
+            () => { ThrowIfStopped(); ValidatePoint(window, x, y); });
     }
 
     private static (int X, int Y) ValidatePoint(WindowHandleEntry window, double xValue, double yValue)
     {
+        AssertSelectedProcess(window);
         if (!double.IsFinite(xValue) || !double.IsFinite(yValue)) throw new InvalidOperationException("Pointer coordinates must be finite.");
         var x = checked((int)Math.Round(xValue));
         var y = checked((int)Math.Round(yValue));
@@ -187,6 +260,17 @@ public sealed class InputProvider
         "middle" => (0x0020, 0x0040),
         _ => throw new InvalidOperationException("The pointer button is not allowed.")
     };
+
+    public static ushort ResolveVirtualKey(string key) => key.ToUpperInvariant() switch
+        {
+            "SPACE" or "SPACEBAR" => (ushort)0x20,
+            "ENTER" => (ushort)0x0D, "TAB" => (ushort)0x09, "ESCAPE" => (ushort)0x1B,
+            "BACKSPACE" => (ushort)0x08, "DELETE" => (ushort)0x2E, "HOME" => (ushort)0x24,
+            "END" => (ushort)0x23, "ARROWUP" => (ushort)0x26, "ARROWDOWN" => (ushort)0x28,
+            "ARROWLEFT" => (ushort)0x25, "ARROWRIGHT" => (ushort)0x27,
+            _ when key.Length == 1 => (ushort)char.ToUpperInvariant(key[0]),
+            _ => throw new InvalidOperationException("The requested key is not in the bounded key allowlist.")
+        };
 
     private static ushort ModifierVirtualKey(string value) => value.ToUpperInvariant() switch
     {
@@ -211,6 +295,6 @@ public sealed class InputProvider
 
     private void ThrowIfStopped()
     {
-        if (_stopped) throw new OperationCanceledException("Windows input stopped by emergency stop.");
+        _stop.ThrowIfStopped();
     }
 }

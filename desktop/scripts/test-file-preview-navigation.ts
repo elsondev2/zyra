@@ -128,6 +128,9 @@ assert.equal(windowedHeaderSource.includes('<PreviewHistoryNavigation'), true, '
 assert.equal(windowedHeaderSource.includes('const showWindowedEditMenu = previewModeEnabled && isEditable'), true, 'the non-full-screen viewer hides a meaningless Edit-only split control')
 assert.equal(windowedHeaderSource.includes('isEditOnly && isDirty'), true, 'edit-only files retain compact Save and Discard actions only while changes exist')
 assert.equal(windowedHeaderSource.includes('border-y border-[var(--surface-panel-divider)]'), true, 'the docked viewer header has a clean boundary from the app header above it')
+for (const [name, source] of [['windowed', windowedHeaderSource], ['expanded', expandedHeaderSource]]) {
+    assert.ok(source.indexOf('<PreviewHeaderHtmlControls') < source.indexOf('<PreviewHeaderEditMenu'), `${name} HTML header places Viewport before Preview`)
+}
 assert.equal(expandedHeaderSource.includes('<PreviewHistoryNavigation'), true, 'expanded previews expose the same navigation before the tab strip')
 assert.equal(expandedHeaderSource.includes('border-y border-[var(--surface-panel-divider)]'), true, 'docked full-screen preview chrome has a clear boundary below the app tab strip')
 assert.equal(expandedHeaderSource.includes('createPortal(toolbar, focusHost)'), false, 'file controls render as a second workspace toolbar instead of replacing the app tab strip')
@@ -263,8 +266,8 @@ assert.equal(windowedHeaderSource.indexOf('PanelLeftClose size') < windowedHeade
 assert.equal(expandedHeaderSource.indexOf('PanelLeftClose size') < expandedHeaderSource.indexOf('<PreviewHistoryNavigation'), true, 'expanded previews keep the same left-side toggle order')
 assert.equal(expandedHeaderSource.includes('my-2 ml-1 w-px'), false, 'the doubled separator between history and file identity is removed')
 assert.equal(expandedHeaderSource.includes('group/file'), true, 'the focused file identity owns the same quiet hover affordance as the windowed header')
-assert.equal(expandedHeaderSource.includes('navigator.clipboard.writeText(file.path)'), true, 'full-screen file identity exposes copy path on hover')
-assert.match(expandedHeaderSource, /title="Exit file focus mode"[\s\S]{0,500}<PreviewHeaderEditMenu/, 'exit full screen sits immediately before the combined Preview control')
+assert.equal(expandedHeaderSource.includes('usePreviewPathCopy(file.path)'), true, 'full-screen file identity uses the confirmed clipboard bridge for copy path')
+assert.ok(expandedHeaderSource.indexOf('title="Exit file focus mode"') < expandedHeaderSource.indexOf('<PreviewHeaderHtmlControls'), 'exit full screen precedes the Viewport then Preview controls')
 assert.match(expandedHeaderSource, /\{previewModeEnabled \? \([\s\S]{0,500}<PreviewHeaderEditMenu/, 'the Preview/Edit split control exists only when both modes are meaningful')
 assert.match(expandedHeaderSource, /inspectorOpen=\{rightPanelOpen\}[\s\S]{0,160}onToggleInspector=\{onToggleRightPanel\}/, 'Preview/Edit files keep Inspector inside their combined menu')
 assert.match(expandedHeaderSource, /!previewModeEnabled \? \([\s\S]{0,500}<PanelRight size=\{14\}/, 'edit-only and preview-only files expose Inspector as a compact toolbar icon')

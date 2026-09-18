@@ -1,3 +1,4 @@
+import { TerminalScreen } from '../../../../../mobile/gateway/src/terminal-screen.mjs'
 import * as pty from 'node-pty'
 import { dirname, resolve } from 'path'
 import { stat } from 'fs/promises'
@@ -7,6 +8,7 @@ import type {
     DevScopePreviewTerminalWorkspaceOwner
 } from '../../../shared/contracts/devscope-api'
 import { getAugmentedEnv } from '../../inspectors/safe-exec'
+import { desktopTerminalEnvironment } from '../../assistant/agent-server-namespace'
 import {
     PreviewTerminalWorkspaceRegistry,
     previewTerminalEventChannel,
@@ -15,9 +17,15 @@ import {
 
 export const PREVIEW_TERMINAL_EVENT_CHANNEL = 'devscope:previewTerminal:event'
 
+type TerminalReceiver = Pick<Electron.WebContents, 'id' | 'send' | 'isDestroyed'>
+type TerminalContext = { sender: TerminalReceiver }
+
 type PreviewTerminalEventPayload = {
+    sequence?: number
+    cols?: number
+    rows?: number
     sessionId: string
-    type: 'started' | 'output' | 'exit' | 'error' | 'title' | 'clear'
+    type: 'started' | 'output' | 'exit' | 'error' | 'title' | 'clear' | 'resize'
     data?: string
     message?: string
     shell?: string
@@ -33,8 +41,9 @@ type PreviewTerminalSession = {
     key: string
     scopeKey: string
     runtimeId: string | null
+    screen: TerminalScreen
     proc: pty.IPty | null
-    legacyWebContents: Electron.WebContents | null
+    legacyWebContents: TerminalReceiver | null
     shell: string
     cwd: string
     groupKey: string
@@ -54,7 +63,7 @@ type PreviewTerminalWorkspaceAuthorizer = (
 ) => string | Promise<string>
 
 const previewTerminalSessions = new Map<string, PreviewTerminalSession>()
-const previewTerminalWorkspaces = new PreviewTerminalWorkspaceRegistry<Electron.WebContents>()
+const previewTerminalWorkspaces = new PreviewTerminalWorkspaceRegistry<TerminalReceiver>()
 const senderCleanupRegistered = new Set<number>()
 const MAX_OUTPUT_BUFFER_CHARS = 60_000
 let previewTerminalWorkspaceAuthorizer: PreviewTerminalWorkspaceAuthorizer | null = null
@@ -72,7 +81,7 @@ function getSessionKey(scopeKey: string, sessionId: string): string {
     return `${scopeKey}:${sessionId}`
 }
 
-function resolveSessionScope(event: Electron.IpcMainInvokeEvent, workspaceCapability?: string): PreviewTerminalSessionScope {
+function resolveSessionScope(event: TerminalContext, workspaceCapability?: string): PreviewTerminalSessionScope {
     return previewTerminalWorkspaces.resolve(event.sender.id, workspaceCapability)
 }
 
@@ -304,7 +313,15 @@ function removeSession(sessionKey: string): void {
     const existing = previewTerminalSessions.get(sessionKey)
     if (!existing) return
     destroyTerminalProcess(existing)
+    existing.screen.dispose()
     previewTerminalSessions.delete(sessionKey)
+}
+
+export function disposePreviewTerminalRuntime(runtimeId: string): void {
+    const scopeKey = `workspace:${runtimeId}`
+    for (const session of [...previewTerminalSessions.values()]) {
+        if (session.scopeKey === scopeKey) removeSession(session.key)
+    }
 }
 
 export async function handleRegisterPreviewTerminalWorkspace(
@@ -335,7 +352,7 @@ export async function handleRegisterPreviewTerminalWorkspace(
 }
 
 export async function handleReleasePreviewTerminalWorkspace(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     workspaceCapabilityInput: string
 ) {
     try {
@@ -352,7 +369,7 @@ export async function handleReleasePreviewTerminalWorkspace(
 }
 
 export async function handleListPreviewTerminalSessions(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     input?: { targetPath?: string; workspaceCapability?: string }
 ) {
     try {
@@ -373,7 +390,7 @@ export async function handleListPreviewTerminalSessions(
 }
 
 export async function handleCreatePreviewTerminal(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     input: {
         sessionId: string
         targetPath?: string
@@ -410,8 +427,8 @@ export async function handleCreatePreviewTerminal(
                 ? ['/k']
                 : ['-NoLogo', '-NoExit']
         }
-        const cols = Math.max(10, Math.floor(Number(input?.cols) || 100))
-        const rows = Math.max(4, Math.floor(Number(input?.rows) || 28))
+        const cols = Math.max(10, Math.min(300, Math.floor(Number(input?.cols) || 100)))
+        const rows = Math.max(4, Math.min(120, Math.floor(Number(input?.rows) || 28)))
 
         const terminalOptions: pty.IPtyForkOptions & {
             useConpty?: boolean
@@ -423,6 +440,7 @@ export async function handleCreatePreviewTerminal(
             rows,
             env: {
                 ...getAugmentedEnv(),
+                ...desktopTerminalEnvironment(),
                 TERM: 'xterm-256color',
                 COLORTERM: 'truecolor',
                 FORCE_COLOR: '1'
@@ -430,7 +448,7 @@ export async function handleCreatePreviewTerminal(
         }
         if (process.platform === 'win32') {
             terminalOptions.useConpty = true
-            terminalOptions.conptyInheritCursor = true
+            terminalOptions.conptyInheritCursor = event.sender.id >= 0
         }
 
         const startedAt = Date.now()
@@ -439,6 +457,7 @@ export async function handleCreatePreviewTerminal(
             key: sessionKey,
             scopeKey: scope.key,
             runtimeId: scope.runtimeId,
+            screen: new TerminalScreen(cols, rows, paused => { if (paused) session.proc?.pause(); else session.proc?.resume() }),
             proc: null,
             legacyWebContents: scope.scoped ? null : event.sender,
             shell,
@@ -469,10 +488,12 @@ export async function handleCreatePreviewTerminal(
             if (nextTitle) {
                 updateSessionTitle(session, nextTitle)
             }
+            const sequence = session.screen.write(chunk)
             appendOutputBuffer(session, chunk)
             emitTerminalEvent(session, {
                 sessionId,
                 type: 'output',
+                sequence,
                 data: chunk,
                 title: session.title,
                 cwd: session.cwd,
@@ -524,7 +545,7 @@ export async function handleCreatePreviewTerminal(
 }
 
 export async function handleWritePreviewTerminal(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     input: {
         sessionId: string
         data: string
@@ -558,7 +579,7 @@ export async function handleWritePreviewTerminal(
 }
 
 export async function handleSetPreviewTerminalTitle(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     input: {
         sessionId: string
         title: string
@@ -591,7 +612,7 @@ export async function handleSetPreviewTerminalTitle(
 }
 
 export async function handleResizePreviewTerminal(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     input: {
         sessionId: string
         cols: number
@@ -610,9 +631,11 @@ export async function handleResizePreviewTerminal(
         if (!session || !session.proc) {
             return { success: false, error: 'Preview terminal session not found.' }
         }
-        const cols = Math.max(10, Math.floor(Number(input?.cols) || 100))
-        const rows = Math.max(4, Math.floor(Number(input?.rows) || 28))
+        const cols = Math.max(10, Math.min(300, Math.floor(Number(input?.cols) || 100)))
+        const rows = Math.max(4, Math.min(120, Math.floor(Number(input?.rows) || 28)))
+        session.screen.resize(cols, rows)
         session.proc.resize(cols, rows)
+        emitTerminalEvent(session, { sessionId, type: 'resize', cols, rows })
         return { success: true }
     } catch (err: any) {
         log.error('Failed to resize preview terminal:', err)
@@ -621,7 +644,7 @@ export async function handleResizePreviewTerminal(
 }
 
 export async function handleClearPreviewTerminal(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     sessionInput: string | { sessionId?: string; workspaceCapability?: string }
 ) {
     const { sessionId, workspaceCapability } = readSessionInput(sessionInput)
@@ -635,6 +658,7 @@ export async function handleClearPreviewTerminal(
             return { success: false, error: 'Preview terminal session not found.' }
         }
         session.outputBuffer = ''
+        session.screen.clear()
         session.lastActivityAt = Date.now()
         emitTerminalEvent(session, {
             sessionId,
@@ -653,7 +677,7 @@ export async function handleClearPreviewTerminal(
 }
 
 export async function handleClosePreviewTerminal(
-    event: Electron.IpcMainInvokeEvent,
+    event: TerminalContext,
     sessionInput: string | { sessionId?: string; workspaceCapability?: string }
 ) {
     const { sessionId, workspaceCapability } = readSessionInput(sessionInput)
@@ -669,10 +693,48 @@ export async function handleClosePreviewTerminal(
         }
 
         const closed = destroyTerminalProcess(session)
+        session.screen.dispose()
         previewTerminalSessions.delete(sessionKey)
         return { success: true, closed }
     } catch (err: any) {
         log.error('Failed to close preview terminal:', err)
         return { success: false, error: err?.message || 'Failed to close preview terminal.' }
+    }
+}
+
+let nextRemoteTerminalReceiver = -1
+export function listRemotePreviewTerminals(allowed: (runtimeId: string, cwd: string) => boolean) {
+    return [...previewTerminalSessions.values()].filter(session => session.runtimeId && allowed(session.runtimeId, session.cwd))
+        .map(session => ({ runtimeId: session.runtimeId!, ...serializeSession(session) }))
+}
+/** Host-only transport binding. The caller resolves chat ownership before providing the runtime. */
+export function bindRemotePreviewTerminal(runtimeId: string, receive: (event: PreviewTerminalEventPayload) => void) {
+    if (!runtimeId || runtimeId.length > 256 || /[\u0000-\u001f]/.test(runtimeId)) throw new Error('Invalid terminal runtime.')
+    let disposed = false
+    const receiver: TerminalReceiver = { id: nextRemoteTerminalReceiver--, isDestroyed: () => disposed,
+        send: (_channel: string, payload: PreviewTerminalEventPayload) => { if (!disposed) receive(payload) } }
+    const binding = previewTerminalWorkspaces.register(receiver.id, runtimeId, receiver)
+    const context = { sender: receiver }
+    return {
+        async invoke(method: string, params: Record<string, unknown>) {
+            if (disposed) throw new Error('Terminal connection was released.')
+            const input = { ...params, sessionId: String(params.sessionId || ''), workspaceCapability: binding.capability }
+            if (method === 'list') return handleListPreviewTerminalSessions(context, input)
+            if (method === 'create') {
+                if (listSessionsForScope('workspace:' + runtimeId).filter(session => session.proc).length >= 4) throw new Error('Close an unused terminal before opening another.')
+                return handleCreatePreviewTerminal(context, input)
+            }
+            if (method === 'write') return handleWritePreviewTerminal(context, { ...input, data: String(params.data || '') })
+            if (method === 'resize') return handleResizePreviewTerminal(context, { ...input, cols: Number(params.cols), rows: Number(params.rows) })
+            if (method === 'close') return handleClosePreviewTerminal(context, input)
+            if (method === 'clear') return handleClearPreviewTerminal(context, input)
+            if (method === 'snapshot') {
+                const session = previewTerminalSessions.get(getSessionKey('workspace:' + runtimeId, input.sessionId))
+                if (!session) throw new Error('This terminal is no longer available.')
+                return { success: true, session: serializeSession(session), screen: await session.screen.snapshot() }
+            }
+            throw new Error('Unknown terminal action.')
+        },
+        close() { disposed = true; previewTerminalWorkspaces.releaseSender(receiver.id) }
     }
 }

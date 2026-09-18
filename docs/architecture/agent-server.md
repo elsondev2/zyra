@@ -2,7 +2,7 @@
 
 ## Goal
 
-Zyra has one durable local agent service and multiple interchangeable clients. Desktop is primarily an application shell. TUI is a lightweight terminal client. Both surfaces list, open, and continue the same canonical chats.
+Each Zyra installation namespace has one durable local agent service and multiple clients. Desktop is primarily an application shell. TUI is a lightweight terminal client. Clients connected to the same namespace list, open, and continue the same canonical chats. Development profiles, installed Desktop and an independent TUI can use separate namespaces; shared project history does not imply shared live ownership.
 
 Closing, reloading, or reconnecting a client must not terminate an active root turn, managed command, subagent, or workflow. An explicit Stop action still cancels work.
 
@@ -33,7 +33,7 @@ TUI client ────┘                                  ├─ chat catalog
                                                    └─ fleet/workflow recovery
 ```
 
-The server runs as a detached local user process. Protocol v2 namespaces its descriptor, lock, and endpoint so an upgraded app never attaches to stale v1 code; an old process may finish independently. It binds only a per-user named pipe on Windows or a user-owned Unix socket elsewhere. A random descriptor token is stored in a mode-0600 local file and is required during the handshake. Desktop control additionally requires proof of a random secret retained through Electron `safeStorage`; the server keeps only its SHA-256 verifier. Declaring a Desktop surface or capability in the handshake is insufficient.
+The server runs as a detached local user process. The protocol version namespaces discovery and transport endpoints, while a channel-wide owner lock prevents incompatible generations from mutating the same chat state concurrently. The capability handshake also detects outdated services within the same protocol version. It binds only a per-user named pipe on Windows or a user-owned Unix socket elsewhere. A random descriptor token is stored in a mode-0600 local file and is required during the handshake. Desktop control additionally requires proof of a random secret retained through Electron `safeStorage`; the server keeps only its SHA-256 verifier. Declaring a Desktop surface or capability in the handshake is insufficient.
 
 The existing `src/zyra-ui-bridge.mjs` remains the first worker implementation. Moving it behind the server gives Zyra durable process ownership without rewriting the Pi adapter and UI projection simultaneously. Packaged Desktop launches pass a writable `ZYRA_DATA_ROOT` (the user home) separately from the immutable staged runtime, so memory consolidation never writes into an app bundle or AppImage. Windows packages carry a pinned Node executable for the detached server; signed macOS/Linux packages use Electron's Node mode without depending on system `PATH`.
 
@@ -55,6 +55,26 @@ A separate `desktop-workspace` authority handles user-typed TUI commands such as
 
 If no authorized desktop client is attached, the TUI can launch a registered installed Desktop in background-host mode and retry briefly. If Desktop is absent or cannot authenticate, the request fails closed while text chat remains alive.
 
+## Service compatibility and updates
+
+The authenticated handshake advertises the method list from `protocol.mjs`. Clients compare it with their required methods before sending application requests; a matching protocol number alone is insufficient. New methods must be registered in that list. Changes to the meaning of existing methods still require a protocol-version change.
+
+When a same-protocol server lacks required methods, verified Desktop may request `server.retire`. The server refuses retirement during in-flight requests, background work, pending approvals/input, or workspace requests. An accepted retirement immediately blocks new requests, acknowledges the client, and shuts down through the normal lifecycle. The client waits for the old process to exit and attempts one replacement per required service contract during the client process lifetime. Concurrent callers share that attempt, and the attempt remains recorded across recreated connections so competing older clients cannot cause an upgrade loop.
+
+Missing required capabilities still fail with `AGENT_SERVER_UPGRADE_REQUIRED`, or `AGENT_SERVER_UPGRADE_BUSY` when an incompatible busy service cannot retire. A content fingerprint difference alone is not incompatibility. A method-compatible service that is busy, lacks retirement support or refuses this client's retirement authority stays connected with `updatePending`; no retirement permission is bypassed. Project changes still check the permission contract before saving their new scope.
+
+### Instance identity and live observations
+
+[ADR 0018](../adr/0018-separate-runtime-identity-compatibility-and-liveness.md) defines the status contract. The service advertises a stable `namespaceId` and a per-start `instanceId`, channel, protocol version, runtime revision and start time. Clients reject an advertised namespace mismatch and retain a bounded, sanitized public projection without tokens, paths or authority proofs.
+
+Connection health is separate from turn state. A 15-second service heartbeat has a five-second deadline; consumers mark observations stale after 45 seconds. Desktop and its browser renderer show the installation label and real connection state. Mobile uses its own upstream client confirmation, with clock-adjusted observation age. TUI shows its namespace and connection health. Browser sharing reports broker connectivity separately from agent activity, and pins a known installation rather than silently moving when a loopback port is reused.
+
+Terminals opened inside Desktop inherit that installation's state directory and channel, without Desktop authority secrets. Desktop-managed launchers default to the owning installation while respecting an inherited namespace. Independently installed TUI commands retain their own default namespace. Development mobile hosts allocate and persist their own port instead of contending for the installed host's fixed default.
+
+Persisted history is not a liveness signal. This implementation does not enumerate active work across separate installations or add cross-namespace takeover. A stopped or missing worker in Dev says nothing about a production worker reading the same project history.
+
+Run `npm run test:agent-server:compatibility` for the focused compatibility/replacement regression. It also runs in `test:agent-server`.
+
 ## Canonical Chat Catalog
 
 The server records known project roots and scans each project’s `.zyra/sessions` directory using Pi `SessionManager.list()`. Catalog entries contain:
@@ -67,7 +87,7 @@ The server records known project roots and scans each project’s `.zyra/session
 - message count;
 - aliases and last attached surfaces.
 
-Both Desktop and TUI query the same catalog. Opening a catalog entry attaches to its canonical chat ID and session file regardless of which surface created it.
+Desktop and TUI query the same catalog when they select the same namespace. Opening a catalog entry attaches to its canonical chat ID and session file regardless of which surface created it.
 
 Catalog registration is additive and local. It never copies, rewrites, or deletes session JSONL files.
 

@@ -12,7 +12,9 @@ import {
 } from '../src/shared/browser-assistant-bridge'
 import { BrowserClientHost } from '../src/main/browser-client-host'
 
+const fetch = (input: string | URL, init?: RequestInit) => globalThis.fetch(input, { ...init, signal: init?.signal || AbortSignal.timeout(5_000) })
 const capability = 'browser-client-host-test-capability'
+const runtimeStatus = { phase: 'ready', connection: 'connected', installation: { kind: 'development', label: 'Development-fixture' } }
 const staticRoot = await mkdtemp(join(tmpdir(), 'zyra-browser-client-host-'))
 await mkdir(join(staticRoot, 'assets'), { recursive: true })
 await writeFile(join(staticRoot, 'index.html'), '<!doctype html><main>Zyra browser client</main>')
@@ -31,6 +33,11 @@ const upstream = createServer((request, response) => {
         response.setHeader('Content-Length', '4')
         response.setHeader('Content-Type', 'image/png')
         response.end('file')
+        return
+    }
+    if (request.url === '/v1/devscope/events?persistent=1') {
+        response.setHeader('Content-Type', 'text/event-stream')
+        response.write('data: {"ready":true}\n\n')
         return
     }
     if (request.url === '/v1/devscope/events') {
@@ -62,12 +69,37 @@ const host = new BrowserClientHost({
         capability
     },
     staticRoot,
+    extensionOrigins: new Set(['chrome-extension://' + 'a'.repeat(32)]),
+    connectExtension: async (extensionId, instanceId) => ({ extensionId, instanceId, connected: true }),
+    getRuntimeStatus: () => runtimeStatus,
     port: 0
 })
 
 try {
     const address = await host.start()
     expectedOrigin = address.origin
+
+    const extensionOrigin = 'chrome-extension://' + 'a'.repeat(32)
+    const extensionHeaders = { Origin: extensionOrigin, 'sec-fetch-site': 'cross-site', 'x-zyra-browser-client-id': 'browser_instance_1234' }
+    const automatic = await fetch(`${address.origin}/v1/extension/connect`, { method:'POST', headers:extensionHeaders })
+    assert.equal(automatic.status, 200)
+    assert.equal(automatic.headers.get('access-control-allow-origin'), extensionOrigin)
+    assert.deepEqual(await automatic.json(), { extensionId:'a'.repeat(32), instanceId:'browser_instance_1234', connected:true, clientOrigin:address.origin, runtimeStatus })
+    for (const origin of ['https://evil.test', 'chrome-extension://' + 'b'.repeat(32), extensionOrigin + '.evil.test', 'null']) {
+        const denied = await fetch(`${address.origin}/v1/extension/connect`, { method:'POST', headers:{...extensionHeaders, Origin:origin} })
+        assert.equal(denied.status, 403, `reject untrusted origin ${origin}`)
+        assert.equal(denied.headers.get('access-control-allow-origin'), null)
+    }
+    const invalidInstance = await fetch(`${address.origin}/v1/extension/connect`, { method:'POST', headers:{Origin:extensionOrigin} })
+    assert.equal(invalidInstance.status, 400)
+    const extensionAsset = await fetch(`${address.origin}/assets/app.js`, { headers:extensionHeaders })
+    assert.equal(extensionAsset.status, 403, 'extension cannot execute remotely hosted renderer code')
+    const preflight = await fetch(`${address.origin}/v1/extension/connect`, { method:'OPTIONS', headers:extensionHeaders })
+    assert.equal(preflight.status, 204)
+    const extensionInvoke = await fetch(`${address.origin}${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}/v1/assistant/invoke`, {
+        method:'POST', headers:{...extensionHeaders, [BROWSER_ASSISTANT_BRIDGE_HEADER]:BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE}, body:'{}'
+    })
+    assert.equal(extensionInvoke.status, 200, 'the allowlisted extension uses the existing authenticated bridge')
 
     const indexResponse = await fetch(`${address.origin}/`)
     assert.equal(indexResponse.status, 200)
@@ -181,9 +213,25 @@ try {
         await new Promise<void>((resolve) => renderer.close(() => resolve()))
     }
 
-    console.log('Browser client host: ok')
+    const persistent = await fetch(`${address.origin}${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}/v1/devscope/events?persistent=1`, {
+        headers: { Origin: address.origin, [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE }
+    })
+    const stream = persistent.body!.getReader()
+    assert.equal((await stream.read()).done, false)
+    let shutdownTimer: ReturnType<typeof setTimeout> | undefined
+    try {
+        await Promise.race([
+            host.stop(),
+            new Promise<never>((_, reject) => { shutdownTimer = setTimeout(() => reject(new Error('Open sidebar stream prevented shutdown')), 2000) })
+        ])
+    } finally {
+        clearTimeout(shutdownTimer)
+        await stream.cancel().catch(() => undefined)
+    }
+    console.log('Browser client host: ok (including shutdown with an open sidebar stream)')
 } finally {
     await host.stop()
+    upstream.closeAllConnections()
     await new Promise<void>((resolve) => upstream.close(() => resolve()))
     await rm(staticRoot, { recursive: true, force: true })
 }

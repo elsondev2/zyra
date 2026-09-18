@@ -35,7 +35,7 @@ export function PreviewHeaderStatusActions({
                         className={cn(
                             isIdeChrome
                                 ? 'inline-flex h-7 w-7 items-center justify-center rounded-md text-xs text-white/55 transition-colors hover:bg-white/[0.06] hover:text-white'
-                                : 'inline-flex h-6 w-6 items-center justify-center rounded-md text-xs text-white/60 transition-colors hover:bg-white/10 hover:text-white'
+                                : 'inline-flex h-7 w-7 items-center justify-center rounded-md text-xs text-white/60 transition-colors hover:bg-[var(--surface-hover)] hover:text-white'
                         )}
                         title="Open in Browser"
                         aria-label="Open in browser"
@@ -86,9 +86,10 @@ export function PreviewHeaderStatusActions({
                         'shrink-0 items-center justify-center transition-colors',
                         isIdeChrome
                             ? 'inline-flex h-7 w-7 rounded-md border border-transparent text-white/45 hover:bg-white/[0.06] hover:text-white'
-                            : 'inline-flex -my-1 self-stretch border-l border-white/5 px-3.5 text-white/42 hover:border-red-400/25 hover:bg-red-500/[0.22] hover:text-red-100'
+                            : 'inline-flex h-full w-11 border-l border-[var(--surface-divider)] text-white/45 hover:bg-[var(--surface-hover)] hover:text-white'
                     )}
                     title="Close (Esc)"
+                    aria-label="Close preview"
                 >
                     <X size={isIdeChrome ? 15 : 16} />
                 </button>

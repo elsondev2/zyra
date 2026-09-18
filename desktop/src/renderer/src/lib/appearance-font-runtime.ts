@@ -1,4 +1,5 @@
 import type { DevScopeManagedFont } from '@shared/contracts/font-contracts'
+import { addAppearanceManagedFontFaces, removeAppearanceManagedFontFaces } from './appearance-font-faces'
 import {
     getAppearanceManagedFontAlias,
     getAppearanceManagedFontId,
@@ -47,7 +48,7 @@ export async function ensureAppearanceFontLoaded(font: AppearanceUiFont | Appear
             await fontFace.load()
             return fontFace
         }))
-        for (const face of faces) document.fonts.add(face)
+        addAppearanceManagedFontFaces(document, faces)
         return faces
     })().catch((error) => {
         loadedFonts.delete(fontId)
@@ -63,6 +64,6 @@ export function forgetAppearanceManagedFont(fontId: string): void {
     loadedFonts.delete(fontId)
     if (!loaded) return
     void loaded.then((faces) => {
-        for (const face of faces) document.fonts.delete(face)
+        removeAppearanceManagedFontFaces(document, faces)
     }).catch(() => undefined)
 }

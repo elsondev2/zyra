@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from './browser-context.mjs';
 import { parentPort } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -148,7 +149,7 @@ function scoreCandidate(row, queryTokens) {
 }
 
 function buildSnippet(text, query) {
-  const normalizedText = collapseWhitespace(text);
+  const normalizedText = collapseWhitespace(stripSidebarBrowserContext(text));
   if (normalizedText.length <= MAX_SNIPPET_CHARACTERS) return normalizedText;
   const normalizedQuery = collapseWhitespace(query).replace(/^"|"$/g, '').toLowerCase();
   const foldedText = normalizedText.toLowerCase();

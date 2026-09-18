@@ -1,3 +1,4 @@
+import { useInspectorFrame } from './AssistantInspectorFrame'
 import {
     DndContext,
     DragOverlay,
@@ -22,6 +23,7 @@ import { LoaderCircle, Plus, X } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { usePublishAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
 import { cn } from '@/lib/utils'
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { ASSISTANT_MIN_INSPECTOR_WIDTH } from './assistant-pane-layout'
 import { createAssistantTabDragWithTearOff } from './assistant-tab-drag-modifier'
 
@@ -241,6 +243,7 @@ export function AssistantInspectorSidebar({
     tabs,
     activeTabId,
     onWidthChange,
+    onClose,
     onSelectTab,
     onCloseTab,
     onReorderTab,
@@ -255,6 +258,7 @@ export function AssistantInspectorSidebar({
     tabs: AssistantInspectorTab[]
     activeTabId: string
     onWidthChange: (width: number) => void
+    onClose: () => void
     onSelectTab: (tabId: string) => void
     onCloseTab: (tabId: string) => void
     onReorderTab: (fromTabId: string, toTabId: string) => void
@@ -263,7 +267,9 @@ export function AssistantInspectorSidebar({
     addTabItems: FileActionsMenuItem[]
     children: ReactNode
 }) {
-    const rootRef = useRef<HTMLDivElement | null>(null)
+    const localRootRef = useRef<HTMLDivElement | null>(null)
+    const sharedFrame = useInspectorFrame()
+    const rootRef = sharedFrame?.element || localRootRef
     const titleBarSurfaceRef = useRef<HTMLDivElement | null>(null)
     const tabRailRef = useRef<HTMLDivElement | null>(null)
     const dropZoneWindowPositionRef = useRef('')
@@ -293,6 +299,14 @@ export function AssistantInspectorSidebar({
     const [nativeTearOffTabId, setNativeTearOffTabId] = useState<string | null>(null)
     const [closingTabIds, setClosingTabIds] = useState<Set<string>>(() => new Set())
     const [tabPreview, setTabPreview] = useState<AssistantInspectorTabPreview | null>(null)
+    const [localPresented, setPresented] = useState(open)
+    const presented = sharedFrame?.presented ?? localPresented
+    useLayoutEffect(() => {
+        if (sharedFrame) return
+        if (!open) { setPresented(false); return }
+        const frame = window.requestAnimationFrame(() => setPresented(true))
+        return () => window.cancelAnimationFrame(frame)
+    }, [open, sharedFrame])
     const resolvedWidth = clampInspectorWidth(width, maxWidth)
     const tabIdentity = tabs.map((tab) => tab.id).join('|')
     const targetWorkspaceTabWidth = calculateWorkspaceTabWidth(resolvedWidth, tabs.length)
@@ -445,11 +459,12 @@ export function AssistantInspectorSidebar({
         titleBarSurfaceRef.current?.style.setProperty('width', `${state.width}px`)
         titleBarSurfaceRef.current?.style.removeProperty('transition')
         setResizing(false)
-        onWidthChange(state.width)
+        if (state.width < ASSISTANT_MIN_INSPECTOR_WIDTH * 0.7) onClose()
+        else onWidthChange(clampInspectorWidth(state.width, maxWidth))
         if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId)
         document.body.style.removeProperty('cursor')
         document.body.style.removeProperty('user-select')
-    }, [onWidthChange, synchronizeTabWidths])
+    }, [onClose, maxWidth, onWidthChange, synchronizeTabWidths])
 
     const handleResizePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
         if (!open || event.button !== 0) return
@@ -472,7 +487,7 @@ export function AssistantInspectorSidebar({
     const handleResizePointerMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
         const state = resizeStateRef.current
         if (!state || state.pointerId !== event.pointerId) return
-        state.width = clampInspectorWidth(state.startWidth + state.startX - event.clientX, maxWidth)
+        state.width = Math.max(120, Math.min(maxWidth, state.startWidth + state.startX - event.clientX))
         if (resizeFrameRef.current) return
         resizeFrameRef.current = window.requestAnimationFrame(() => {
             resizeFrameRef.current = 0
@@ -777,7 +792,7 @@ export function AssistantInspectorSidebar({
                 'drag-region relative h-full shrink-0 overflow-visible transition-[width,opacity] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                 !open && 'pointer-events-none opacity-0'
             )}
-            style={{ width: open ? `${resolvedWidth}px` : '0px' }}
+            style={{ width: open && presented ? `${resolvedWidth}px` : '0px' }}
             data-assistant-inspector-titlebar=""
             data-open={open ? 'true' : 'false'}
         >
@@ -899,6 +914,7 @@ export function AssistantInspectorSidebar({
         nativeTearOffTabId,
         onSelectTab,
         open,
+        presented,
         requestTabClose,
         reducedMotion,
         resizing,
@@ -912,13 +928,13 @@ export function AssistantInspectorSidebar({
 
     return (
         <div
-            ref={rootRef}
+            ref={localRootRef}
             className={cn(
-                'relative shrink-0 overflow-visible [contain:layout]',
-                !resizing && 'transition-[width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                'relative h-full min-h-0 shrink-0 overflow-visible [contain:layout]',
+                !sharedFrame && !resizing && 'transition-[width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                 !open && 'pointer-events-none'
             )}
-            style={{ width: open ? `${resolvedWidth}px` : '0px' }}
+            style={{ width: sharedFrame ? '100%' : open && presented ? `${resolvedWidth}px` : '0px' }}
         >
             {open ? (
                 <button
@@ -948,17 +964,18 @@ export function AssistantInspectorSidebar({
                 className={cn(
                     'flex h-full min-h-0 flex-col overflow-hidden border-l border-[var(--surface-panel-divider)] bg-sparkle-bg [contain:layout_paint] transform-gpu transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                     resizing ? 'relative w-full' : 'absolute inset-y-0 right-0',
-                    open ? 'translate-x-0 opacity-100' : 'translate-x-2 opacity-0'
+                    open && presented ? 'translate-x-0 opacity-100' : 'translate-x-2 opacity-0'
                 )}
                 style={resizing ? undefined : { width: `${resolvedWidth}px` }}
                 aria-label="Assistant inspector workspace"
                 aria-hidden={!open}
+                inert={!open ? true : undefined}
             >
                 {tabPreview ? (
+                    <AnchoredNativeOverlay passive>
                     <div
-                        data-zyra-native-view-occluder="true"
                         className={cn(
-                            'pointer-events-none absolute top-2 z-40 overflow-hidden border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_94%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]',
+                            'pointer-events-none absolute top-2 z-40 overflow-hidden border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_94%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] inspector-tab-preview',
                             tabPreview.imageRequested ? 'w-64 rounded-xl' : 'w-[184px] rounded-2xl'
                         )}
                         style={{ left: tabPreview.left }}
@@ -971,7 +988,7 @@ export function AssistantInspectorSidebar({
                         {tabPreview.imageRequested ? (
                             <div className="relative aspect-video w-full overflow-hidden border-t border-[color-mix(in_srgb,var(--color-text)_9%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,var(--color-card))]">
                                 {tabPreview.imageUrl ? (
-                                    <img src={tabPreview.imageUrl} alt="" className="h-full w-full object-cover animate-[inspector-tab-in_120ms_ease-out_both]" aria-hidden="true" />
+                                    <img src={tabPreview.imageUrl} alt="" className="h-full w-full object-cover" aria-hidden="true" />
                                 ) : tabPreview.imageLoading ? (
                                     <div className="flex h-full items-center justify-center text-sparkle-text-muted/45"><LoaderCircle size={14} className="animate-spin" /></div>
                                 ) : (
@@ -980,6 +997,7 @@ export function AssistantInspectorSidebar({
                             </div>
                         ) : null}
                     </div>
+                    </AnchoredNativeOverlay>
                 ) : null}
 
                 {children}

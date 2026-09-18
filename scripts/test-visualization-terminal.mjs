@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { AssistantMessageComponent } from '../src/tui/components/message-components.mjs';
+const content = { text: '<visualization title="Flag" summary="A blue flag with a white star.">\n<svg><path d="secret-source"/></svg>\n</visualization>' };
+const component = new AssistantMessageComponent('visual', content, undefined, { final: true });
+let output = component.render(100).join('\n');
+assert.match(output, /Visualization: Flag/);
+assert.match(output, /A blue flag with a white star/);
+assert.doesNotMatch(output, /<svg|secret-source|<visualization/);
+component.setContent({ text: '<visualization>\n<svg>unfinished' }, { final: false });
+assert.match(component.render(100).join('\n'), /Creating visualization/);
+component.setContent({ text: '<visualization>\n<svg>unfinished' }, { final: true });
+output = component.render(100).join('\n');
+assert.match(output, /incomplete/);
+assert.doesNotMatch(output, /Creating visualization/);
+const history = new AssistantMessageComponent('history', { text: '<visualization>\n' }, undefined, { final: true });
+assert.match(history.render(100).join('\n'), /incomplete/);
+console.log('Visualization terminal: readable summaries, source suppression and stopped/history state passed');

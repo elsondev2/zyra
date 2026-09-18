@@ -1,3 +1,4 @@
+import { DEFAULT_DARK_THEME_TOKENS as fallbackTheme } from '@shared/preferences/default-theme-tokens'
 import { useEffect, useRef } from 'react'
 
 export type CloudFieldProps = {
@@ -22,7 +23,7 @@ void main() {
 // Adapted from ThreeUI's Cloud Field raw-WebGL composition:
 // https://threeui.com/backgrounds/portal-field/cloud-field
 // The shader anatomy is preserved (stars, migrating strata, horizon haze and
-// occasional meteor), while its fixed violet palette is replaced by Zyra's
+// staggered meteors), while its fixed violet palette is replaced by Zyra's
 // semantic theme colors and its lifecycle is owned by React.
 const FRAGMENT_SHADER = `
 precision highp float;
@@ -73,13 +74,14 @@ float stars(vec2 uv, float density) {
     return star * (0.58 + 0.42 * sin(u_time * (1.0 + seed * 3.0) + seed * 6.28));
 }
 
-float meteor(vec2 uv, float time) {
-    float cycle = mod(time * 0.11, 1.0);
-    float seed = floor(time * 0.11);
+float meteor(vec2 uv, float time, float stream, float aspect) {
+    float phase = time * mix(0.18, 0.13, stream * 0.5) + stream * 0.37;
+    float cycle = fract(phase);
+    float seed = floor(phase) + stream * 31.7;
     float first = hash(seed * 7.31);
     float second = hash(seed * 13.17);
-    if (first > 0.22) return 0.0;
-    vec2 start = vec2(0.2 + second * 0.6, 0.72 + first * 0.22);
+    if (first > 0.75) return 0.0;
+    vec2 start = vec2((0.08 + second * 0.72) * aspect, 0.76 + first * 0.2);
     vec2 direction = normalize(vec2(1.0, -0.62 - first * 0.24));
     vec2 position = start + direction * smoothstep(0.0, 0.7, cycle) * 0.5;
     vec2 delta = uv - position;
@@ -93,7 +95,7 @@ float meteor(vec2 uv, float time) {
 
 vec3 strataColor(float depth) {
     float darkMix = mix(0.30, 0.09, depth);
-    float lightMix = mix(0.13, 0.24, depth);
+    float lightMix = mix(0.18, 0.32, depth);
     return mix(u_background, u_accent, mix(darkMix, lightMix, u_light_mode));
 }
 
@@ -121,7 +123,8 @@ void applyStratum(
     vec3 layer = strataColor(depth);
     vec3 rimColor = mix(u_accent, u_ink, mix(0.12, 0.42, u_light_mode));
     color = mix(color, layer, body);
-    color += rimColor * rim * mix(0.085, 0.032, depth) * mix(1.0, 0.6, u_light_mode);
+    float rimStrength = rim * mix(0.085, 0.032, depth);
+    color = mix(color + rimColor * rimStrength, mix(color, rimColor, rimStrength), u_light_mode);
     color += u_accent * ambient * 0.018 * (1.0 - depth);
     starMask *= 1.0 - body;
 }
@@ -156,8 +159,14 @@ void main() {
     applyStratum(color, starMask, uv, aspect, 0.09, 4.0, 0.044, 85.0, 0.11, 0.070, 1.0);
 
     vec3 light = mix(u_ink, u_accent, 0.25);
-    color += light * starField * starMask * mix(0.52, 0.13, u_light_mode);
-    color += light * meteor(starUv, u_time) * starMask * mix(0.82, 0.18, u_light_mode);
+    float starStrength = starField * starMask;
+    float meteorStrength = (meteor(starUv, u_time, 0.0, aspect)
+        + meteor(starUv, u_time, 1.0, aspect) * 0.72
+        + meteor(starUv, u_time, 2.0, aspect) * 0.54) * starMask;
+    // Pale skies need pigment contrast; additive light disappears into white.
+    vec3 nightSky = color + light * (starStrength * 0.52 + meteorStrength * 0.82);
+    vec3 daySky = mix(color, light, clamp(starStrength * 0.42 + meteorStrength * 0.56, 0.0, 0.75));
+    color = mix(nightSky, daySky, u_light_mode);
 
     float vignette = 1.0 - mix(0.28, 0.08, u_light_mode)
         * pow(length((uv - 0.5) * vec2(1.1, 1.6)), 2.0);
@@ -260,9 +269,9 @@ export default function CloudField({
         const accent = gl.getUniformLocation(program, 'u_accent')
         const ink = gl.getUniformLocation(program, 'u_ink')
         const lightMode = gl.getUniformLocation(program, 'u_light_mode')
-        const backgroundRgb = parseCssColor(backgroundColor, '#0c121f')
-        const accentRgb = parseCssColor(accentColor, '#7c3aed')
-        const inkRgb = parseCssColor(inkColor, '#f0f4f8')
+        const backgroundRgb = parseCssColor(backgroundColor, fallbackTheme.bg)
+        const accentRgb = parseCssColor(accentColor, fallbackTheme.primary)
+        const inkRgb = parseCssColor(inkColor, fallbackTheme.text)
         const backgroundLuminance = backgroundRgb[0] * 0.2126 + backgroundRgb[1] * 0.7152 + backgroundRgb[2] * 0.0722
         gl.uniform3fv(background, backgroundRgb)
         gl.uniform3fv(accent, accentRgb)

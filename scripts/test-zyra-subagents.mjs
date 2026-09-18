@@ -26,7 +26,7 @@ function catalogEntry(id, overrides = {}) {
   }
 }
 
-test('Codex-only model routing uses aliases, explicit fallback reasons, and bounded escalation', () => {
+test('Model routing uses aliases, explicit fallback reasons, and bounded escalation', () => {
   const router = new ModelRouter({ catalog: [
     catalogEntry('gpt-5.6-sol'),
     catalogEntry('gpt-5.6-terra', { eligible: false, availability: 'unavailable', rejectionReasons: ['upstream_unavailable'] }),
@@ -41,7 +41,16 @@ test('Codex-only model routing uses aliases, explicit fallback reasons, and boun
   assert.equal(escalated.selectedKey, 'openai-codex/gpt-5.5')
   assert.throws(() => router.escalate(escalated, 'because_parent_said_so'), FleetModelRouteError)
   assert.throws(() => router.route({ model: 'tera' }), /Did you mean 'terra'/)
-  assert.throws(() => router.route({ model: 'sonnet' }), /Codex-only/)
+  assert.throws(() => router.route({ model: 'sonnet' }), /full provider\/model ID/)
+})
+
+test('fleet inherits authenticated Claude and custom provider models', () => {
+  for (const provider of ['anthropic', 'custom-local']) {
+    const key = `${provider}/fixture-model`;
+    const router = new ModelRouter({ catalog: [catalogEntry('gpt-5.6-sol'), catalogEntry('fixture-model', { key, provider, availability: 'unknown', model: { provider, id: 'fixture-model' } })] });
+    assert.equal(router.route({ model: 'inherit', inheritModel: key }).selectedKey, key);
+    assert.equal(router.route({ model: key, policy: { allow: [key] } }).selectedKey, key);
+  }
 })
 
 test('child capability attenuation denies recursive/control tools and unenforceable read-only shell access', () => {
@@ -60,6 +69,19 @@ test('child capability attenuation denies recursive/control tools and unenforcea
   const writer = attenuateAgentCapabilities({ tools: ['read', 'bash', 'edit'], permissionMode: 'writer', writeScope: ['src'] })
   assert.deepEqual(writer.tools, ['read', 'edit'])
   assert(writer.denied.some((entry) => entry.tool === 'bash' && entry.reason === 'shell_cannot_enforce_child_scope'))
+})
+
+test('capability permission modes normalize the workspace-write alias and require scoped writers', () => {
+  for (const permissionMode of ['read-only', 'writer', 'full-access']) {
+    const result = attenuateAgentCapabilities({ permissionMode, tools: ['read'], writeScope: ['src'] })
+    assert.equal(result.permissionMode, permissionMode)
+  }
+  const alias = attenuateAgentCapabilities({ permissionMode: 'workspace-write', tools: ['read', 'edit'] })
+  assert.equal(alias.permissionMode, 'writer')
+  assert(alias.warnings.some((warning) => warning.includes('no declared write scope')))
+  for (const permissionMode of ['admin', 'workspace-read', '']) {
+    assert.throws(() => attenuateAgentCapabilities({ permissionMode }), /Unsupported permissionMode/)
+  }
 })
 
 test('child file tools enforce read/write scopes and reject project escapes', async () => {
@@ -163,6 +185,10 @@ test('fleet concurrency reserves the root slot, supports cancellation, and persi
     modelCatalog: [catalogEntry('gpt-5.6-terra')],
   })
   await controller.initialize({ installRoot: path.resolve('.') })
+  await assert.rejects(
+    controller.spawn({ prompt: 'unscoped alias', model: 'terra', permissionMode: 'workspace-write', tools: ['edit'], background: true }),
+    /Writer agents require an explicit writeScope/,
+  )
   const requests = await Promise.all(['one', 'two', 'three'].map((goal) => controller.spawn({ prompt: goal, goal, model: 'terra', background: true })))
   const completed = await Promise.all(requests.map((entry) => controller.wait(entry.agentRunId)))
   assert.equal(maxActive, 2)
@@ -248,6 +274,73 @@ test('child turn limits cover initial and follow-up prompts while preserving cum
   assert.equal(followUp.usage.totalTokens, 6)
   assert.equal(followUp.usage.requests, 2)
   await assert.rejects(host.send('third'), /2-turn limit/)
+  host.dispose()
+})
+
+test('child tool-turn limits abort with a bounded failure and retain useful assistant text', async () => {
+  let listener = () => {}
+  let aborts = 0
+  const session = {
+    isStreaming: true,
+    messages: [],
+    subscribe(callback) { listener = callback; return () => { listener = () => {} } },
+    async prompt() {
+      const useful = { role: 'assistant', content: [{ type: 'text', text: 'useful partial result' }] }
+      const empty = { role: 'assistant', content: [{ type: 'text', text: '' }] }
+      this.messages.push(useful, empty)
+      listener({ type: 'turn_start' })
+      listener({ type: 'message_end', message: useful })
+      listener({ type: 'turn_end' })
+      listener({ type: 'turn_start' })
+      listener({ type: 'message_end', message: empty })
+      listener({ type: 'turn_end' })
+      listener({ type: 'turn_start' })
+    },
+    async abort() { aborts += 1 },
+    dispose() {},
+  }
+  const host = new ChildSessionHost({
+    maxTurns: 2,
+    factory: { create: async () => ({ session, sessionId: 'limited-session', sessionFile: 'limited.jsonl' }) },
+  })
+  await host.open()
+  await assert.rejects(host.run('work'), (error) => error?.code === 'CHILD_MAX_TURNS' && /still executing tools/.test(error.message))
+  assert.equal(aborts, 1)
+  assert.equal(host.resultSnapshot().text, 'useful partial result')
+  host.dispose()
+})
+
+test('a final assistant answer on the last allowed tool turn succeeds', async () => {
+  let listener = () => {}
+  let aborts = 0
+  const session = {
+    isStreaming: true,
+    messages: [],
+    subscribe(callback) { listener = callback; return () => { listener = () => {} } },
+    async prompt() {
+      const toolTurn = { role: 'assistant', content: [{ type: 'text', text: '' }] }
+      listener({ type: 'turn_start' })
+      this.messages.push(toolTurn)
+      listener({ type: 'message_end', message: toolTurn })
+      listener({ type: 'turn_end' })
+      listener({ type: 'turn_start' })
+      const final = { role: 'assistant', content: [{ type: 'text', text: 'final allowed answer' }] }
+      this.messages.push(final)
+      listener({ type: 'message_end', message: final })
+      listener({ type: 'turn_end' })
+    },
+    async abort() { aborts += 1 },
+    dispose() {},
+  }
+  const host = new ChildSessionHost({
+    maxTurns: 2,
+    factory: { create: async () => ({ session, sessionId: 'final-session', sessionFile: 'final.jsonl' }) },
+  })
+  await host.open()
+  const result = await host.run('work')
+  assert.equal(result.text, 'final allowed answer')
+  assert.equal(result.turns, 2)
+  assert.equal(aborts, 0)
   host.dispose()
 })
 

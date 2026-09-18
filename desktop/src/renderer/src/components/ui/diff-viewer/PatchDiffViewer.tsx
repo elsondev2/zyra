@@ -1,3 +1,4 @@
+import { defaultThemeTokens } from '@shared/preferences/default-theme-tokens'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { FileDiff, PatchDiff } from '@pierre/diffs/react'
@@ -32,30 +33,31 @@ function buildDiffViewerUnsafeCss(
     hideHeaderStats: boolean
 ): string {
     const isDark = themeType === 'dark'
+    const fallback = defaultThemeTokens(themeType)
     const surface = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 84%, var(--color-bg, #0c121f))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 94%, var(--color-bg, #eef2f7))'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 84%, var(--color-bg, ${fallback.bg}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 94%, var(--color-bg, ${fallback.bg}))`
     const surfaceRaised = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 92%, var(--color-bg, #0c121f))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 97%, var(--color-bg, #eef2f7))'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 92%, var(--color-bg, ${fallback.bg}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 97%, var(--color-bg, ${fallback.bg}))`
     const headerSurface = surfaceRaised
     const surfaceMuted = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 74%, var(--color-bg, #0c121f))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 88%, var(--color-bg, #eef2f7))'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 74%, var(--color-bg, ${fallback.bg}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 88%, var(--color-bg, ${fallback.bg}))`
     const surfaceContext = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 78%, var(--color-bg, #0c121f))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 90%, var(--color-bg, #eef2f7))'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 78%, var(--color-bg, ${fallback.bg}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 90%, var(--color-bg, ${fallback.bg}))`
     const surfaceSeparator = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 68%, var(--color-bg, #0c121f))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 84%, var(--color-bg, #eef2f7))'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 68%, var(--color-bg, ${fallback.bg}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 84%, var(--color-bg, ${fallback.bg}))`
     const numberSurface = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 72%, var(--color-bg, #0c121f))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 86%, var(--color-bg, #eef2f7))'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 72%, var(--color-bg, ${fallback.bg}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 86%, var(--color-bg, ${fallback.bg}))`
     const hoverSurface = isDark
-        ? 'color-mix(in lab, var(--color-card, #131c2c) 76%, var(--accent-primary, #60a5fa))'
-        : 'color-mix(in lab, var(--color-card, #ffffff) 88%, var(--accent-primary, #60a5fa))'
-    const text = isDark ? 'var(--color-text, #e2e8f0)' : 'var(--color-text, #0f172a)'
-    const mutedText = isDark ? 'var(--color-text-secondary, #8fa2b8)' : 'var(--color-text-secondary, #64748b)'
+        ? `color-mix(in lab, var(--color-card, ${fallback.card}) 76%, var(--accent-primary, ${fallback.primary}))`
+        : `color-mix(in lab, var(--color-card, ${fallback.card}) 88%, var(--accent-primary, ${fallback.primary}))`
+    const text = `var(--color-text, ${fallback.text})`
+    const mutedText = `var(--color-text-secondary, ${fallback.textSecondary})`
     const borderDefault = `color-mix(in srgb, ${text} 10%, transparent)`
     const borderSubtle = `color-mix(in srgb, ${text} 6%, transparent)`
 

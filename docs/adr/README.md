@@ -33,6 +33,8 @@ Status vocabulary:
 - [ADR-0016: Preserve inline Work narration and defer Question handoffs](0016-preserve-inline-work-narration-and-defer-question-handoffs.md) — **Accepted and implemented.**
 - [ADR-0017: Use revisioned Plugin scopes and capability-declared contributions](0017-use-revisioned-plugin-scopes-and-capability-declared-contributions.md) — **Accepted. Skill-only phase implemented; later phases planned.**
 
+- [ADR-0018: Separate runtime identity, compatibility and liveness](0018-separate-runtime-identity-compatibility-and-liveness.md) — **Accepted and implemented locally; release/device validation pending.**
+
 ## Format
 
 Each ADR records context, decision, consequences, alternatives, and verification. A changed load-bearing decision creates a refining or superseding ADR rather than silently rewriting accepted history.

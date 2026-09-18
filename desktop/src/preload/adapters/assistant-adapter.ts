@@ -43,6 +43,7 @@ import type {
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantTranscribeVoiceInput,
     AssistantUpdateProjectInput,
     AssistantUserInputResponseInput,
@@ -66,6 +67,7 @@ export function createAssistantAdapter() {
             getAccountOverview: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.getAccountOverview, forceRefresh),
             redeemAccountReset: (input: AssistantRedeemAccountResetInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.redeemAccountReset, input),
+            getUsageSummary: (input?: import('../../shared/assistant/usage-summary').UsageSummaryInput) => ipcRenderer.invoke(ASSISTANT_IPC.getUsageSummary, input),
             getSessionTurnUsage: (input?: { sessionId?: string }) => ipcRenderer.invoke(ASSISTANT_IPC.getSessionTurnUsage, input),
             listModels: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.listModels, forceRefresh),
             listProjects: () => ipcRenderer.invoke(ASSISTANT_IPC.listProjects),
@@ -121,6 +123,7 @@ export function createAssistantAdapter() {
             deleteSession: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.deleteSession, sessionId),
             deleteMessage: (input: AssistantDeleteMessageInput) => ipcRenderer.invoke(ASSISTANT_IPC.deleteMessage, input),
             clearLogs: (input?: AssistantClearLogsInput) => ipcRenderer.invoke(ASSISTANT_IPC.clearLogs, input),
+            updateSessionConfiguration: (input: AssistantUpdateSessionConfigurationInput) => ipcRenderer.invoke(ASSISTANT_IPC.updateSessionConfiguration, input),
             setSessionProject: (sessionId: string, input: AssistantSetSessionProjectInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.setSessionProject, sessionId, input),
             setSessionProjectPath: (sessionId: string, projectPath: string | null) =>

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { openDesktopLink } from '@/lib/desktop-links'
+import { useState, type ReactNode } from 'react'
 import { ChevronRight, ExternalLink, MessageSquarePlus, Plus, Settings2 } from 'lucide-react'
 import type { AssistantPluginCatalog, AssistantPluginInstallation } from '@shared/assistant/contracts'
 import storeCatalog from '@shared/plugins/openai-directory.json'
@@ -8,12 +9,13 @@ import { getPluginRelease } from './plugin-directory-state'
 
 type Entry = typeof storeCatalog.entries[number]
 
-export function PluginProductPage({ entry, installation, catalog, busy, canInstall, onBack, onInstall, onUseInChat, onManage }: {
+export function PluginProductPage({ entry, installation, catalog, busy, canInstall, installContent, onBack, onInstall, onUseInChat, onManage }: {
     entry: Entry | null
     installation: AssistantPluginInstallation | null
     catalog: AssistantPluginCatalog | null
     busy: boolean
     canInstall: boolean
+    installContent?: ReactNode
     onBack: () => void
     onInstall: (name: string) => void
     onUseInChat: (id: string) => void
@@ -36,10 +38,10 @@ export function PluginProductPage({ entry, installation, catalog, busy, canInsta
     const license = manifest ? manifest.license : entry?.license
     const openLink = async (url: string) => {
         setError(null)
-        try { const result = await window.devscope.openBrowserPreviewExternal(url); if (!result.success) throw Error(result.error || 'Could not open this link.') }
+        try { const result = await openDesktopLink(url); if (!result.success) throw Error(result.error || 'Could not open this link.') }
         catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open this link.') }
     }
-    if (!name) return <DirectoryEmpty title="Plugin not found" action={<button className="plugin-button" onClick={onBack}>Back to Plugins</button>} />
+    if (!name) return <><DirectoryEmpty title="Plugin not found" action={<button className="plugin-button" onClick={onBack}>Back to Plugins</button>} />{installContent}</>
     return <article className="plugin-product-page">
         <nav className="plugin-product-breadcrumb" aria-label="Breadcrumb"><button type="button" className="plugin-text-button" onClick={onBack}>Plugins</button><ChevronRight size={14} /><span>{name}</span></nav>
         <header className="plugin-product-header">
@@ -54,6 +56,7 @@ export function PluginProductPage({ entry, installation, catalog, busy, canInsta
                 </> : <button type="button" className="plugin-button plugin-button-primary" disabled={busy || !canInstall || !hasSkills || entry?.installation === 'BLOCKED'} onClick={() => entry && onInstall(entry.name)} title={!canInstall ? 'Open or restart Zyra Desktop to install' : !hasSkills ? 'No supported contributions yet' : 'Install in Zyra'}><Plus size={15} />Install</button>}
             </div>
         </header>
+        {installContent}
         {installation ? <p className="plugin-product-status">{installation.state === 'active' ? 'Installed' : installation.state === 'disabled' ? 'Disabled' : 'Unavailable'}{release ? ` · ${release.version}` : ''}</p> : null}
         {error ? <p className="plugin-notice" role="alert">{error}</p> : null}
         <section className="plugin-product-section" aria-label="Included in this Plugin">

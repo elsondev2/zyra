@@ -1,3 +1,5 @@
+import { withExtensionTabContext } from '@/lib/browser-extension'
+import { normalizeSpeakingStyle } from '@shared/assistant/speaking-style'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantApprovalDecision, AssistantChatScopeRoot, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
@@ -49,6 +51,7 @@ import { useInstructorVoiceSession } from './useInstructorVoiceSession'
 import { useAssistantPageTimelineScroll } from './useAssistantPageTimelineScroll'
 import { useAssistantProjectCatalog } from './useAssistantProjectCatalog'
 import { resolveAssistantProjectLabel } from './assistant-project-label'
+import { buildAssistantProjectChoices, getAssistantProjectIconSourcePath } from './assistant-project-choices'
 import { useAgentControlState } from './useAgentControlState'
 import { isControlPrincipalForThread } from './assistant-thread-details'
 
@@ -83,6 +86,11 @@ function areQueuedComposerSessionStatesEqual(
 
 export function AssistantConversationPane(props: AssistantConversationPaneProps) {
     const controller = useAssistantConversationStore()
+    const historyWindowKey = `${controller.selectedSession?.id || ''}:${controller.activeThread?.id || ''}`
+    const initialHistoryRef = useRef({key: historyWindowKey, cold: !controller.history})
+    if (initialHistoryRef.current.key !== historyWindowKey) {
+        initialHistoryRef.current = {key: historyWindowKey, cold: !controller.history}
+    }
     const actions = useAssistantStoreActions()
     const { settings, updateSettings } = useSettings()
     const projectCatalogState = useAssistantProjectCatalog()
@@ -100,11 +108,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         startedAt: string
     } | null>(null)
     const [voicePreferences] = useState(readInstructorVoicePreferences)
-    const synchronizedZyraProfile = controller.activeThread?.profile === 'builder'
-        ? 'builder'
-        : controller.activeThread?.profile === 'default'
-            ? 'default'
-            : null
+    const synchronizedZyraProfile = controller.activeThread?.profile ? normalizeSpeakingStyle(controller.activeThread.profile) : null
     const activeZyraProfile = zyraProfileOverride || synchronizedZyraProfile || settings.assistantProductProfile
     const activeRuntimeZyraProfile = zyraProfileOverride || controller.activeThread?.profile || activeZyraProfile
     const setActiveZyraProfile = useCallback((assistantProductProfile: AssistantProductProfile) => {
@@ -222,22 +226,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         'Select a project when this chat needs files.'
     )
     const latestProjectLabel = resolveAssistantProjectLabel(displayProjectName, displayProjectId, displayProjectPath) || 'select project'
-    const newChatProjectChoices = useMemo(() => projectCatalogState.catalog.projects
-        .filter((project) => !project.archived)
-        .flatMap((project) => [
-            {
-                projectId: project.id,
-                path: project.homePath,
-                label: project.name,
-                rootLabel: 'Project home'
-            },
-            ...project.folders.filter((folder) => folder.available).map((folder) => ({
-                projectId: project.id,
-                path: folder.path,
-                label: project.name,
-                rootLabel: `${folder.label}${folder.access === 'read-only' ? ' · Read only' : ''}`
-            }))
-        ]), [projectCatalogState.catalog.projects])
+    const newChatProjectChoices = useMemo(() => buildAssistantProjectChoices(projectCatalogState.catalog.projects), [projectCatalogState.catalog.projects])
+    const projectIconSourcePath = getAssistantProjectIconSourcePath(selectedProjectRecord)
     const composerProjectRoots = useMemo<AssistantChatScopeRoot[]>(() => {
         if (!isCreatingFreshChat) {
             const revisionedRoots = controller.selectedSession?.chatScope?.roots || []
@@ -764,6 +754,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         options: AssistantComposerSendOptions
     ) => {
         if (!sessionId) return false
+        let browserPrompt: string
+        try { browserPrompt = await withExtensionTabContext(buildPromptWithContextFiles(prompt, contextFiles)) }
+        catch (reason) { props.onShowToast?.(reason instanceof Error ? reason.message : 'Browser context is unavailable.', 'error'); return false }
         const startedAt = new Date().toISOString()
         const previousUserMessageId = [...controller.timelineMessages].reverse().find((message) => message.role === 'user')?.id || null
         setOptimisticPromptBoundary({
@@ -774,7 +767,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         })
         setOptimisticPromptStartedAt((current) => current || startedAt)
         const images = buildPromptImageInputs(contextFiles)
-        const result = await actions.sendPromptResult(buildPromptWithContextFiles(prompt, contextFiles), {
+        const result = await actions.sendPromptResult(browserPrompt, {
             sessionId,
             model: options.model,
             runtimeMode: options.runtimeMode,
@@ -976,13 +969,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         }
     }, [actions, controller.commandPending, controller.selectedSession?.id, projectCatalogState, props.onShowToast, requestProjectCreation])
 
-    const handleSelectNewChatProject = useCallback(async (
-        projectId: string | null,
-        workingRoot?: string | null
-    ) => {
+    const handleSelectNewChatProject = useCallback(async (projectId: string | null) => {
         const session = controller.selectedSession
         if (!session || !selectedSessionIsDraft || projectDirectoryLocked || controller.commandPending) return
-        const result = await actions.setSessionProjectResult(session.id, { projectId, workingRoot })
+        // Selecting a Project uses the existing backend Working-root policy.
+        // Its icon source is presentation metadata, not a scope/authority choice.
+        const result = await actions.setSessionProjectResult(session.id, { projectId })
         if (!result.success) {
             props.onShowToast?.(`Could not update Project: ${result.error}`, 'error')
         }
@@ -1030,6 +1022,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             titleGenerating={controller.selectedSession?.titleGenerating === true}
             canonicalThreadId={controller.activeThread?.providerThreadId || controller.activeThread?.id || null}
             canonicalPresence={settings.assistantShowStatusDetails || settings.assistantShowDiagnostics ? controller.activeThread?.canonicalPresence : null}
+            mobileVoice={controller.activeThread?.mobileVoice}
             showPresenceBadge={settings.assistantShowStatusDetails}
             showDiagnostics={settings.assistantShowDiagnostics}
             activeThreadIsSubagent={activeThreadIsSubagent}
@@ -1052,6 +1045,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         activeThreadLabel,
         composerIsCentered,
         controller.activeThread?.canonicalPresence,
+        controller.activeThread?.mobileVoice,
         controller.activeThread?.id,
         controller.activeThread?.providerThreadId,
         controller.commandPending,
@@ -1121,6 +1115,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             isWorking={timelinePresentationIsWorking}
                             activeStatusLabel={activeStatusLabel}
                             isConnecting={isThreadConnecting && !voiceVisible}
+                            suppressEmptyProjectBadge={voiceVisible}
                             activeWorkStartedAt={effectiveLatestTurnStartedAt}
                             latestAssistantMessageId={controller.activeThread?.latestTurn?.assistantMessageId || null}
                             latestTurnStartedAt={effectiveLatestTurnStartedAt}
@@ -1129,6 +1124,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             focusMessageId={props.focusMessageId}
                             loadingChats={isLoadingSelectedChat}
                             selectionHydrating={controller.selectionHydrating}
+                            coldStart={initialHistoryRef.current.cold}
                             assistantTextStreamingMode={settings.assistantTextStreamingMode}
                             assistantToolOutputDefaultMode={settings.assistantToolOutputDefaultMode}
                             assistantChatDisplayMode={settings.assistantChatDisplayMode}
@@ -1198,6 +1194,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onDeleteQueuedMessage={handleDeleteQueuedMessage}
                         onMoveQueuedMessage={handleMoveQueuedMessage}
                         selectedSessionId={visibleComposerSessionId}
+                        configurationThreadId={controller.activeThread?.id}
                         useSettingsDefaults={selectedSessionIsDraft || newChatHandoffActive}
                         resetComposerStateToken={resetComposerStateToken}
                         selectedSessionMode={selectedSessionMode}
@@ -1206,6 +1203,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         selectedProjectId={displayProjectId}
                         selectedProjectPath={displayProjectPath || null}
                         selectedProjectName={displayProjectName}
+                        projectIconSourcePath={projectIconSourcePath}
                         projectRoots={composerProjectRoots}
                         projectChoices={composerIsCentered ? newChatProjectChoices : undefined}
                         projectContextDisabled={newChatHandoffActive || projectDirectoryLocked || controller.commandPending || projectCatalogState.loading}

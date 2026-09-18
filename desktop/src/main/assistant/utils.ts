@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from '../../shared/assistant/browser-context'
 import { randomUUID } from 'node:crypto'
 import type {
     AssistantLatestTurn,
@@ -26,7 +27,7 @@ export function createAssistantId(prefix: string): string {
 }
 
 export function deriveSessionTitleFromPrompt(prompt: string): string {
-    const parsedMessage = parseSerializedAssistantMessage(prompt)
+    const parsedMessage = parseSerializedAssistantMessage(stripSidebarBrowserContext(prompt))
     const normalized = String(parsedMessage.body || '')
         .replace(/\s+/g, ' ')
         .trim()

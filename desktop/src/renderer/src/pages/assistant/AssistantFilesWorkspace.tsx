@@ -9,6 +9,7 @@ import type { FilePreviewPresentationState } from '@/components/ui/file-preview/
 import { AssistantExplorerWorkspace } from './AssistantExplorerWorkspace'
 import { captureAssistantUtilityScrollAnchor, restoreAssistantUtilityScrollAnchor } from './assistant-utility-state-capsules'
 import { captureProductEvent } from '@/lib/product-analytics'
+import { assistantFilesRootContext, buildAssistantFilesRoots, filesRootPathsEqual, findAssistantFilesRoot, restoreAssistantFilesRoot } from './assistant-files-roots'
 
 export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     projectPath,
@@ -16,7 +17,8 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     active = true,
     stateCapsule,
     onStateCapsuleChange,
-    publishNavigatorToAppTitleBar = false
+    publishNavigatorToAppTitleBar = false,
+    onPreviewOpenChange
 }: {
     projectPath: string | null
     projectRoots?: AssistantChatScopeRoot[]
@@ -24,30 +26,26 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     stateCapsule?: AssistantUtilityExplorerStateCapsule
     onStateCapsuleChange?: (capsule: AssistantUtilityExplorerStateCapsule) => void
     publishNavigatorToAppTitleBar?: boolean
+    onPreviewOpenChange?: (open: boolean) => void
 }) {
     const preview = useFilePreview()
-    const roots = useMemo(() => {
-        const scoped = projectRoots.filter((root, index, entries) => (
-            root.path && entries.findIndex((candidate) => candidate.path === root.path) === index
-        ))
-        if (!projectPath || scoped.some((root) => root.path === projectPath)) return scoped
-        return [{
-            id: `compatibility:${projectPath}`,
-            kind: 'associated-folder' as const,
-            path: projectPath,
-            label: projectPath.split(/[\\/]/).filter(Boolean).pop() || 'Working root',
-            access: 'read-write' as const
-        }, ...scoped]
-    }, [projectPath, projectRoots])
-    const [selectedRootPath, setSelectedRootPath] = useState(() => {
-        const hydrated = String(stateCapsule?.rootPath || '').trim()
-        return hydrated || projectPath || roots[0]?.path || ''
-    })
-    const activeProjectPath = roots.some((root) => root.path === selectedRootPath)
-        ? selectedRootPath
-        : projectPath || roots[0]?.path || null
-    const activeRoot = roots.find((root) => root.path === activeProjectPath) || null
-    const capsuleMatchesActiveRoot = !stateCapsule?.rootPath || stateCapsule.rootPath === activeProjectPath
+    const hasPreview = Boolean(preview.previewFile)
+    useEffect(() => {
+        onPreviewOpenChange?.(hasPreview)
+        return () => onPreviewOpenChange?.(false)
+    }, [hasPreview, onPreviewOpenChange])
+    const roots = useMemo(() => buildAssistantFilesRoots(projectPath, projectRoots), [projectPath, projectRoots])
+    const selectionContext = assistantFilesRootContext(roots, projectPath, stateCapsule)
+    const restoredRootPath = restoreAssistantFilesRoot(roots, projectPath, stateCapsule)
+    const [rootSelection, setRootSelection] = useState(() => ({ context: selectionContext, path: restoredRootPath }))
+    const selectedRoot = rootSelection.context === selectionContext ? findAssistantFilesRoot(roots, rootSelection.path) : undefined
+    const activeProjectPath = selectedRoot?.path || restoredRootPath
+    const activeRoot = findAssistantFilesRoot(roots, activeProjectPath) || null
+    const capsuleMatchesActiveRoot = !stateCapsule?.rootPath || filesRootPathsEqual(stateCapsule.rootPath, activeProjectPath)
+    useEffect(() => {
+        setRootSelection(current => current.context === selectionContext && filesRootPathsEqual(current.path, activeProjectPath)
+            ? current : { context: selectionContext, path: activeProjectPath })
+    }, [selectionContext, activeProjectPath])
     const modeOpenCapturedRef = useRef(false)
     const rootRef = useRef<HTMLElement | null>(null)
     const initialNavigationState = useMemo<PreviewNavigationWorkspaceState>(() => capsuleMatchesActiveRoot ? ({
@@ -74,8 +72,10 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     const pendingHydrationRef = useRef(capsuleMatchesActiveRoot ? stateCapsule : undefined)
     const openPreviewRef = useRef(preview.openPreview)
     const openPreviewInNewTabRef = useRef(preview.openPreviewInNewTab)
+    const closePreviewRef = useRef(preview.closePreview)
     openPreviewRef.current = preview.openPreview
     openPreviewInNewTabRef.current = preview.openPreviewInNewTab
+    closePreviewRef.current = preview.closePreview
 
     useEffect(() => {
         if (!active) {
@@ -145,6 +145,28 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
         if (!preview.previewFile) setPreviewPresentation(null)
     }, [preview.previewFile])
 
+    const handleRootChange = useCallback((path: string) => {
+        pendingHydrationRef.current = undefined
+        hydratedPreviewPathRef.current = null
+        setRootSelection({ context: selectionContext, path })
+        setNavigationState({})
+        setScrollAnchor(undefined)
+        setPreviewPresentation(null)
+        closePreviewRef.current()
+    }, [selectionContext])
+    // Equivalent scope snapshots must not invalidate the memoized Files tree.
+    const rootOptionsKey = JSON.stringify(roots.map(({ id, path, label, access }) => ({ id, path, label, access })))
+    const rootSelector = useMemo(() => {
+        const options = JSON.parse(rootOptionsKey) as Array<Pick<AssistantChatScopeRoot, 'id' | 'path' | 'label' | 'access'>>
+        return options.length > 1 ? (
+            <select value={activeProjectPath || ''} onChange={event => handleRootChange(event.target.value)}
+                className="h-7 min-w-0 max-w-[min(240px,45vw)] rounded-md border border-[var(--surface-divider)] bg-[var(--surface-panel)] px-2 text-[10px] text-sparkle-text-secondary outline-none focus:border-[var(--accent-primary)]/45"
+                aria-label="Files root" title={activeProjectPath || undefined}>
+                {options.map(root => <option key={root.id} value={root.path}>{root.label}{root.access === 'read-only' ? ' · Read only' : ''}</option>)}
+            </select>
+        ) : null
+    }, [rootOptionsKey, activeProjectPath, handleRootChange])
+
     return (
         <section
             ref={rootRef}
@@ -155,34 +177,11 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
             className="assistant-files-workspace relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]"
             aria-label="Files workspace"
         >
-            {roots.length > 1 ? (
-                <header className="flex h-9 shrink-0 items-center border-b border-white/[0.06] px-2">
-                    <select
-                        value={activeProjectPath || ''}
-                        onChange={(event) => {
-                            pendingHydrationRef.current = undefined
-                            hydratedPreviewPathRef.current = null
-                            setSelectedRootPath(event.target.value)
-                            setNavigationState({})
-                            setScrollAnchor(undefined)
-                            setPreviewPresentation(null)
-                            preview.closePreview()
-                        }}
-                        className="h-7 min-w-0 max-w-full rounded-md border border-[var(--surface-divider)] bg-[var(--surface-panel)] px-2 text-[10px] text-sparkle-text-secondary outline-none focus:border-[var(--accent-primary)]/45"
-                        aria-label="Files root"
-                    >
-                        {roots.map((root) => (
-                            <option key={root.id} value={root.path}>
-                                {root.label}{root.access === 'read-only' ? ' · Read only' : ''}
-                            </option>
-                        ))}
-                    </select>
-                </header>
-            ) : null}
             <div className="relative flex min-h-0 flex-1 overflow-hidden">
             <AssistantExplorerWorkspace
                 key={`${activeProjectPath || 'detached'}:${hydrationKey}`}
                 projectPath={activeProjectPath}
+                workspaceHeaderActions={rootSelector}
                 onOpenPreview={handleOpenPreview}
                 onOpenPreviewInNewTab={handleOpenPreviewInNewTab}
                 initialWorkspaceState={initialNavigationState}

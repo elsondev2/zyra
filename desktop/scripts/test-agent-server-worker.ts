@@ -138,17 +138,18 @@ try {
     workers[0].emit('event', { type: 'message_update', message: { role: 'assistant', content: 'working' } })
     workers[0].finishPrompt({})
     await prompt
-    await waitUntil(() => events.length === 2)
-    assert.equal((events[0].event as { type: string }).type, 'message_update')
-    assert.equal(events[0].metadata?.turnId, 'turn:desktop-test')
-    assert.equal(events[0].metadata?.localThreadId, 'assistant-thread:desktop-test')
-    assert.equal((events[1].event as { type: string }).type, 'zyra_server_turn_completed')
-    assert.equal(secondEvents.length, 2, 'two local Desktop projections must receive the same canonical events')
+    await waitUntil(() => events.length === 3)
+    assert.equal((events[0].event as { type: string }).type, 'zyra_server_prompt_accepted', 'the accepted turn becomes visible before provider output')
+    assert.equal((events[1].event as { type: string }).type, 'message_update')
+    assert.equal(events[1].metadata?.turnId, 'turn:desktop-test')
+    assert.equal(events[1].metadata?.localThreadId, 'assistant-thread:desktop-test')
+    assert.equal((events[2].event as { type: string }).type, 'zyra_server_turn_completed')
+    assert.equal(secondEvents.length, 3, 'two local Desktop projections must receive the same canonical events')
 
     worker.dispose()
     assert.equal(workers[0].disposed, false, 'desktop detach must leave the server-owned worker alive')
     workers[0].emit('event', { type: 'message_update', message: { role: 'assistant', content: 'second projection remains' } })
-    await waitUntil(() => secondEvents.length === 3)
+    await waitUntil(() => secondEvents.length === 4)
     secondWorker.dispose()
     connection.close()
 
@@ -164,7 +165,7 @@ try {
         pluginSkillSources: [pluginSkillSourceV1]
     })
     reconnectWorker.flushReplay()
-    assert.equal(replay.length, 2, 'a persisted sequence watermark must skip already-projected events')
+    assert.equal(replay.length, 3, 'a persisted sequence watermark must skip the already-projected acceptance event')
     assert.equal(replay[0]?.replay, true)
     assert.equal(replay[0]?.turnId, 'turn:desktop-test')
     const latestSequence = reconnectWorker.latestSequence
@@ -193,6 +194,23 @@ try {
     assert.equal(workers[1]?.connectPayloads[0]?.pluginSkillSources instanceof Array, true)
     changedAuthorityWorker.dispose()
     changedAuthorityConnection.close()
+
+    workers[1].emit('event', { type: 'approval_requested', requestId: 'approval:journal-gap', command: 'synthetic command' })
+    workers[1].emit('event', { type: 'tool_execution_start', toolCallId: 'tool:journal-gap', toolName: 'read' })
+    for (let index = 0; index < 520; index++) workers[1].emit('event', { type: 'status', index })
+    const gapConnection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false, authorityProof: 'desktop-test-authority' })
+    const gapWorker = gapConnection.createWorker(project, 0)
+    const recoveredEvents: any[] = []
+    gapWorker.onEvent(event => recoveredEvents.push(event))
+    try {
+        await gapWorker.request('connect', {
+            cwd: project, localThreadId: 'assistant-thread:desktop-test', threadId: 'chat:desktop-test', providerThreadId: 'chat:desktop-test',
+            pluginSkillSources: workers[1].connectPayloads[0]?.pluginSkillSources
+        })
+        gapWorker.flushReplay()
+        assert.equal(recoveredEvents.filter(event => event.type === 'approval_requested' && event.requestId === 'approval:journal-gap').length, 1, 'Desktop must recover attention whose opening event was evicted')
+        assert.equal(recoveredEvents.filter(event => event.type === 'tool_execution_start' && event.toolCallId === 'tool:journal-gap').length, 1, 'Desktop must recover pending tools after a journal gap')
+    } finally { gapWorker.dispose(); gapConnection.close() }
 
     const retryProbe = new DesktopAgentServerConnection(root, { autoStart: false })
     const recoveredClient = { close: () => undefined }

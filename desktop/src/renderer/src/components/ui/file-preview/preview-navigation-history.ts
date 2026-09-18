@@ -21,6 +21,8 @@ export function previewNavigationEntriesMatch(
 ): boolean {
     if (!left || !right) return false
     return normalizePath(left.file.path) === normalizePath(right.file.path)
+        && (left.file.htmlLocation?.search || '') === (right.file.htmlLocation?.search || '')
+        && (left.file.htmlLocation?.hash || '') === (right.file.htmlLocation?.hash || '')
 }
 
 export function createPreviewNavigationState(entry: PreviewNavigationEntry): PreviewNavigationState {

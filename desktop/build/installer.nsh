@@ -1,23 +1,40 @@
 !include "WinMessages.nsh"
+!include "${PROJECT_DIR}\build\windows-file-icons.nsh"
 !include "StrFunc.nsh"
 !ifndef BUILD_UNINSTALLER
   ${StrStr}
 !endif
 
+; Existing Windows default-app choices can still refer to an old shared ProgID.
+; Keep those choices valid, but use a generic file-type icon instead of the logo.
+!macro ZyraLegacyFileIcon NAME ICON
+  ReadRegStr $0 SHELL_CONTEXT "Software\Classes\${NAME}\shell\open\command" ""
+  ${If} $0 == '$appExe "%1"'
+  ${OrIf} $0 == '"$appExe" "%1"'
+    WriteRegStr SHELL_CONTEXT "Software\Classes\${NAME}\DefaultIcon" "" "$INSTDIR\resources\zyra-file-${ICON}.ico"
+  ${EndIf}
+!macroend
+
 !macro customInstall
+  !insertmacro ZyraInstallFileIcons
+  !insertmacro ZyraLegacyFileIcon "Zyra Code and Text Preview" "document"
+  !insertmacro ZyraLegacyFileIcon "Zyra Document Preview" "file"
+  !insertmacro ZyraLegacyFileIcon "Zyra Image Preview" "image"
+  !insertmacro ZyraLegacyFileIcon "Zyra Media Preview" "video"
   WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "" "Open with Zyra"
   WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "Icon" "$appExe,0"
-  WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "Position" "Top"
+  ; Remove the old pinned position on upgrades as well as fresh installs.
+  DeleteRegValue SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "Position"
   WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra\command" "" '"$appExe" "%1"'
 
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra" "" "Open with Zyra"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra" "Icon" "$appExe,0"
-  WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra" "Position" "Top"
+  DeleteRegValue SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra" "Position"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra\command" "" '"$appExe" "%1"'
 
-  WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "" "Open Zyra Here"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "" "Open with Zyra"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "Icon" "$appExe,0"
-  WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "Position" "Top"
+  DeleteRegValue SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "Position"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra\command" "" '"$appExe" "%V"'
 
   ; Desktop carries the lockstep TUI runtime. Install one user-owned terminal
@@ -31,6 +48,10 @@
   FileWrite $0 "set $\"ZYRA_ROOT=$3\resources\zyra-runtime$\"$\r$\n"
   FileWrite $0 "set $\"ZYRA_DATA_ROOT=%USERPROFILE%$\"$\r$\n"
   FileWrite $0 "set $\"ZYRA_DISTRIBUTION=desktop-bundle$\"$\r$\n"
+  FileWrite $0 "if defined ZYRA_STATE_DIR goto zyra_server_namespace_ready$\r$\n"
+  FileWrite $0 "set $\"ZYRA_STATE_DIR=%APPDATA%\Zyra\assistant\agent-server$\"$\r$\n"
+  FileWrite $0 "set $\"ZYRA_AGENT_SERVER_CHANNEL=desktop$\"$\r$\n"
+  FileWrite $0 ":zyra_server_namespace_ready$\r$\n"
   FileWrite $0 "if not exist $\"$3\resources\zyra-node\node.exe$\" goto zyra_cli_fallback$\r$\n"
   FileWrite $0 "$\"$3\resources\zyra-node\node.exe$\" $\"$3\resources\zyra-runtime\bin\zyra.mjs$\" %*$\r$\n"
   FileWrite $0 "exit /b %ERRORLEVEL%$\r$\n"
@@ -52,6 +73,7 @@
 
 !macro customUnInstall
   ${ifNot} ${isUpdated}
+    !insertmacro ZyraUninstallFileIcons
     DeleteRegKey SHELL_CONTEXT "Software\Classes\*\shell\Zyra"
     DeleteRegKey SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra"
     DeleteRegKey SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra"

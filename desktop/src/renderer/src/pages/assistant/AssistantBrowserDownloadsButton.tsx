@@ -1,5 +1,8 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import {
     AlertTriangle,
     Download,
@@ -121,25 +124,22 @@ function DownloadProgressRing({ progress, active }: { progress: number | null; a
 
 export function AssistantBrowserDownloadsButton({
     api,
+    active = true,
+    scopeKey = 'browser-downloads',
     className,
-    onOpenHere,
-    onBeforeOverlayOpen,
-    onOverlayChange
+    onOpenHere
 }: {
     api: BrowserDownloadsApi
+    active?: boolean
+    scopeKey?: string
     className?: string
     onOpenHere?: (download: BrowserDownloadRecord) => Promise<void>
-    onBeforeOverlayOpen?: () => Promise<unknown>
-    onOverlayChange?: (open: boolean) => void
 }) {
     useThemeRevision()
     const iconTheme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
     const rootRef = useRef<HTMLDivElement | null>(null)
     const knownIdsRef = useRef(new Set<string>())
     const autoCloseTimerRef = useRef(0)
-    const overlayOpenRequestRef = useRef(0)
-    const overlayOpeningRef = useRef(false)
-    const openRef = useRef(false)
     const [downloads, setDownloads] = useState<BrowserDownloadRecord[]>([])
     const [open, setOpen] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -147,32 +147,16 @@ export function AssistantBrowserDownloadsButton({
     const [pendingDelete, setPendingDelete] = useState<BrowserDownloadRecord | null>(null)
     const [pendingOpen, setPendingOpen] = useState<{ download: BrowserDownloadRecord; token: string } | null>(null)
     const [optionsMenu, setOptionsMenu] = useState<DownloadOptionsMenu | null>(null)
-    openRef.current = open
 
-    const requestOverlayOpen = useCallback(async () => {
-        if (overlayOpeningRef.current || openRef.current) return
-        overlayOpeningRef.current = true
-        const request = ++overlayOpenRequestRef.current
-        try {
-            await onBeforeOverlayOpen?.()
-        } catch {
-            // A current page frame is preferred, but Downloads must remain reachable.
-        } finally {
-            overlayOpeningRef.current = false
-        }
-        if (request !== overlayOpenRequestRef.current) return
-        onOverlayChange?.(true)
-        openRef.current = true
-        setOpen(true)
-    }, [onBeforeOverlayOpen, onOverlayChange])
-
-    useEffect(() => {
-        onOverlayChange?.(open || Boolean(optionsMenu) || Boolean(pendingDelete) || Boolean(pendingOpen))
-    }, [onOverlayChange, open, optionsMenu, pendingDelete, pendingOpen])
-    useEffect(() => () => {
-        overlayOpenRequestRef.current += 1
-        onOverlayChange?.(false)
-    }, [onOverlayChange])
+    const closeOverlay = useCallback(() => {
+        window.clearTimeout(autoCloseTimerRef.current)
+        setOpen(false)
+        setOptionsMenu(null)
+        setPendingDelete(null)
+        setPendingOpen(null)
+    }, [])
+    const requestOverlayOpen = useCallback(() => { if (active) setOpen(true) }, [active])
+    useEffect(() => { closeOverlay() }, [active, scopeKey, closeOverlay])
 
     const applyDownloads = useCallback((nextDownloads: BrowserDownloadRecord[], announceNew = true) => {
         const nextIds = new Set(nextDownloads.map((download) => download.id))
@@ -185,9 +169,9 @@ export function AssistantBrowserDownloadsButton({
         setNewDownloadId(started.id)
         void requestOverlayOpen()
         window.clearTimeout(autoCloseTimerRef.current)
-        autoCloseTimerRef.current = window.setTimeout(() => setOpen(false), 4_500)
+        autoCloseTimerRef.current = window.setTimeout(closeOverlay, 4_500)
         window.setTimeout(() => setNewDownloadId((current) => current === started.id ? null : current), 800)
-    }, [requestOverlayOpen])
+    }, [requestOverlayOpen, closeOverlay])
 
     useEffect(() => {
         let disposed = false
@@ -207,14 +191,24 @@ export function AssistantBrowserDownloadsButton({
     useEffect(() => {
         if (!open) return
         const close = (event: PointerEvent) => {
-            if (event.target instanceof Node && rootRef.current?.contains(event.target)) return
-            if (event.target instanceof Element && event.target.closest('[data-browser-download-options]')) return
-            setOptionsMenu(null)
-            setOpen(false)
+            if (isOverlayEventInside(event, rootRef.current)) return
+            if ((event.target as Element | null)?.closest?.('[data-browser-download-options]')) return
+            closeOverlay()
         }
-        document.addEventListener('pointerdown', close, true)
-        return () => document.removeEventListener('pointerdown', close, true)
-    }, [open])
+        const escape = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return
+            if (optionsMenu) setOptionsMenu(null)
+            else closeOverlay()
+        }
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', close, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', escape)
+        const removeOverlayBlurListener5 = addOverlayWindowBlurListener(closeOverlay)
+        return () => {
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener5()
+        }
+    }, [open, optionsMenu, closeOverlay])
 
     const act = useCallback(async (action: BrowserDownloadAction): Promise<BrowserDownloadActionResult | null> => {
         setError(null)
@@ -239,20 +233,20 @@ export function AssistantBrowserDownloadsButton({
     useEffect(() => {
         if (!optionsMenu) return
         const closeOptions = (event: PointerEvent) => {
-            if (event.target instanceof Element && event.target.closest('[data-browser-download-options]')) return
+            if ((event.target as Element | null)?.closest?.('[data-browser-download-options]')) return
             setOptionsMenu(null)
         }
         const closeOnEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') setOptionsMenu(null)
         }
         const closeOnViewportChange = () => setOptionsMenu(null)
-        document.addEventListener('pointerdown', closeOptions, true)
-        document.addEventListener('keydown', closeOnEscape)
+        const removeOverlayListener3 = addOverlayEventListener('pointerdown', closeOptions, true)
+        const removeOverlayListener4 = addOverlayEventListener('keydown', closeOnEscape)
         window.addEventListener('resize', closeOnViewportChange)
         window.addEventListener('scroll', closeOnViewportChange, true)
         return () => {
-            document.removeEventListener('pointerdown', closeOptions, true)
-            document.removeEventListener('keydown', closeOnEscape)
+            removeOverlayListener3()
+            removeOverlayListener4()
             window.removeEventListener('resize', closeOnViewportChange)
             window.removeEventListener('scroll', closeOnViewportChange, true)
         }
@@ -313,13 +307,7 @@ export function AssistantBrowserDownloadsButton({
                 onClick={() => {
                     window.clearTimeout(autoCloseTimerRef.current)
                     setOptionsMenu(null)
-                    if (open) {
-                        overlayOpenRequestRef.current += 1
-                        openRef.current = false
-                        setOpen(false)
-                    } else {
-                        void requestOverlayOpen()
-                    }
+                    open ? closeOverlay() : requestOverlayOpen()
                 }}
                 className={cn(
                     'inline-flex size-7 items-center justify-center rounded-md text-sparkle-text-muted/60 transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
@@ -334,11 +322,11 @@ export function AssistantBrowserDownloadsButton({
             </button>
 
             {open ? (
-                <section className="absolute right-0 top-8 z-[430] flex max-h-[min(390px,calc(100vh-64px))] w-[306px] flex-col overflow-hidden rounded-[7px] border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_97%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.34)]" aria-label="Browser downloads">
+                <AnchoredNativeOverlay><section className="absolute right-0 top-8 z-[430] flex max-h-[min(390px,calc(100vh-64px))] w-[306px] flex-col overflow-hidden rounded-[7px] border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_97%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.34)]" aria-label="Browser downloads">
                     <header className="flex h-9 shrink-0 items-center border-b border-[var(--surface-divider)] px-2.5">
                         <h3 className="min-w-0 flex-1 text-[11px] font-semibold text-sparkle-text">Downloads</h3>
                         <button type="button" onClick={() => void act({ type: 'open-folder' })} className="inline-flex size-6 items-center justify-center rounded-[4px] text-sparkle-text-muted/55 hover:bg-[var(--surface-hover)] hover:text-sparkle-text" title="Open Downloads folder" aria-label="Open Downloads folder"><FolderOpen size={13} /></button>
-                        <button type="button" onClick={() => setOpen(false)} className="inline-flex size-6 items-center justify-center rounded-[4px] text-sparkle-text-muted/55 hover:bg-[var(--surface-hover)] hover:text-sparkle-text" title="Close downloads" aria-label="Close downloads"><X size={13} /></button>
+                        <button type="button" onClick={closeOverlay} className="inline-flex size-6 items-center justify-center rounded-[4px] text-sparkle-text-muted/55 hover:bg-[var(--surface-hover)] hover:text-sparkle-text" title="Close downloads" aria-label="Close downloads"><X size={13} /></button>
                     </header>
                     <div className="min-h-0 flex-1 overflow-y-auto p-1 custom-scrollbar">
                         {downloads.map((download) => {
@@ -392,7 +380,7 @@ export function AssistantBrowserDownloadsButton({
                         })}
                     </div>
                     {error ? <div className="shrink-0 border-t border-red-400/15 bg-red-400/[0.06] px-2.5 py-1.5 text-[8px] text-red-200">{error}</div> : null}
-                </section>
+                </section></AnchoredNativeOverlay>
             ) : null}
             {optionsMenu && optionsDownload ? createPortal((
                 <div

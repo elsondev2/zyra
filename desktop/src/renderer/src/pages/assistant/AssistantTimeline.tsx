@@ -95,6 +95,7 @@ type AssistantTimelineProps = {
     focusMessageId?: string | null
     loadingChats?: boolean
     selectionHydrating?: boolean
+    coldStart?: boolean
     assistantTextStreamingMode?: AssistantTextStreamingMode
     assistantToolOutputDefaultMode?: AssistantToolOutputDefaultMode
     assistantChatDisplayMode?: AssistantChatDisplayMode
@@ -146,6 +147,7 @@ function AssistantTimelineImpl({
     focusMessageId = null,
     loadingChats = false,
     selectionHydrating = false,
+    coldStart = false,
     assistantTextStreamingMode = 'stream',
     assistantToolOutputDefaultMode = 'expanded',
     assistantChatDisplayMode = 'detailed',
@@ -211,10 +213,15 @@ function AssistantTimelineImpl({
     const revealActivityInDom = useCallback((activityId: string): boolean => {
         const target = document.getElementById(getTimelineActivityDomId(activityId))
         if (!target) return false
-        const actionBatch = target.closest<HTMLElement>('[data-assistant-action-batch="true"]')
-        const actionBatchTrigger = actionBatch?.querySelector<HTMLButtonElement>('[data-assistant-action-batch-trigger="true"]')
-        if (actionBatchTrigger?.getAttribute('aria-expanded') === 'false') {
-            actionBatchTrigger.click()
+        const batchTriggers: HTMLButtonElement[] = []
+        let actionBatch = target.closest<HTMLElement>('[data-assistant-action-batch="true"]')
+        while (actionBatch) {
+            const trigger = actionBatch.querySelector<HTMLButtonElement>('[data-assistant-action-batch-trigger="true"]')
+            if (trigger?.getAttribute('aria-expanded') === 'false') batchTriggers.push(trigger)
+            actionBatch = actionBatch.parentElement?.closest<HTMLElement>('[data-assistant-action-batch="true"]') || null
+        }
+        if (batchTriggers.length > 0) {
+            batchTriggers.reverse().forEach((trigger) => trigger.click())
             window.setTimeout(() => {
                 const revealedTarget = document.getElementById(getTimelineActivityDomId(activityId))
                 if (revealedTarget) revealTimelineActivityElement(revealedTarget)
@@ -433,7 +440,7 @@ function AssistantTimelineImpl({
                     ? <TimelineIssueList activities={visibleActivities} />
                     : (
                         <TimelineToolCallList
-                            activities={visibleActivities}
+                            activities={visibleActivities.map((activity) => commandCheckpointDisplayById.get(activity.id) || activity)}
                             displayMode={assistantChatDisplayMode}
                             runningCommandCount={runningCommandCount}
                             projectRootPath={projectRootPath}
@@ -441,6 +448,7 @@ function AssistantTimelineImpl({
                             onOpenFilePath={onOpenFilePath}
                             onOpenUrl={onOpenInternalLink}
                             onViewDiff={onViewDiff}
+                            onRevealActivity={revealActivity}
                         />
                     )
             return interruptionActivities.length > 0 ? (
@@ -587,6 +595,7 @@ function AssistantTimelineImpl({
             contentInsetEndAdjustment={contentInsetEndAdjustment}
             isWorking={isWorking}
             selectionHydrating={selectionHydrating}
+            coldStart={coldStart}
             hasOlder={hasOlder}
             hasNewer={hasNewer}
             loadingOlder={loadingOlder}

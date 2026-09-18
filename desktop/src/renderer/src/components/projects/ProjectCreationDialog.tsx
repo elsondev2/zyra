@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { NativeOverlayPortal, addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { FolderOpen, Loader2, Plus, X } from 'lucide-react'
 import type { AssistantProject } from '@shared/assistant/contracts'
 import type { ProjectCreationOptions } from '@/lib/projects/project-creation-draft'
@@ -20,25 +20,19 @@ export function ProjectCreationDialog({ options, onCreated, onClose }: {
     const form = useProjectCreationForm(options, onCreated)
     const busy = form.busy !== null
 
-    useEffect(() => {
-        const dialog = dialogRef.current
-        const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-        dialog?.showModal()
-        nameRef.current?.focus()
-        nameRef.current?.select()
-        return () => {
-            dialog?.close()
-            if (previous?.isConnected) previous.focus()
-        }
-    }, [])
+    const readyDialogRef = useRef<HTMLDialogElement | null>(null)
+    useEffect(() => () => { readyDialogRef.current?.close() }, [])
+    useEffect(() => addOverlayEventListener('keydown', event => {
+        if (event.key !== 'Escape' || event.defaultPrevented || busy || dialogRef.current?.open) return
+        event.preventDefault()
+        onClose()
+    }, true), [busy, onClose])
 
-    return createPortal(
-        <dialog
+    return <NativeOverlayPortal autoFocus={false} onReady={() => { readyDialogRef.current = dialogRef.current; if (dialogRef.current && !dialogRef.current.open) dialogRef.current.showModal(); nameRef.current?.focus(); nameRef.current?.select() }}><dialog
             ref={dialogRef}
             className="project-creation-dialog"
             aria-labelledby={titleId}
             aria-busy={busy}
-            data-zyra-native-view-occluder="true"
             onKeyDown={(event) => event.stopPropagation()}
             onCancel={(event) => { event.preventDefault(); if (!busy) onClose() }}
             onClick={(event) => {
@@ -84,6 +78,5 @@ export function ProjectCreationDialog({ options, onCreated, onClose }: {
                     </button>
                 </footer>
             </form>
-        </dialog>, document.body
-    )
+        </dialog></NativeOverlayPortal>
 }

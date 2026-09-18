@@ -1,3 +1,4 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { ChevronDown, Filter, Grid3x3, LayoutGrid, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getProjectTypeById, type ContentLayout, type ViewMode } from './types'
@@ -57,8 +58,8 @@ export function FolderBrowseToolbar({
         }
 
         if (isViewDropdownOpen) {
-            document.addEventListener('mousedown', handleClickOutside)
-            return () => document.removeEventListener('mousedown', handleClickOutside)
+            const removeOverlayListener1 = addOverlayEventListener('mousedown', handleClickOutside)
+            return () => removeOverlayListener1()
         }
     }, [isViewDropdownOpen])
 

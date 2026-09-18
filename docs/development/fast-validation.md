@@ -1,6 +1,8 @@
 # Fast development validation
 
-Zyra has separate development checks and release gates. Choose the smallest command that proves the change, then run the full gate once when the work crosses boundaries or is ready to merge.
+**Targeted tests are the default for development.** A small fix starts with its owning test file or named target. Whole-renderer typechecks, `check:quick`, full suites and builds are checkpoints, not prerequisites for every edit.
+
+Preserve the release gates. A focused unit test proves its own behavior; add the relevant integration check when a change crosses a real boundary, and report any unverified path.
 
 ## Command map
 
@@ -8,8 +10,48 @@ Run these from the repository root unless the command says otherwise.
 
 | Work | Command | What it proves |
 | --- | --- | --- |
-| JavaScript syntax only | `npm run check:syntax` | Parse-only validation for the maintained JavaScript target list |
-| Normal CLI iteration | `npm run check:quick` | JavaScript syntax and fast deterministic core contracts |
+| Runtime instance identity and freshness | `npm run test:agent-server:connection-status` and `npm --prefix desktop run test:runtime-connection-status` | Busy compatible connections, namespace rejection, heartbeat loss, stale presentation, browser read-only relay, terminal namespace binding and development mobile port selection; synthetic services only |
+| Windows file icons | `npm --prefix desktop run test:file-icon-system` | Material mappings, ICO sizes/source hashes, unique Windows ProgIDs, extension fallback registration and normal context-menu placement; see [installed checks](windows-file-icons.md) |
+| Standalone file-preview header | `npm --prefix desktop run test:quick-preview-chrome` and `npm --prefix desktop run test:shell-file-preview` | One header, usable loading chrome, real menu callbacks, guarded reload/close and dedicated native-window routing |
+| Single-file JavaScript syntax | `node --check src/permission-command-policy.mjs` | Parse just the changed module; substitute the actual changed file |
+| Attached-chat profiles and memory mode | `npm run test:session-preferences` | Profile metadata only, persistent current-thread memory changes, and rejection of scope overrides; `node scripts/test-zyra-agent-server-bridge.mjs` adds isolated real-runtime coverage |
+| Tab recording lifecycle/audio ownership | `npm --prefix desktop run test:browser-recording` | Start/stop/close races, denied/cancelled audio, microphone release before saving, stable encoder tracks, one-use native capture grants, original-owner transfer control, and detached last-tab protection |
+| Recording controls bridge | `npm --prefix desktop run test:browser-recording-host` | Real React with synthetic IPC/store/device data: one command subscription, native-only normal presentation, microphone labels, theme updates, closed-target recovery and cleanup |
+| Native tab recording output | `npm --prefix desktop run test:browser-recording-native` | Isolated Electron with a temporary synthetic page: video-only save, decoded motion, generated tab audio, late audio switching, finite duration and near-end seeking; no microphone or system audio capture. Add `-- --verify-container` when local ffprobe/ffmpeg are available to compare every encoded packet and fully decode the finalized file. These binaries are not shipped or required by the app. |
+| Usage data and provider tabs | `npm --prefix desktop run test:usage` and `npm --prefix desktop run test:settings-views` | Local harness parsing and incremental cache, persisted cross-chat range queries, token/cache/cost accounting, chart projections, timezone boundaries, refresh deduplication and recovery, and separate Connections/Models/Limits/Usage routes |
+| Child session turn limits | `node scripts/test-zyra-subagents.mjs` and `npm run test:agent-fleet:cancellation` | Actual turn event ordering permits the final allowed answer, aborts before the next turn, and preserves cancellation across turns |
+| Chat stuck loading or switching history | `npm --prefix desktop run test:timeline-presentation` | Real React and LegendList in isolated Electron: cold chat reveal, chat switching, hydration, initial paging and failed or abandoned pages |
+| Command classification | `npm run test:permissions:command-policy` | Pure policy cases, including PowerShell formatters and real destructive commands; no SDK, filesystem or provider startup |
+| Approval lifecycle and projection | `npm run test:permissions:lifecycle` and `npm --prefix desktop run test:assistant-approval-projection` | Tool correlation, waiting state, concurrent/late events, denial and compatible storage hydration |
+| Windows profile recovery | `npm --prefix desktop run test:windows-profile-recovery` and `npm run test:computer-window-feedback` | Exact-name selection, existing-browser reuse, scoped candidate details and bounded same-window recovery |
+| Computer tool failures | `npm run test:computer-tool-errors` | Installed Pi records failed operations as errors and preserves recovery metadata |
+| Bounded drawing sequences | `npm --prefix desktop run test:agent-control-drag-sequence` | Mixed semantic, coordinate-click and drag steps preserve revisions, target bounds, capability checks and interruption |
+| Windows cursor tracking | `npm --prefix desktop run test:windows-cursor` | Native progress, failed-drag position and negative display coordinates |
+| Computer-use glow | `npm --prefix desktop run test:windows-glow` | Hidden isolated Chromium tests entrance/exit, reduced motion, reactivation and cursor timing; no native input |
+| Windows overlay ownership | `npm --prefix desktop run smoke:windows-overlay-hit-test` | Isolated real Win32 hit testing across transparent canvas, cursor and indicator; verifies ordinary occlusion still blocks input |
+| Windows display scaling | `node native/zyra-computer-use/scripts/smoke-sidecar.mjs --dpi-only` | Requires the Debug helper; isolated window, no input. Checks runtime DPI awareness, native/UIA bounds and capture dimensions on the current display |
+| Permission gate behavior | `npm run test:permissions:gate` | Modes, scope/read-only boundaries, approvals and the installed-app lookup regression |
+| Same-chat folder recovery | `npm run test:permissions:access` | Effective-scope inspection, explicit folder approval in every mode, Bash/read consistency, one-shot concurrency, saved read-only ceilings, reconnect and cancelled or stale grants |
+| Approval prompt rendering | `npm --prefix desktop run test:assistant-tool-approval` | Isolated React rendering; no Electron, dev server or model session |
+| Browser inspector entrance/geometry | `npm --prefix desktop run test:browser-slot-geometry` | Isolated Electron reproduces fixed-size ancestor motion, interrupted entrance and settled/cleanup behavior without idle polling |
+| Browser request routing and folder access recovery | `npm --prefix desktop run test:browser-surface-recovery` | Main-window routing, preload delivery across remounts, late acknowledgement rejection, cancellation/timeout ownership, and real React folder-review/apply states in isolated Electron |
+| Native app overlays | `npm --prefix desktop run test:native-overlay` | Adopted same-origin native surfaces, trusted owner/frame checks, page continuity, layer order, resize and lifetime |
+| Native React portal lifecycle | `npm --prefix desktop run test:native-overlay-renderer` | Shared React state, delayed/cancelled startup, nested leases, document/theme synchronization, focus and recovery |
+| Visualization scroll/reload performance | `npm --prefix desktop run test:visualization-scroll` | Real virtual-list chart scrolling, state-preserving DOM reorder, bounded sanitizer cache and unchanged-frame reload regressions. `npm --prefix desktop run benchmark:visualization-scroll` reports the same workload; see [measurements and limits](visualization-performance.md). |
+| Browser/extension visualization, fonts and sidebar | `npm --prefix desktop run test:browser-surface-parity` | Real browser parser import, MV3 extension-origin visualization/CSP and settings-menu interactions, bridged font loading, quota states and queued desktop menu dispatch. Uses isolated fixtures, not the installed extension. |
+| Inline visualizations | `npm run test:visualizations` then `npm --prefix desktop run test:visualizations` | Skill discovery, parser/streaming/terminal behavior, assistant message routing, theme updates and isolated real-CSP sandbox checks; no live provider calls |
+| Browser tab thumbnails | `npm --prefix desktop run test:browser-page-capture` then `node desktop/scripts/test-assistant-native-view-reparent.mjs` | Fresh compositor frames after hidden-page hydration, concurrent-request deduplication, bounded JPEG size, timeout/error cleanup, and unchanged native visibility/focus |
+| Browser tab persistence | `npm --prefix desktop run test:browser-workspace-persistence` | Blank-tab save/restore, per-chat state, inspector order, ordinary URLs, private-tab exclusion and source contracts for initial saving/hydration guards |
+| Browser background gallery | `npm --prefix desktop run test:browser-background-panel` | Catalog contracts and isolated light/dark screenshots, browser alignment, narrow layout, captions, selection, rotation, keyboard source switching and search callback; no live provider requests |
+| Browser Backgrounds/History input scope | `npm --prefix desktop run test:browser-scoped-overlays` | Native browser-only bounds and zoom, nested full-window coverage/restoration, anchor movement, and both panels' keyboard event scope |
+| Native overlay callers | `npm --prefix desktop run test:native-overlay-callers` | Actual menus, nested options, rapid toggles, keyboard input and scope changes across portal documents |
+| Webview presentation lifecycle | `npm --prefix desktop run test:browser-webview-presentation` | Actual React Webview: zero menu capture/replacement, continuous guest visibility, inactive slots, New Tab, navigation and cleanup |
+| Recording controls and menus | `npm --prefix desktop run test:browser-recording-overlay-document` | Isolated trusted toolbar with stub state: real microphone menus, audio choices, keyboard controls, saved/error recovery and narrow layouts |
+| Native recording controls ownership | `npm --prefix desktop run test:browser-recording-overlay` | Real WebContentsView layering, live guest continuity, exact IPC ownership, transfer, renderer failure and cleanup |
+| Explorer deletion index updates | `npm --prefix desktop run test:file-delete-index` | Actual delete handler and index queue remove only the deleted subtree, preserve deep siblings, and update parent project metadata |
+| New Chat/Project picker | `npm --prefix desktop run test:assistant-new-chat` | Focused catalog/picker and new-chat contracts |
+| JavaScript syntax checkpoint | `npm run check:syntax` | Parse-only validation for the maintained JavaScript target list |
+| Multi-area CLI checkpoint | `npm run check:quick` | Syntax plus several core suites; broader than an individual fix |
 | CLI/runtime checkpoint | `npm run check:core` | Every core CLI suite; excludes desktop integration |
 | Desktop integration checkpoint | `npm run check:desktop` | Assistant timeline, handoff, Markdown, Browser, fleet, and agent-platform suites, serially |
 | Merge/release gate | `npm run check` | Core, desktop, and doctor checks |
@@ -33,15 +75,34 @@ Run these from the repository root unless the command says otherwise.
 
 ## Default agent workflow
 
-1. Run the focused contract test for the code being changed.
-2. During desktop work, keep one scoped typecheck watcher running instead of restarting full `tsc` after every edit.
-3. Run `npm run check:quick` at a useful checkpoint.
-4. Run the authoritative full typecheck only after shared contracts, configuration, or multiple desktop surfaces change.
-5. Run `npm run ui:build:fast` for ordinary desktop structural checkpoints.
-6. Run `npm run ui:build` when renderer bundle boundaries, workers, imports, or Vite configuration change, and once for merge/release readiness.
-7. Run `npm run check` once for merge/release readiness, not after every local edit.
+1. Name the changed behavior, owning module and smallest test that exercises it. Include relevant negative permission/safety cases.
+2. Reproduce in that target, make the scoped fix, and rerun it. Add a targeted test when one is missing; do not replace it with a whole-app check.
+3. Keep pure policy, parsing, formatting and selection tests on leaf modules. A test for one helper must not import the entire SDK or mount the application just to reach it. Runtime-backed tests remain separate.
+4. For UI changes, use the isolated component/interaction test and inspect the affected live flow. Icons, spacing and local copy do not require a whole-renderer typecheck or build.
+5. For changes crossing data, IPC, store or component contracts, select the affected integration check after the local tests pass. Run one broader typecheck when that boundary justifies it, not after each edit.
+6. Start one scoped watcher only for sustained TypeScript work when it saves repeated work and memory allows. A watcher is not mandatory for a small correction. Reuse existing task-owned watchers and close them when finished.
+7. Use `check:quick`, core/desktop suites and structural builds at deliberate multi-area checkpoints. Run the required full checks, packaging and release gates before merge/publication as specified in `RELEASE.md`.
 
 A successful typecheck proves type consistency. A successful build proves bundling. Neither replaces a focused behavior test or UI smoke test.
+
+## Resource and test-boundary rules
+
+- Keep local heavyweight work serial. Do not run typechecking, bundling, browser fixtures and native tests together by default.
+- Do not make users repeatedly close apps to validate a small fix. Choose a narrower test and reduce unnecessary imports first. Never close or restart their apps without approval.
+- If a necessary broad gate cannot run safely, leave that gate explicitly pending, use CI where appropriate, or request a suitable time/resource window. Do not weaken assertions or claim a pass.
+- Do not repeatedly raise timeouts or heap limits when a supposed unit test stalls. Inspect its import graph, fixture setup and resource use. A parser or policy test should normally finish in seconds; investigate unexpected startup costs instead of normalizing them.
+- Keep test data synthetic and temporary. No provider calls, personal profiles or app startup for checks that do not require those dependencies.
+- Add named targets beside existing package scripts. Avoid adding a new test orchestration framework when a direct command is enough. Keep targeted tests in the appropriate broader CI lane too.
+
+### Current permission-flow work
+
+Start with the three permission targets in the command map. Command classification now lives in `src/permission-command-policy.mjs`, which has no imports. The gate retains its existing public exports and uses that policy. The prompt-rendering target imports the component directly.
+
+Waiting-state/event projection has a dedicated lifecycle target. Run it alongside the gate test for correlation, persistence, denial and concurrent requests. The rendering target alone does not prove approval routing or execution timing.
+
+## Live computer-use outcome checks
+
+For multi-step editing tasks, inspect each returned batch screenshot as well as the final artifact. Successful input delivery does not prove an edit survived: cancellation keys can discard unfinished shapes or drafts without producing a tool error. Verify an unfamiliar editing gesture before repeating it, and retain failed or wasted intermediate work in the timing assessment. Keep the test request unchanged across comparable runs and report provider time separately from tool time.
 
 ## Chat-switch fixtures
 
@@ -96,7 +157,19 @@ Do not increase concurrency casually on 16 GB machines. TypeScript, Vite, Electr
 
 The fast command does not prove renderer chunk generation, worker bundling, minification, or copied runtime assets. Do not package or release its output. Use the unchanged `ui:build` command for those authoritative checks.
 
-Before either build, avoid running another production build at the same time. If free memory is low, close unused browser tabs or duplicate Electron development sessions. The fast-build script prints a warning below 2 GB available memory.
+Before either build, avoid running another production build at the same time. If free memory is low, first reconsider whether that build is needed for the current change. Defer a required build or ask the user before closing any apps. The fast-build script prints a warning below 2 GB available memory.
+
+## Targeted permission-check measurements
+
+A local Windows run of the direct targets, including process startup, measured:
+
+| Target | Wall time |
+| --- | ---: |
+| Pure command-policy regression | 0.19 s |
+| Permission-gate behavior | 0.33 s |
+| Isolated approval-panel rendering | 0.94 s |
+
+All three passed in about 1.5 seconds total. No dev server, app restart, provider call, build or typecheck ran. These are observations from one local run, not portable timing thresholds. The classifier target first reproduced the `Format-List` false positive, then passed after the scoped correction while real destructive commands stayed gated.
 
 ## Reference measurements
 
@@ -123,6 +196,8 @@ Memory availability changes these numbers substantially. Do not run full typeche
 
 When adding tests:
 
+- Provide a direct target for the owning module or feature, with no implicit build/typecheck chain.
+- Keep helper tests independent of SDK/application startup. Put unavoidable full-runtime tests in an explicit integration target.
 - Put deterministic, isolated tests in the core list.
 - Add a test to quick mode only when it does not bind fixed ports, mutate shared repository state, launch persistent processes, or depend on another suite's order.
 - Keep Electron/browser/global-profile tests in the serial desktop list.

@@ -1,3 +1,6 @@
+import { openDesktopLink } from '@/lib/desktop-links'
+import { desktopWebLink } from '@shared/desktop-link-policy'
+import { AssistantInspectorFrame } from './AssistantInspectorFrame'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AssistantActivity, AssistantChatScopeRoot, AssistantMessage, AssistantSession, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
@@ -8,7 +11,9 @@ import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assis
 import { getActiveAssistantThread, getSelectedAssistantSession } from '@/lib/assistant/selectors'
 import { shouldHideAssistantRowsForSelection } from '@/lib/assistant/assistant-history-state'
 import { AssistantConversationPane } from './AssistantConversationPane'
-import type { AssistantDiffRevealRequest } from './AssistantDiffPanel'
+import { AssistantDiffPanel, type AssistantDiffRevealRequest } from './AssistantDiffPanel'
+import { resolveAssistantWorkingDirectory } from '@shared/assistant/working-directory'
+import { useSettings } from '@/lib/settings'
 import { buildAssistantDiffTurns } from './assistant-diff-turns'
 import { resolveAssistantDiffTarget, type AssistantDiffTarget } from './assistant-diff-types'
 import { openAssistantFileTarget } from './assistant-file-navigation'
@@ -43,15 +48,6 @@ function areAssistantPageShellSelectionsEqual(left: AssistantPageShellSelection,
 const EMPTY_ASSISTANT_MESSAGES: AssistantMessage[] = []
 const EMPTY_ASSISTANT_ACTIVITIES: AssistantActivity[] = []
 const EMPTY_ASSISTANT_PROJECT_ROOTS: AssistantChatScopeRoot[] = []
-const createAssistantDiffPanelModule = async () => ({
-    default: (await import('./AssistantDiffPanel')).AssistantDiffPanel
-})
-let assistantDiffPanelModulePromise: ReturnType<typeof createAssistantDiffPanelModule> | null = null
-const loadAssistantDiffPanel = () => {
-    assistantDiffPanelModulePromise ||= createAssistantDiffPanelModule()
-    return assistantDiffPanelModulePromise
-}
-const AssistantDiffPanel = lazy(loadAssistantDiffPanel)
 const FilePreviewModal = lazy(() => import('@/components/ui/FilePreviewModal'))
 
 type AssistantDiffSourceSelection = {
@@ -79,6 +75,7 @@ function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelectio
 }
 
 export default function AssistantPage() {
+    const { settings } = useSettings()
     const actions = useAssistantStoreActions()
     const preview = useFilePreview()
     const location = useLocation()
@@ -129,6 +126,7 @@ export default function AssistantPage() {
         rightPanelMode,
         setRightPanelMode,
         setRightSidebarWidth,
+        rightSidebarWidth,
         railMode,
         setRailMode,
         paneLayout
@@ -165,29 +163,25 @@ export default function AssistantPage() {
             chatTitle: selectedSession?.title || 'Untitled chat',
             messages: hideRowsForSelection ? EMPTY_ASSISTANT_MESSAGES : activeThread?.messages || EMPTY_ASSISTANT_MESSAGES,
             activities: hideRowsForSelection ? EMPTY_ASSISTANT_ACTIVITIES : activeThread?.activities || EMPTY_ASSISTANT_ACTIVITIES,
-            projectRootPath: selectedSession?.workingRoot || selectedSession?.projectPath || activeThread?.cwd || null,
+            projectRootPath: resolveAssistantWorkingDirectory({ workingRoot: selectedSession?.workingRoot, projectPath: selectedSession?.projectPath, cwd: activeThread?.cwd }, settings.projectsFolder),
             projectRoots: selectedSession?.chatScope?.roots || EMPTY_ASSISTANT_PROJECT_ROOTS,
             activeTurnId: activeThread?.latestTurn?.state === 'running' ? activeThread.latestTurn.id : null,
             fleetSnapshot: activeThread ? state.snapshot.fleetByThreadId[activeThread.id] || null : null
         }
     }, areAssistantDiffSourceSelectionsEqual)
     const inspectorOpen = rightPanelMode === 'review'
-    const prepareInspector = useCallback(() => {
-        void loadAssistantDiffPanel().catch(() => undefined)
-    }, [])
+    const [inspectorMounted, setInspectorMounted] = useState(inspectorOpen)
+    useEffect(() => { if (inspectorOpen) setInspectorMounted(true) }, [inspectorOpen])
     useEffect(() => subscribeAssistantInspectorNavigation(() => {
-        prepareInspector()
         setRightPanelMode('review')
-    }), [prepareInspector, setRightPanelMode])
+    }), [setRightPanelMode])
     const revealBrowserInspector = useCallback(() => {
-        prepareInspector()
         setRightPanelMode('review')
-    }, [prepareInspector, setRightPanelMode])
+    }, [setRightPanelMode])
     const resizeBrowserInspector = useCallback((width: number) => {
-        prepareInspector()
         setRightPanelMode('review')
         setRightSidebarWidth(width)
-    }, [prepareInspector, setRightPanelMode, setRightSidebarWidth])
+    }, [setRightPanelMode, setRightSidebarWidth])
     const {
         request: browserSurfaceRequest,
         handleRequest: handleBrowserSurfaceRequestHandled
@@ -372,9 +366,8 @@ export default function AssistantPage() {
     useEffect(() => {
         if (!filesShellLaunchRequest) return
         diffSessionIdRef.current = shell.selectedSessionId
-        prepareInspector()
         setRightPanelMode('review')
-    }, [filesShellLaunchRequest?.id, prepareInspector, setRightPanelMode])
+    }, [filesShellLaunchRequest?.id, setRightPanelMode])
 
     const handleFilesShellLaunchRequestHandled = useCallback((requestId: string) => {
         setFilesShellLaunchRequest((current) => current?.id === requestId ? null : current)
@@ -412,6 +405,7 @@ export default function AssistantPage() {
     }, [diffSource.projectRootPath, preview.openPreview, showToast])
 
     const handleOpenAssistantInternalLink = useCallback(async (href: string) => {
+        if (desktopWebLink(href)) return (await openDesktopLink(href)).success
         return openAssistantTarget(href, false, false)
     }, [openAssistantTarget])
 
@@ -449,7 +443,6 @@ export default function AssistantPage() {
     }, [deletingMessageId])
 
     const handleViewDiff = useCallback((target: AssistantDiffTarget) => {
-        prepareInspector()
         diffSessionIdRef.current = shell.selectedSessionId
         setSelectedDiffTarget(target)
         const activity = diffSource.activities.find((entry) => entry.id === target.activityId)
@@ -457,7 +450,7 @@ export default function AssistantPage() {
         setSelectedDiffTurnId(turnId)
         setDiffRevealRequest(turnId ? { id: diffRevealSequenceRef.current++, turnId } : null)
         setRightPanelMode('review')
-    }, [diffSource.activities, prepareInspector, setRightPanelMode, shell.selectedSessionId])
+    }, [diffSource.activities, setRightPanelMode, shell.selectedSessionId])
     const handleSelectDiffTurn = useCallback((turnId: string) => {
         setDiffRevealRequest(null)
         setSelectedDiffTurnId(turnId)
@@ -477,12 +470,11 @@ export default function AssistantPage() {
             setRightPanelMode('none')
             return
         }
-        prepareInspector()
         setSelectedDiffTarget(null)
         setSelectedDiffTurnId(null)
         setDiffRevealRequest(null)
         setRightPanelMode('review')
-    }, [prepareInspector, rightPanelMode, setRightPanelMode])
+    }, [rightPanelMode, setRightPanelMode])
     const handleCloseDiff = useCallback(() => {
         setSelectedDiffTarget(null)
         setSelectedDiffTurnId(null)
@@ -492,7 +484,7 @@ export default function AssistantPage() {
     const noop = useCallback(() => undefined, [])
 
     return (
-        <div className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
+        <div data-assistant-page="true" className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="flex h-full min-w-0 overflow-x-hidden">
                     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -520,21 +512,15 @@ export default function AssistantPage() {
                             onViewDiff={handleViewDiff}
                             onShowToast={showToast}
                         />
-                        {inspectorOpen ? (
-                            <Suspense fallback={(
-                                <aside
-                                    className="h-full shrink-0 border-l border-[var(--surface-panel-divider)] bg-[var(--surface-panel)]"
-                                    style={{ width: paneLayout.inspectorWidth }}
-                                    aria-label="Opening inspector"
-                                />
-                            )}>
+                        {inspectorMounted || inspectorOpen ? (
+                            <AssistantInspectorFrame open={inspectorOpen} width={inspectorOpen ? paneLayout.inspectorWidth : rightSidebarWidth}>
                                 <AssistantDiffPanel
-                                    open
+                                    open={inspectorOpen}
                                     sessionId={shell.selectedSessionId}
                                     threadId={diffSource.threadId}
                                     canonicalChatId={diffSource.canonicalChatId}
                                     chatTitle={diffSource.chatTitle}
-                                    width={paneLayout.inspectorWidth}
+                                    width={inspectorOpen ? paneLayout.inspectorWidth : rightSidebarWidth}
                                     maxWidth={paneLayout.maxInspectorWidth}
                                     turns={diffTurns}
                                     reviewIndexReady={Boolean(reviewIndex)}
@@ -560,7 +546,7 @@ export default function AssistantPage() {
                                     onRevealRequestHandled={handleDiffRevealRequestHandled}
                                     onClose={handleCloseDiff}
                                 />
-                            </Suspense>
+                            </AssistantInspectorFrame>
                         ) : null}
                     </div>
                 </div>

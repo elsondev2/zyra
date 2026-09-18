@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { app } from 'electron'
 import { writeBytesAtomically } from './setup/atomic-json'
+import { resolveDesktopAgentServerNamespace } from './assistant/agent-server-namespace'
 
 const execFileAsync = promisify(execFile)
 const MARKER = 'zyra-desktop-managed-launcher:v1'
@@ -14,6 +15,7 @@ export type TerminalCommandStatus = {
     installed: boolean
     managed: boolean
     pathConfigured: boolean
+    canManage: boolean
 }
 
 export async function getTerminalCommandStatus(): Promise<TerminalCommandStatus> {
@@ -24,16 +26,19 @@ export async function getTerminalCommandStatus(): Promise<TerminalCommandStatus>
         path: target,
         installed: Boolean(contents),
         managed: contents.includes(MARKER) || contents.includes('zyra-managed-launcher:v1'),
-        pathConfigured: pathEntries().includes(path.dirname(target).toLowerCase())
+        pathConfigured: pathEntries().includes(path.dirname(target).toLowerCase()),
+        canManage: app.isPackaged
     }
 }
 
 export async function installTerminalCommand(): Promise<TerminalCommandStatus> {
+    if (!app.isPackaged) throw new Error('Manage the global zyra command from the installed app, not a development instance.')
     const current = await getTerminalCommandStatus()
     if (current.installed && !current.managed) throw new Error(`Refusing to replace an unmanaged command at ${current.path}.`)
     const executable = process.platform === 'linux' && process.env.APPIMAGE ? process.env.APPIMAGE : app.getPath('exe')
+    const namespace = resolveDesktopAgentServerNamespace(app.getPath('userData'))
     const contents = process.platform === 'win32'
-        ? `@echo off\r\nrem ${MARKER}\r\nset "ZYRA_ROOT=${escapeBatchPath(path.join(process.resourcesPath, 'zyra-runtime'))}"\r\nset "ZYRA_DATA_ROOT=%USERPROFILE%"\r\nset "ZYRA_DISTRIBUTION=desktop-bundle"\r\n"${escapeBatchPath(path.join(process.resourcesPath, 'zyra-node', 'node.exe'))}" "${escapeBatchPath(path.join(process.resourcesPath, 'zyra-runtime', 'bin', 'zyra.mjs'))}" %*\r\nexit /b %ERRORLEVEL%\r\n`
+        ? `@echo off\r\nrem ${MARKER}\r\nset "ZYRA_ROOT=${escapeBatchPath(path.join(process.resourcesPath, 'zyra-runtime'))}"\r\nset "ZYRA_DATA_ROOT=%USERPROFILE%"\r\nset "ZYRA_DISTRIBUTION=desktop-bundle"\r\nif defined ZYRA_STATE_DIR goto zyra_server_namespace_ready\r\nset "ZYRA_STATE_DIR=${escapeBatchPath(namespace.stateDirectory)}"\r\nset "ZYRA_AGENT_SERVER_CHANNEL=${namespace.channel}"\r\n:zyra_server_namespace_ready\r\n"${escapeBatchPath(path.join(process.resourcesPath, 'zyra-node', 'node.exe'))}" "${escapeBatchPath(path.join(process.resourcesPath, 'zyra-runtime', 'bin', 'zyra.mjs'))}" %*\r\nexit /b %ERRORLEVEL%\r\n`
         : `#!/bin/sh\n# ${MARKER}\nexec "${escapeShellDoubleQuoted(executable)}" --tui "$@"\n`
     await writeBytesAtomically(current.path, contents)
     if (process.platform !== 'win32') await chmod(current.path, 0o755)
@@ -42,6 +47,7 @@ export async function installTerminalCommand(): Promise<TerminalCommandStatus> {
 }
 
 export async function removeTerminalCommand(): Promise<TerminalCommandStatus> {
+    if (!app.isPackaged) throw new Error('Manage the global zyra command from the installed app, not a development instance.')
     const current = await getTerminalCommandStatus()
     if (current.installed && !current.managed) throw new Error(`Refusing to remove an unmanaged command at ${current.path}.`)
     await rm(current.path, { force: true })

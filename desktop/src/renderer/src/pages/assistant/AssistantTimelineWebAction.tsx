@@ -1,5 +1,6 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createPassivePortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { ExternalLink, Search } from 'lucide-react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
@@ -49,7 +50,7 @@ function WebResultPill(props: {
     }
     const open = () => {
         if (props.onOpenUrl) void props.onOpenUrl(props.item.url)
-        else window.open(props.item.url, '_blank', 'noopener,noreferrer')
+        else void openDesktopLink(props.item.url)
     }
     const hoverCard = preview && typeof document !== 'undefined' ? createPortal(
         <div className="fixed z-[120]" style={{ left: preview.left, top: preview.top }}>
