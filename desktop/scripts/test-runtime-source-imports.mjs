@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, symlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { buildRuntimeManifest, validateRuntimeStage, RUNTIME_MANIFEST_FILE, RUNTIME_METADATA_FILES, RUNTIME_SOURCE_DIRECTORIES } from './release/runtime-contract.mjs'
 
 const scoped = '@earendil-works/pi-coding-agent'
+const projectRoot = path.resolve(import.meta.dirname, '../..')
 const deepFile = 'dist/core/tools/path-utils.js'
 const required = [
     'analytics/events.v1.json', 'src/analytics/client.mjs', 'src/analytics/contracts.mjs',
@@ -20,6 +21,40 @@ async function put(root, name, content = '') {
     await mkdir(path.dirname(file), { recursive: true })
     await writeFile(file, content)
 }
+
+async function gatewayDependencyImports(directory) {
+    const dependencies = new Set()
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const target = path.join(directory, entry.name)
+        if (entry.isDirectory()) {
+            for (const dependency of await gatewayDependencyImports(target)) dependencies.add(dependency)
+            continue
+        }
+        if (!entry.isFile() || !entry.name.endsWith('.mjs')) continue
+        const source = await readFile(target, 'utf8')
+        const specifiers = [...source.matchAll(/^\s*import\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/gm), ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)]
+            .map((match) => match[1])
+        for (const specifier of specifiers) {
+            if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')) continue
+            const segments = specifier.split('/')
+            dependencies.add(specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0])
+        }
+    }
+    return dependencies
+}
+
+test('gateway workspace imports are production-owned by the shipped product', async () => {
+    const [product, gateway] = await Promise.all([
+        readFile(path.join(projectRoot, 'package.json'), 'utf8').then(JSON.parse),
+        readFile(path.join(projectRoot, 'mobile/gateway/package.json'), 'utf8').then(JSON.parse)
+    ])
+    const imported = [...await gatewayDependencyImports(path.join(projectRoot, 'mobile/gateway/src'))].sort()
+    const declared = Object.keys(gateway.dependencies || {}).sort()
+    assert.deepEqual(imported, declared, 'gateway dependency declarations must match its imported packages')
+    for (const name of imported) {
+        assert.equal(product.dependencies?.[name], gateway.dependencies[name], `root product manifest must own ${name} at the gateway-pinned version`)
+    }
+})
 
 async function fixture(run, { installed = true } = {}) {
     const temp = await mkdtemp(path.join(os.tmpdir(), 'zyra-runtime-imports-'))
