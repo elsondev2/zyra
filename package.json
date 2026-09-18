@@ -110,10 +110,15 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-tui": "^0.80.6",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
     "proper-lockfile": "4.1.2",
+    "qrcode": "1.5.4",
     "quickjs-emscripten": "^0.32.0",
+    "selfsigned": "3.0.1",
     "stream-json": "3.6.0",
-    "typebox": "^1.1.24"
+    "typebox": "^1.1.24",
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "ajv": "^8.20.0",
