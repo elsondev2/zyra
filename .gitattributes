@@ -1,1 +1,4 @@
 /desktop export-ignore
+mobile/android/app/src/main/assets/mermaid/mermaid.min.js eol=lf
+mobile/android/svg/src/main/java/com/caverock/androidsvg/SVGAndroidRenderer.java eol=crlf
+desktop/src/renderer/src/assets/plugin-logos/*.svg eol=lf

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { statSync } from "node:fs";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { canonicalPermissionPath, resolvePermissionPath } from "./permission-paths.mjs";
 
 export const FILESYSTEM_ACCESS_TOOL = "filesystem_access";
