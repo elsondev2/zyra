@@ -526,12 +526,19 @@ async function testImmediateOptOut() {
   const storageDirectory = await temporaryDirectory("immediate-opt-out");
   await writeFile(path.join(storageDirectory, "config.json"), `${JSON.stringify({ schemaVersion: 1, enabled: true, projectKey: VALID_KEY, host: "https://us.i.posthog.com" })}\n`, "utf8");
   let transportStarted;
+  let settleTransport;
+  let transportAborted = false;
+  let transportSettled = false;
   const started = new Promise((resolve) => { transportStarted = resolve; });
   const client = createProductAnalytics(clientOptions(storageDirectory, {
     env: {},
     transport: async ({ signal }) => new Promise((resolve) => {
+      settleTransport = () => {
+        transportSettled = true;
+        resolve({ ok: false, retryable: true });
+      };
+      signal.addEventListener("abort", () => { transportAborted = true; }, { once: true });
       transportStarted();
-      signal.addEventListener("abort", () => resolve({ ok: false, retryable: true }), { once: true });
     }),
   }));
   const concurrentClient = createProductAnalytics(clientOptions(storageDirectory, { env: {}, randomUUID: () => UUID_B }));
@@ -539,9 +546,22 @@ async function testImmediateOptOut() {
   await client.capture("zyra_v1_cli", { action: "startup", outcome: "started" });
   const flush = client.flush();
   await started;
-  const disabledStartedAt = performance.now();
-  const disabled = await client.updateEnabled(false);
-  assert.ok(performance.now() - disabledStartedAt < 250, "opt-out does not wait behind an in-flight transport");
+  let disabled;
+  let timeout;
+  try {
+    disabled = await Promise.race([
+      client.updateEnabled(false),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Opt-out waited for the held transport")), 5_000);
+      }),
+    ]);
+    assert.equal(transportAborted, true, "opt-out aborts in-flight transmission");
+    assert.equal(transportSettled, false, "opt-out returns while the held transport is unresolved");
+  } finally {
+    clearTimeout(timeout);
+    settleTransport();
+    await flush;
+  }
   assert.equal(disabled.enabled, false);
   assert.equal(disabled.queueSize, 0);
   assert.equal(await flush, false);
