@@ -38,24 +38,24 @@ try {
   assert.throws(() => managedHarnessConfig('{bad json'), /could not be safely merged/);
   /* Detection: pure PATH scan, no subprocess. */
   const winEnv = { PATH: 'C:\\tools;C:\\bin', PATHEXT: '.COM;.EXE;.BAT;.CMD;.PS1' };
-  assert.equal(findHarnessExecutable({ env: winEnv, platform: 'win32', exists: (p) => p === path.join('C:\\bin', 'opencode.exe') }), path.join('C:\\bin', 'opencode.exe'));
-  assert.equal(findHarnessExecutable({ env: winEnv, platform: 'win32', exists: (p) => p === path.join('C:\\bin', 'opencode.ps1') }), null, 'Shim scripts cannot be spawned headless');
+  assert.equal(findHarnessExecutable({ env: winEnv, platform: 'win32', exists: (p) => p === path.win32.join('C:\\bin', 'opencode.exe') }), path.win32.join('C:\\bin', 'opencode.exe'));
+  assert.equal(findHarnessExecutable({ env: winEnv, platform: 'win32', exists: (p) => p === path.win32.join('C:\\bin', 'opencode.ps1') }), null, 'Shim scripts cannot be spawned headless');
   assert.equal(findHarnessExecutable({ env: { PATH: '/usr/bin:/bin' }, platform: 'linux', exists: (p) => p === path.posix.join('/usr/bin', 'opencode') }), path.posix.join('/usr/bin', 'opencode'));
   assert.equal(findHarnessExecutable({ env: {}, platform: 'linux', exists: () => true }), null);
   const winFullEnv = { ...winEnv, APPDATA: 'C:\\Users\\test\\AppData\\Roaming', USERPROFILE: 'C:\\Users\\test' };
   assert.equal(
-    findHarnessExecutable({ env: winFullEnv, platform: 'win32', exists: (p) => p === path.win32.join(winFullEnv.APPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe') || p === path.join('C:\\bin', 'opencode.cmd') }),
+    findHarnessExecutable({ env: winFullEnv, platform: 'win32', exists: (p) => p === path.win32.join(winFullEnv.APPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe') || p === path.win32.join('C:\\bin', 'opencode.cmd') }),
     path.win32.join(winFullEnv.APPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'),
     'The native binary wins over PATH shims',
   );
   assert.equal(
-    findHarnessExecutable({ env: { ...winEnv, USERPROFILE: 'C:\\Users\\test' }, platform: 'win32', exists: (p) => p === path.join('C:\\bin', 'opencode.cmd') }),
-    path.join('C:\\bin', 'opencode.cmd'),
+    findHarnessExecutable({ env: { ...winEnv, USERPROFILE: 'C:\\Users\\test' }, platform: 'win32', exists: (p) => p === path.win32.join('C:\\bin', 'opencode.cmd') }),
+    path.win32.join('C:\\bin', 'opencode.cmd'),
     'A .cmd shim remains usable when no native binary exists',
   );
   const { isHarnessScriptExecutable } = await import('../src/opencode-harness.mjs');
-  assert.equal(isHarnessScriptExecutable('C:\\x\\opencode.cmd'), true);
-  assert.equal(isHarnessScriptExecutable('C:\\x\\opencode.exe'), false);
+  assert.equal(isHarnessScriptExecutable('C:\\x\\opencode.cmd', 'win32'), true);
+  assert.equal(isHarnessScriptExecutable('C:\\x\\opencode.exe', 'win32'), false);
   assert.equal(isHarnessScriptExecutable('/usr/bin/opencode', 'linux'), false);
 
   const goodExec = (out) => (file, args, opts, callback) => callback(null, out, '');
