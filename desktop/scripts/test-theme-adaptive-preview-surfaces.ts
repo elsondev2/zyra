@@ -33,7 +33,8 @@ assert.match(pdfPreview, /style=\{\{ colorScheme \}\}/, 'PDF browser chrome rece
 assert.match(themeCss, /body\.light \.document-preview-root/, 'document surfaces declare an explicit light color scheme')
 assert.match(themeCss, /--office-preview-page-border:/, 'Office page boundaries derive from current theme text')
 
-assert.doesNotMatch(toolSources, /(?:text-white\/|border-white\/|bg-white\/|bg-black\/|bg-\[#[0-9a-f]+\]|text-(?:emerald|red|amber|sky|violet)-[123]\d\d)/i, 'tool-call surfaces contain no dark-only neutral or status colors')
+// Modal scrims dim the underlying page in either theme; surface colors remain adaptive.
+assert.doesNotMatch(toolSources, /(?:text-white\/|border-white\/|bg-white\/|(?<!backdrop:)bg-black\/|bg-\[#[0-9a-f]+\]|text-(?:emerald|red|amber|sky|violet)-[123]\d\d)/i, 'tool-call surfaces contain no dark-only neutral or status colors')
 assert.match(toolSources, /var\(--surface-divider\)/, 'tool-call borders follow theme surface tokens')
 assert.match(toolSources, /var\(--status-success\)/, 'tool-call success states use semantic theme colors')
 assert.match(toolSources, /var\(--status-danger\)/, 'tool-call failure states use semantic theme colors')

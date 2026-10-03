@@ -120,6 +120,7 @@ const mergedTurnUsage = mergeAssistantTurnUsage(
     }
 )
 assert.deepEqual(mergedTurnUsage, {
+    responseCount: 2,
     inputTokens: 3_000,
     outputTokens: 500,
     cachedInputTokens: 27_000,
@@ -128,6 +129,9 @@ assert.deepEqual(mergedTurnUsage, {
     totalTokens: 20_300,
     modelContextWindow: 372_000,
     costUsd: 0.05,
+    costSource: undefined,
+    pricingFetchedAt: undefined,
+    pricingServiceTier: undefined,
     sessionCostUsd: null,
     sessionCostComplete: null
 }, 'a Desktop turn preserves the cumulative provider cost while retaining the latest context size')

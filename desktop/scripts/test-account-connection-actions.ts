@@ -26,7 +26,7 @@ assert.match(account, /setChatGptAuthenticationSuccessOpen\(true\)/, 'the succes
 assert.match(account, /connectApiKey/)
 assert.match(account, /switchDefaultConnection/)
 assert.match(account, /await updateSettings\(\{ assistantDefaultModel: target\.id \}\)/, 'connection switching waits for main-owned preference persistence before another account mutation')
-assert.match(settings, /updateSettings: \(partial: Partial<Settings>\) => Promise<void>/, 'callers can await main-owned settings writes')
+assert.match(settings, /updateSettings: \(partial: Partial<Settings>, options\?: \{ persist\?: boolean \}\) => Promise<void>/, 'callers can await main-owned settings writes with the optional persistence setting')
 assert.match(account, /disconnectOpenAI\(\{ method: disconnectMethod, confirmed: true \}\)/)
 assert.match(page, /useOpenAIAccountSettings\(\{ connectionsActive: true \}\)/)
 assert.match(page, /import \{ OpenAIConnectionRows \} from '\.\/OpenAIConnectionRows'/, 'the rendered connection rows must be imported by the provider-connections route')

@@ -48,5 +48,5 @@ try {
 } finally {
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     if (dirname(resolve(temporary)) !== resolve(tmpdir()) || !basename(temporary).startsWith('zyra-app-component-')) throw Error('Unexpected cleanup path')
-    await rm(temporary, { recursive: true, force: true })
+    await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 }

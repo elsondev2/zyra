@@ -3,6 +3,7 @@
 let listener;
 const usage = { input: 100, output: 16, cacheRead: 200, cacheWrite: 0, reasoning: 4, cost: 0.01, costComplete: true, total: 316 };
 const contextUsage = { tokens: 300, contextWindow: 32768, percent: 300 / 32768 * 100 };
+export async function prepareZyraSessionRuntime() {}
 export async function createZyraSession({ project }) {
   const model = { provider: 'fixture', id: 'streaming', contextWindow: 32768 };
   return {

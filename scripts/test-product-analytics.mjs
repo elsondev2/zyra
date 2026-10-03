@@ -754,6 +754,7 @@ async function testRendererAndCredentialBoundaries() {
   const analyticsPreload = await source("desktop/src/preload/analytics.ts");
   const setupHandlers = await source("desktop/src/main/ipc/handlers/setup-handlers.ts");
   const mainProcess = await source("desktop/src/main/index.ts");
+  const startupInitialization = await source("desktop/src/main/setup/startup-initialization.ts");
   const privacySettings = await source("desktop/src/renderer/src/pages/settings/DataPrivacySettings.tsx");
   const onboardingFlow = await source("desktop/src/renderer/src/onboarding/OnboardingFlow.tsx");
   const browserViewManager = await source("desktop/src/main/browser-view-manager.ts");
@@ -778,7 +779,8 @@ async function testRendererAndCredentialBoundaries() {
   assert.match(desktopAnalyticsService, /app\.isPackaged[\s\S]*withBundledReleaseAnalyticsConfig/);
   assert.match(desktopAnalyticsService, /preferencePath:[\s\S]*requireExplicitPreference: true/);
   assert.match(desktopAnalyticsService, /setInterval\([\s\S]*this\.refreshStatus\(\)[\s\S]*2_000/);
-  assert.match(mainProcess, /await setupServices\.analytics\.initialize\(\)[\s\S]*setupServices\.onboarding\.initialize\(\)/);
+  assert.match(mainProcess, /await initializeDesktopStartup\(\{[\s\S]*initializeAnalytics: \(\) => setupServices\.analytics\.initialize\(\)[\s\S]*initializeOnboarding: \(\) => setupServices\.onboarding\.initialize\(\)/);
+  assert.match(startupInitialization, /await Promise\.all\(\[[\s\S]*input\.initializeAnalytics\(\)[\s\S]*input\.initializeOnboarding\(\)[\s\S]*\]\)/);
   assert.match(setupHandlers, /subscribeStatus\(\(status\) => broadcast\(ANALYTICS_IPC\.statusChanged, status\)\)/);
   assert.match(analyticsPreload, /onStatusChange:[\s\S]*ANALYTICS_IPC\.statusChanged/);
   assert.match(rendererAnalytics, /onDesktopAnalyticsStatusChange/);

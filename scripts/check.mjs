@@ -188,6 +188,8 @@ const syntaxTargets = [
 ];
 
 const coreTests = [
+  "scripts/test-chat-catalog-file-locks.mjs",
+ "scripts/test-agent-bridge-pipe-errors.mjs",
  "scripts/test-dev-command.mjs",
  "scripts/test-zyra-runtime-ownership.mjs",
  "scripts/test-owned-runtime-session.mjs",

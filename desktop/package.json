@@ -144,7 +144,7 @@
         "test:provider-worker-namespace": "bun scripts/test-provider-worker-namespace.ts && node scripts/test-account-reset-namespace.mjs",
         "test:assistant-auth-refresh": "bun scripts/test-assistant-auth-refresh.ts",
         "test:visualizations": "node scripts/test-visualization-renderer.mjs && bun scripts/test-assistant-markdown-cache.tsx",
-        "test:browser-surface-parity": "bun scripts/test-browser-surface-parity.ts && bun scripts/test-browser-assistant-bridge.ts && bun scripts/test-browser-visualization-import.ts && node scripts/test-visualization-renderer.mjs --extension",
+        "test:browser-surface-parity": "bun scripts/test-browser-surface-parity.ts && bun scripts/test-browser-assistant-bridge.ts && node scripts/test-browser-visualization-import.mjs && node scripts/test-visualization-renderer.mjs --extension",
         "test:visualization-scroll": "node scripts/test-legend-list-stateful-reorder.mjs && node scripts/benchmark-visualization-scroll.mjs --verify",
         "benchmark:visualization-scroll": "node scripts/benchmark-visualization-scroll.mjs",
         "test:assistant-markdown": "bun scripts/test-assistant-markdown-cache.tsx",

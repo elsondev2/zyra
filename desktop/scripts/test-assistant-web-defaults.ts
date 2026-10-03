@@ -71,7 +71,7 @@ assert.match(bridgeSource, /webSearch: runtime\?\.webSearch/)
 assert.match(bridgeSource, /webFetch: runtime\?\.webFetch/)
 assert.match(bridgeSource, /model: targetRuntime\.session\.model\?\.provider === "openai-codex" \? "openai-codex\/gpt-5\.6-luna" : `\$\{targetRuntime\.session\.model\.provider\}\/\$\{targetRuntime\.session\.model\.id\}`/, 'standalone titles use Luna for Codex and retain the selected provider otherwise')
 const titleGenerationSource = bridgeSource.split('async function handleGenerateText(payload)')[1]?.split('async function handleModels')[0] || ''
-assert.match(titleGenerationSource, /sdk\.createZyraSession\(\{\s*project: payload\.cwd,\s*noSession: true,/, 'title utility prompts must remain sessionless and outside canonical chat history')
+assert.match(titleGenerationSource, /sdk\.createZyraSession\(\{\s*project: payload\.cwd,\s*memoryEnabled: false,\s*noSession: true,/, 'title utility prompts must disable memory and remain outside canonical chat history')
 assert.match(serverSource, /session\.connect\(\{[\s\S]*\.\.\.params/)
 assert.match(settingsSource, /assistantDefaultWebSearch/)
 assert.match(settingsSource, /assistantDefaultWebFetch/)

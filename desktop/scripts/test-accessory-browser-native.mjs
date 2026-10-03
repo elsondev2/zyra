@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import electronPath from 'electron'
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -30,6 +30,7 @@ try {
         bundle: true,
         platform: 'node',
         format: 'cjs',
+        define: { 'import.meta.url': JSON.stringify(pathToFileURL(main).href) },
         external: ['electron', 'better-sqlite3', 'node-pty'],
         plugins: [{
             name: 'isolate-browser-session-services',

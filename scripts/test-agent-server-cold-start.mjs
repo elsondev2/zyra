@@ -30,5 +30,5 @@ try {
   client?.close();
   await startup;
   await server?.stop();
-  await rm(directory, { recursive: true, force: true });
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

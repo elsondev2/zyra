@@ -83,6 +83,14 @@ export class AgentBridgeWorker extends EventEmitter {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
+    const child = this.child;
+    // Writes can fail after the child begins exiting, including a dispose write.
+    // Keep the pipe listener through shutdown so EPIPE cannot crash the server.
+    child.stdin.on("error", (error) => {
+      if (this.disposed || this.child !== child) return;
+      this.rejectPending(error);
+      this.emit("worker-error", error);
+    });
     this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
     this.lines = readline.createInterface({ input: this.child.stdout });

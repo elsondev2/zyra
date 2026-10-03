@@ -27,35 +27,23 @@ export function captureBrowserTabPreview(guest: WebContents): Promise<string> {
 }
 
 async function capturePreviewFrame(guest: WebContents): Promise<NativeImage> {
-    try {
-        let discardInitialFrame = true
-        let collectPaintedFrames = false
-        let resolveInitialFrame: () => void = () => undefined
-        let resolvePaintedFrame: (image: NativeImage) => void = () => undefined
-        const initialFrame = new Promise<void>(resolve => { resolveInitialFrame = resolve })
-        const nextPaintedFrame = new Promise<NativeImage>(resolve => { resolvePaintedFrame = resolve })
-        guest.beginFrameSubscription(false, image => {
-            // Electron can replay the previously presented surface as the first frame.
-            if (discardInitialFrame) {
-                discardInitialFrame = false
-                resolveInitialFrame()
-            } else if (collectPaintedFrames) {
-                // Compositor delivery can beat executeJavaScript's rAF completion IPC.
-                resolvePaintedFrame(image)
-            }
-        })
-        // capturePage wakes an occluded surface without changing its view visibility or
-        // focus. Discard its initial frame, then schedule the renderer's next paint.
-        const wake = guest.capturePage(undefined, { stayHidden: false, stayAwake: true })
-        return await bounded((async () => {
-            await Promise.all([wake, initialFrame])
-            collectPaintedFrames = true
-            await guest.executeJavaScript('new Promise(resolve => requestAnimationFrame(resolve))')
-            return await nextPaintedFrame
-        })())
-    } finally {
-        if (!guest.isDestroyed()) guest.endFrameSubscription()
+    let active = true
+    const assertAvailable = () => {
+        if (!active) throw new Error('Browser screenshot timed out.')
+        if (guest.isDestroyed()) throw new Error('The Browser tab was closed.')
     }
+    try {
+        return await bounded((async () => {
+            // Discard the wake snapshot: an occluded view may return its old surface.
+            await guest.capturePage(undefined, { stayHidden: false, stayAwake: true })
+            assertAvailable()
+            await guest.executeJavaScript('new Promise(resolve => requestAnimationFrame(resolve))')
+            assertAvailable()
+            // Static hidden pages need not emit another presentation event. Read the
+            // page after the paint barrier without revealing its native view or focus.
+            return await guest.capturePage(undefined, { stayHidden: false, stayAwake: true })
+        })())
+    } finally { active = false }
 }
 
 async function bounded<T>(operation: Promise<T>): Promise<T> {

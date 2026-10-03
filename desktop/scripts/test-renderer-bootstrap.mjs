@@ -9,6 +9,8 @@ const modules = {
     react: 'export default {StrictMode:"strict",createElement:(...args)=>args}',
     'react-dom/client': 'export default {createRoot:()=>({render:()=>{const fixture=globalThis.__bootstrapFixture;fixture.renders++;fixture.apiAtRender=window.devscope;fixture.complete()}})}',
     './App': 'export default function App(){}',
+    './components/layout/RendererErrorBoundary': 'export function RendererErrorBoundary(){}',
+    './lib/browser-view-state': 'export function startBrowserViewStateTracking(){globalThis.__bootstrapFixture.stateTrackingStarts++}',
     './lib/browser-devscope-adapter': 'globalThis.__bootstrapFixture.adapterLoads++;export function installBrowserDevscopeAdapter(){if(!window.devscope)window.devscope=globalThis.__bootstrapFixture.browserApi}',
     css: ''
 }
@@ -31,7 +33,7 @@ try {
         const browserApi = { source: 'browser' }
         let complete
         const rendered = new Promise(resolve => { complete = resolve })
-        const fixture = { adapterLoads: 0, renders: 0, browserApi, complete }
+        const fixture = { adapterLoads: 0, renders: 0, stateTrackingStarts: 0, browserApi, complete }
         globalThis.__bootstrapFixture = fixture
         globalThis.window = mode === 'desktop' ? { devscope: preloadApi } : {}
         globalThis.document = { getElementById: () => ({ id: 'root' }) }
@@ -41,6 +43,7 @@ try {
             await Promise.race([rendered, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Renderer did not mount')), 1000) })])
         } finally { clearTimeout(timer) }
         assert.equal(fixture.renders, 1, `${mode}: the application mounts once`)
+        assert.equal(fixture.stateTrackingStarts, 1, `${mode}: browser view tracking starts once`)
         assert.equal(fixture.apiAtRender, mode === 'desktop' ? preloadApi : browserApi, `${mode}: the correct API exists before mount`)
         assert.equal(fixture.adapterLoads, mode === 'desktop' ? 0 : 1, `${mode}: browser implementation loads only when needed`)
     }

@@ -6,7 +6,7 @@ import os from "node:os";
 import { createZyraLocalBashOperations } from "../src/zyra-shell-operations.mjs";
 
 const chunks = [];
-const environment = { ...process.env, PI_SESSION_ID: "legacy-session", PI_MODEL: "legacy-model" };
+const environment = { ...Object.fromEntries(Object.entries(process.env).map(([key, value]) => [process.platform === "win32" ? key.toUpperCase() : key, value])), PI_SESSION_ID: "legacy-session", PI_MODEL: "legacy-model" };
 const operations = createZyraLocalBashOperations({ env: environment });
 const result = await operations.exec("printf shell-owned", process.cwd(), {
   onData: (chunk) => chunks.push(chunk.toString("utf8")),

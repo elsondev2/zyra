@@ -25,7 +25,8 @@ mock.module('electron', () => ({
     globalShortcut: { register: () => true, unregister: electronNoop, unregisterAll: electronNoop },
     nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
     webContents: { fromId: () => null },
-    safeStorage: { isEncryptionAvailable: () => false }
+    safeStorage: { isEncryptionAvailable: () => false },
+    shell: { openExternal: async () => {} }
 }))
 
 const { projectCanonicalTimeline } = await import('../src/main/assistant/service')

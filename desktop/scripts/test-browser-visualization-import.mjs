@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'vite'
+import { createServer, loadConfigFromFile } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import browserConfig from '../vite.browser.config'
+import { fileURLToPath } from 'node:url'
+
+const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, fileURLToPath(new URL('../vite.browser.config.ts', import.meta.url)))
+assert(loaded, 'the maintained browser configuration loads under Node')
+const browserConfig = loaded.config
 
 // Exercise the real browser dev import boundary without the live bridge plugin,
 // dependency scanning, a browser window, or requests to any user/provider service.
@@ -21,7 +25,7 @@ const server = await createServer({
 try {
     console.log('[browser-import] listening')
     await server.listen()
-    const address = server.httpServer!.address()
+    const address = server.httpServer.address()
     assert(address && typeof address !== 'string')
     const origin = `http://127.0.0.1:${address.port}`
     console.log('[browser-import] requesting shared entry')

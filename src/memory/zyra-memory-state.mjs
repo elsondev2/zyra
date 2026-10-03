@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { isTransientWriteError, replaceFileWithRetry } from '../file-replacement.mjs';
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -8,8 +9,6 @@ export const JOB_KIND_PHASE2 = "memory_consolidate_global";
 export const GLOBAL_PHASE2_JOB_KEY = "global";
 export const MEMORY_MODES = new Set(["enabled", "disabled", "polluted"]);
 
-const TRANSIENT_WRITE_ERROR_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
-const RENAME_RETRY_DELAYS_MS = [0, 15, 40, 90, 180, 320];
 const LIVE_PENDING_STATE_TEMP_GRACE_MS = 30_000;
 
 export function createEmptyMemoryState() {
@@ -522,25 +521,6 @@ function isProcessAlive(pid) {
   }
 }
 
-function replaceFileWithRetry(source, target) {
-  let lastError;
-  for (const delay of RENAME_RETRY_DELAYS_MS) {
-    if (delay > 0) sleepSync(delay);
-    try {
-      renameSync(source, target);
-      return;
-    } catch (error) {
-      lastError = error;
-      if (!isTransientWriteError(error)) throw error;
-    }
-  }
-  throw lastError;
-}
-
-function isTransientWriteError(error) {
-  return TRANSIENT_WRITE_ERROR_CODES.has(error?.code);
-}
-
 function safeStat(file) {
   try {
     return statSync(file);
@@ -555,8 +535,4 @@ function safeUnlink(file) {
   } catch {
     // Best effort cleanup only.
   }
-}
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }

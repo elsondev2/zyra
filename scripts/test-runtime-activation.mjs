@@ -31,4 +31,4 @@ try {
  assert.deepEqual(nextPhases.slice(-3),["checking","restarting","ready"]);
  assert.ok(!JSON.stringify(phases).includes("fixture-proof"));
  console.log("Runtime activation: portable release fingerprint, same-version update, idle protection and verified restart passed");
-} finally {for(const client of clients)client.close();for(const server of servers)await server.stop();await rm(directory,{recursive:true,force:true});}
+} finally {for(const client of clients)client.close();for(const server of servers)await server.stop();await rm(directory,{recursive:true,force:true,maxRetries:5,retryDelay:100});}

@@ -17,8 +17,9 @@ import {
 const source = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx', import.meta.url), 'utf8')
 assert.ok(/useEffect\(\(\) => \{\s*if \(persistState\) persistAssistantBrowserWorkspaceState\(workspaceKey, workspaceStateRef\.current\)\s*\}, \[persistState, workspaceKey\]\)/.test(source), 'mount saves the initial Browser state even when opening a blank tab produces no later mutation')
 const panel = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
-assert.ok(panel.includes('mounted={browserOpen && workspaceHydratedKey === browserWorkspaceKey}'), 'a new chat must hydrate before mounting Browser with its selected tab')
-assert.ok(panel.includes('if (!browserOpen || workspaceHydratedKey !== browserWorkspaceKey) return'), 'old Browser identities cannot reconcile against a newly selected chat')
+assert.ok(panel.includes('mounted={browserOpen && workspaceHydratedKey === workspaceHydrationKey}'), 'a new chat must hydrate before mounting Browser with its selected tab')
+assert.ok(panel.includes('if (!browserOpen || workspaceHydratedKey !== workspaceHydrationKey) return'), 'old Browser identities cannot reconcile against a newly selected chat')
+assert.match(panel, /workspaceHydrationKey = JSON.stringify\(\[browserWorkspaceKey, defaultTerminalRuntimeId, settings.assistantBrowserRestoreTabs\]\)/, 'hydration also tracks terminal identity and the restore-tabs preference')
 
 const values = new Map<string, string>()
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')

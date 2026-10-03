@@ -15,6 +15,7 @@ import { applyZyraChatRetryPolicy, getZyraAvailableThinkingLevels, getZyraModelT
 import { applyGpt56ThinkingEffort, GPT_56_THINKING_LEVELS } from "../src/thinking-levels.mjs";
 import { TRANSPORT_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
 import { renderStatusLine } from "../src/status-line.mjs";
+import { getPricingSnapshot } from "../src/model-pricing/index.mjs";
 import { buildTerminalTheme } from "../src/terminal-theme.mjs";
 import { renderAccountStatusBox, renderCodexUsageBox, renderStatusBox } from "../src/terminal-blocks.mjs";
 import { ZyraComponentHost, EditorComponent, StaticLinesComponent, UserMessageComponent, renderToolBlock } from "../src/tui/zyra-tui.mjs";
@@ -2336,7 +2337,7 @@ function runStatusLineColorRegression() {
   assert.match(line, /\x1b\[38;5;213mfull access/);
   assert.doesNotMatch(stripAnsi(line), /\bbuilder\b/, "the footer shows permission mode instead of the profile overlay");
   assert.match(line, /\x1b\[38;2;255;255;0mContext 28% left/);
-  assert.match(line, /\x1b\[38;5;82m\$0\.300/);
+  assert.match(line, /\x1b\[38;5;82m~\$0\.300\+ \?/, "legacy cost is colored and retains its uncertainty markers");
 
   runtime.permissionMode = "approval-required";
   runtime.session.getContextUsage = () => undefined;
@@ -2344,7 +2345,7 @@ function runStatusLineColorRegression() {
   const freshLine = renderStatusLine(runtime, 120);
   assert.match(freshLine, /\x1b\[38;2;255;0;255msupervised/);
   assert.match(freshLine, /\x1b\[38;2;0;255;0mContext 100% left/);
-  assert.match(freshLine, /\x1b\[38;2;119;119;119m\$0\.000/);
+  assert.match(freshLine, /\x1b\[38;2;119;119;119m\$\?/, "unpriced usage keeps the muted unknown-cost label");
 }
 
 function runStatusLineCostCacheRegression() {
@@ -2552,11 +2553,6 @@ function runRuntimeModelOverrideRegression() {
   const result = registerZyraRuntimeModels(registry);
   assert.deepEqual(result.map((item) => item.status), ["registered", "registered", "registered", "registered", "registered", "registered"]);
 
-  const expectedCosts = {
-    luna: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-    terra: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-    sol: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-  };
   for (const provider of ["openai-codex", "openai"]) {
     for (const name of ["luna", "terra", "sol"]) {
       const model = registry.find(provider, `gpt-5.6-${name}`);
@@ -2564,7 +2560,9 @@ function runRuntimeModelOverrideRegression() {
       assert.equal(model.reasoning, true);
       assert.deepEqual(model.input, ["text", "image"]);
       assert.equal(model.contextWindow, 400000);
-      assert.deepEqual(model.cost, expectedCosts[name]);
+      const pricing = getPricingSnapshot().models[model.id];
+      assert.ok(pricing, "runtime overrides use the maintained pricing snapshot");
+      assert.deepEqual(model.cost, { ...pricing.tiers.standard.short, pricing });
     }
     assert.equal(registry.find(provider, "gpt-5.6-tera"), undefined);
   }

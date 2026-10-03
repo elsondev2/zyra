@@ -19,6 +19,7 @@ let emit;
 let finishPrompt;
 let finishJob;
 let requestPermission;
+export async function prepareZyraSessionRuntime() {}
 export async function createZyraSession(options) {
   requestPermission = options.permissionRequest;
   const job = { done: new Promise((resolve) => { finishJob = resolve; }) };

@@ -121,7 +121,8 @@ function resolveBashShellConfig(shellPath, options) {
     return shellConfiguration(shellPath, platform);
   }
   if (platform === "win32") {
-    const candidates = [env.ProgramFiles, env["ProgramFiles(x86)"]]
+    const candidates = ["ProgramFiles", "ProgramFiles(x86)"]
+      .map((name) => env[Object.keys(env).find((key) => key.toLowerCase() === name.toLowerCase())])
       .filter(Boolean)
       .map((directory) => path.win32.join(directory, "Git", "bin", "bash.exe"));
     for (const candidate of candidates) {

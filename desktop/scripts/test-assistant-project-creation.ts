@@ -41,7 +41,7 @@ assert.doesNotMatch(dialog, /project-creation-hint|project-creation-empty|line-c
 assert.doesNotMatch(source('renderer/src/components/projects/project-creation.css'), /border-(?:top|bottom|block):/, 'Project setup uses spacing rather than section dividers')
 const form = source('renderer/src/lib/projects/useProjectCreationForm.ts')
 assert.match(form, /if \(operation.current\) return/)
-assert.match(form, /if \(folderDraft.trim\(\)\)/)
+assert.match(form, /setFolders\(paths.reduce\(addProjectDraftFolder, folders\)\)/, 'all selected folders pass through the canonical draft validator')
 assert.match(form, /createProject\(input, projectCreationCandidate/)
 assert.equal((form.match(/assistant\.createProject\(/g) || []).length, 1)
 assert.match(source('renderer/src/pages/assistant/useAssistantProjectCatalog.ts'), /revision === requestRevision.current/)

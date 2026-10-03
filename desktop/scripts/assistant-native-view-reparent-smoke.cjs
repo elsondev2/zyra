@@ -66,12 +66,18 @@ app.whenReady().then(async () => {
     assert(Math.abs(thumbnailPixel[1] - 170) < 5 && Math.abs(thumbnailPixel[2] - 40) < 5, 'thumbnail receives a fresh hidden-page frame, not the cached native snapshot')
     assert.equal(view.getVisible(), false, 'capturing a thumbnail never reveals the native view')
     assert.equal(view.webContents.isFocused(), focusedBeforeThumbnail, 'capturing a thumbnail never changes page focus')
-    const hydratedImage = await captureBrowserPage(view.webContents, undefined, true)
-    const hydratedCapture = hydratedImage.toPNG()
-    const pixel = hydratedImage.crop({ x: 300, y: 200, width: 1, height: 1 }).toBitmap()
-    assert.deepEqual([...pixel.subarray(0, 3)], [80, 170, 40], 'hidden-tab preview captures the guest background, not the visible shell')
+    const hydratedCapture = thumbnail.toPNG()
     assert.ok(loadingCapture.length > 100 && hydratedCapture.length > 100)
     assert.notDeepEqual(hydratedCapture, loadingCapture, 'occluded captures must include late page hydration')
+    for (const color of [[60, 100, 180], [150, 30, 90]]) {
+        await view.webContents.executeJavaScript(`document.body.style.background='rgb(${color.join(',')})'`)
+        const preview = require('electron').nativeImage.createFromDataURL(await captureBrowserTabPreview(view.webContents))
+        const pixel = preview.crop({ x: 300, y: 200, width: 1, height: 1 }).toBitmap()
+        assert(color.every((value, index) => Math.abs(pixel[2 - index] - value) < 5), 'static hidden-page previews include the latest paint without animation')
+        assert.equal(view.getVisible(), false)
+        assert.equal(view.webContents.isFocused(), focusedBeforeThumbnail)
+    }
+    view.setVisible(true)
     const cropped = await captureBrowserPage(view.webContents, { x: 20, y: 20, width: 80, height: 60 })
     assert.deepEqual(cropped.getSize(), { width: 80, height: 60 }, 'annotation crops use viewport coordinates')
     for (let index = 0; index < 3; index++) {

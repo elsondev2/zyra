@@ -7,6 +7,8 @@ import vm from 'node:vm';
 import { loadSkillsFromDir, formatSkillsForPrompt } from '../src/runtime/engine/src/core/skills.js';
 import { resolveZyraSkillSources } from '../src/zyra-prompt-resources.mjs';
 import { createZyraPermissionGateExtension } from '../src/zyra-permission-gate.mjs';
+import { HarnessConversation } from '../src/harness-conversation.mjs';
+import { createThreadTool } from '../src/threads/tool.mjs';
 
 const sdkSource = await readFile(new URL('../src/zyra-sdk.mjs', import.meta.url), 'utf8');
 
@@ -64,6 +66,8 @@ function createStartupProbe(fixture) {
   const emptyTool = () => ({ name: 'offline-unused' });
   const context = vm.createContext({
     path,
+    HarnessConversation,
+    createThreadTool,
     existsSync,
     mkdirSync,
     realpathSync,
@@ -76,6 +80,8 @@ function createStartupProbe(fixture) {
     DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS: 100000,
     normalizeAssistantReasoningSummary: (value) => value,
     normalizeAssistantContextCompactionThreshold: (value) => value,
+    // Startup diagnostics are outside this filesystem-scope probe.
+    createRuntimeLatencyTrace: () => () => {},
     readProjectPreferences: () => ({}),
     resolveZyraStartupPreferences: () => ({ thinking: 'medium', codexServiceTier: 'default' }),
     loadRuntimeEngine: async () => pi,
@@ -109,6 +115,7 @@ function createStartupProbe(fixture) {
     createZyraPermissionGateExtension,
   });
   const functions = [
+    'harnessTransportHooks',
     'loadZyraSkills',
     'createZyraSession',
     'createSessionManager',

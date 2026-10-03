@@ -1,7 +1,8 @@
 import { stripSidebarBrowserContext } from "../browser-context.mjs";
 import { mobileHistoryStart } from './mobile-history-window.mjs';
 import { normalizeChatModel } from './chat-model.mjs';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { replaceFileWithRetry } from '../file-replacement.mjs';
 import path from "node:path";
 import { getProjectSessionsDir } from "../project-paths.mjs";
 import { CanonicalChatIndex } from "./chat-index.mjs";
@@ -387,5 +388,5 @@ function writeCatalog(file, record) {
   mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.tmp`;
   writeFileSync(temporary, JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o600 });
-  renameSync(temporary, file);
+  replaceFileWithRetry(temporary, file);
 }
