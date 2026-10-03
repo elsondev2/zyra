@@ -256,7 +256,7 @@ const sandboxSetupIndex = releaseWorkflow.indexOf('- name: Prepare Linux Electro
 const repositoryCheckIndex = releaseWorkflow.indexOf('- name: Run repository check')
 assert(desktopInstallIndex >= 0 && desktopInstallIndex < sandboxSetupIndex && sandboxSetupIndex < repositoryCheckIndex, 'Linux Electron setup must follow Desktop dependency installation and precede the repository check')
 assert.match(releaseWorkflow, /- name: Prepare Linux Electron sandbox helper and virtual display[\s\S]*test -f desktop\/node_modules\/electron\/dist\/chrome-sandbox[\s\S]*sudo chown root:root desktop\/node_modules\/electron\/dist\/chrome-sandbox[\s\S]*sudo chmod 4755 desktop\/node_modules\/electron\/dist\/chrome-sandbox[\s\S]*command -v xvfb-run/, 'release preflight must preserve the Electron sandbox helper metadata and require xvfb-run')
-assert.match(releaseWorkflow, /- name: Run repository check\s+run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run check/, 'the full repository check must run under the pinned virtual display')
+assert.match(releaseWorkflow, /- name: Run repository check\s+run: dbus-run-session -- xvfb-run -a --server-args="-screen 0 1920x1080x24" bash desktop\/scripts\/release\/linux-native-test-session\.sh npm run check/, 'the full repository check must run under an isolated native secret service and the pinned virtual display')
 assert(releaseWorkflow.includes('--expected-version="${EXPECTED_VERSION}"'))
 assert(!releaseWorkflow.includes('--expected-version="${{ inputs.version }}"'), 'workflow inputs must not be interpolated into a secret-bearing shell script')
 assert(releaseWorkflow.includes("needs.preflight.outputs.publish != 'true'"))

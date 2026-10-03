@@ -4,3 +4,4 @@ mobile/android/svg/src/main/java/com/caverock/androidsvg/SVGAndroidRenderer.java
 desktop/src/renderer/src/assets/plugin-logos/*.svg eol=lf
 # The owned runtime compiler emits canonical LF bytes checked by runtime:check.
 src/runtime/** text=auto eol=lf
+desktop/scripts/release/*.sh text eol=lf
