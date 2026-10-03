@@ -1,468 +1,97 @@
-name: Desktop Release
-
+name: One-time verified 0.7.0 draft transfer
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: Lockstep Zyra version to rehearse from master
-        required: true
-        default: "0.7.0"
-        type: string
-  push:
-    tags:
-      - "v*"
-
 permissions:
   contents: read
-
+  actions: read
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: one-time-zyra-0.7.0-transfer
   cancel-in-progress: false
-
 jobs:
-  preflight:
-    name: Release preflight
+  transfer:
+    if: github.repository == 'elsondev2/zyra'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    outputs:
-      version: ${{ steps.release_contract.outputs.version }}
-      tag: ${{ steps.release_contract.outputs.tag }}
-      head: ${{ steps.release_contract.outputs.head }}
-      publish: ${{ steps.release_contract.outputs.publish }}
-      require_signing: ${{ steps.release_contract.outputs.require_signing }}
     steps:
-      - name: Check out full release history
+      - name: Check out the frozen validated source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
+          ref: 3d3c045014be9b602a0057a9f89b53cf229cb7c7
+          persist-credentials: false
+      - uses: actions/setup-node@v4
         with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            desktop/package-lock.json
-
-      - name: Set up Bun 1.3.9
-        uses: oven-sh/setup-bun@v2
+          node-version: '22.22.0'
+      - uses: actions/setup-python@v5
         with:
-          bun-version: 1.3.9
-
-      - name: Install root dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Install Desktop dependencies
-        run: npm --prefix desktop ci --no-audit --no-fund
-
-      - name: Prepare Linux Electron sandbox helper and virtual display
-        shell: bash
-        run: |
-          test -f desktop/node_modules/electron/dist/chrome-sandbox
-          sudo chown root:root desktop/node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 desktop/node_modules/electron/dist/chrome-sandbox
-          command -v xvfb-run >/dev/null 2>&1 || { echo 'xvfb-run is required on the Ubuntu release runner' >&2; exit 1; }
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y gnome-keyring libsecret-1-0 libglib2.0-bin
-          command -v dbus-run-session
-
-      - name: Enforce tag, version, HEAD, master, and signing gates
-        id: release_contract
+          python-version: '3.13'
+      - name: Verify source run and download its immutable bundle
         env:
-          ZYRA_WINDOWS_CERTIFICATE: ${{ github.event_name == 'push' && secrets.ZYRA_WINDOWS_CERTIFICATE || '' }}
-          ZYRA_WINDOWS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || '' }}
-          ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ github.event_name == 'push' && secrets.ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
-          ZYRA_MACOS_CERTIFICATE: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_CERTIFICATE || '' }}
-          ZYRA_MACOS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD || '' }}
-          ZYRA_MACOS_TEAM_ID: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_TEAM_ID || '' }}
-          ZYRA_MACOS_NOTARIZATION_API_KEY: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}
-          ZYRA_MACOS_NOTARIZATION_KEY_ID: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID || '' }}
-          ZYRA_MACOS_NOTARIZATION_ISSUER_ID: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID || '' }}
-          EVS_ACCOUNT_NAME: ${{ github.event_name == 'push' && secrets.EVS_ACCOUNT_NAME || '' }}
-          EVS_PASSWD: ${{ github.event_name == 'push' && secrets.EVS_PASSWD || '' }}
-          ZYRA_ACCEPT_ECS_SECURITY_DELTA: ${{ github.event_name == 'push' && secrets.ZYRA_ACCEPT_ECS_SECURITY_DELTA || '' }}
-          EXPECTED_VERSION: ${{ inputs.version }}
-        shell: bash
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            node desktop/scripts/release/preflight.mjs --mode=tag --tag="${GITHUB_REF_NAME}"
-          else
-            node desktop/scripts/release/preflight.mjs --mode=rehearsal --ref-name="${GITHUB_REF_NAME}" --expected-version="${EXPECTED_VERSION}"
-          fi
-
-      - name: Run focused release contracts
-        run: npm --prefix desktop run test:release-infra
-
-      - name: Run onboarding, account, provider, and native readiness contracts
-        run: npm --prefix desktop run test:release-readiness
-
-      - name: Run public privacy gate
-        run: npm run privacy-check
-
-      - name: Run repository check
-        run: dbus-run-session -- xvfb-run -a --server-args="-screen 0 1920x1080x24" bash desktop/scripts/release/linux-native-test-session.sh npm run check
-
-      - name: Verify clean patch formatting
-        shell: bash
-        run: git diff --check
-
-  build:
-    name: Build ${{ matrix.platform }}
-    needs: preflight
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows
-            os: windows-2025
-          - platform: macos
-            os: macos-15
-          - platform: linux
-            os: ubuntu-24.04
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
-    permissions:
-      contents: read
-    env:
-      ZYRA_EXPECT_SIGNED: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform != 'linux' && '1' || '0' }}
-    steps:
-      - name: Check out exact candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.preflight.outputs.head }}
-          fetch-depth: 0
-
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            desktop/package-lock.json
-
-      - name: Set up Bun 1.3.9
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.9
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Set up .NET 8 for Windows sidecar
-        if: matrix.platform == 'windows'
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Install Pillow
-        run: python -m pip install --disable-pip-version-check Pillow==11.3.0
-
-      - name: Install Widevine VMP signing client
-        if: needs.preflight.outputs.require_signing == 'true' && matrix.platform != 'linux'
-        run: python -m pip install --disable-pip-version-check castlabs-evs==1.3.2
-
-      - name: Install root dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Install Desktop dependencies and validate node-pty
-        run: npm --prefix desktop ci --no-audit --no-fund
-
-      - name: Generate and validate native icons
-        run: npm --prefix desktop run brand:release-assets && npm --prefix desktop run test:branding
-
-      - name: Smoke node-pty under Electron
-        run: npm --prefix desktop run test:native-abi
-
-      - name: Smoke Widevine protected media
-        if: matrix.platform != 'linux'
-        run: npm --prefix desktop run smoke:protected-media
-
-      - name: Build native package and updater metadata
-        shell: bash
+          python - <<'PY'
+          import json, subprocess
+          result = subprocess.run(['gh','run','view','37146844708','--repo','elsondev2/zyra','--json','status,conclusion,headSha,jobs'],check=True,capture_output=True,text=True)
+          run = json.loads(result.stdout)
+          assert run['status']=='completed' and run['conclusion']=='success' and run['headSha']=='3d3c045014be9b602a0057a9f89b53cf229cb7c7'
+          assert len(run['jobs'])==6 and all(job['conclusion']=='success' for job in run['jobs'])
+          subprocess.run(['gh','run','download','37146844708','--repo','elsondev2/zyra','--name','zyra-desktop-0.7.0-all-platforms','--dir','bundle'],check=True)
+          PY
+      - name: Upload exact missing assets and independently validate draft readback
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
-          CSC_LINK: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE || needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_CERTIFICATE || '' }}
-          CSC_KEY_PASSWORD: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD || '' }}
-          APPLE_API_KEY_CONTENT: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}
-          APPLE_API_KEY_ID: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID || '' }}
-          APPLE_API_ISSUER: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID || '' }}
-          EVS_ACCOUNT_NAME: ${{ needs.preflight.outputs.publish == 'true' && matrix.platform != 'linux' && secrets.EVS_ACCOUNT_NAME || '' }}
-          EVS_PASSWD: ${{ needs.preflight.outputs.publish == 'true' && matrix.platform != 'linux' && secrets.EVS_PASSWD || '' }}
+          GH_TOKEN: ${{ secrets.ZYRA_RELEASE_UPLOAD_0_7_0 }}
         run: |
-          key_path=""
-          cleanup() { if [[ -n "${key_path}" ]]; then rm -f "${key_path}"; fi; }
-          trap cleanup EXIT
-          if [[ "${{ needs.preflight.outputs.require_signing }}" == "true" && "${{ matrix.platform }}" == "macos" ]]; then
-            key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}_desktop.p8"
-            printf '%s' "${APPLE_API_KEY_CONTENT}" > "${key_path}"
-            chmod 600 "${key_path}"
-            export APPLE_API_KEY="${key_path}"
-          fi
-          npm --prefix desktop run release:package -- --platform=${{ matrix.platform }}
-
-      - name: Revalidate native upload set
-        run: >-
-          node desktop/scripts/release/validate-release-assets.mjs
-          --platform=${{ matrix.platform }}
-          --version=${{ needs.preflight.outputs.version }}
-          --dir=desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/upload
-          --exact=true
-
-      - name: Build standalone TUI binaries
-        shell: bash
-        run: |
-          output="dist/tui/v${{ needs.preflight.outputs.version }}"
-          case "${{ matrix.platform }}" in
-            windows)
-              node scripts/build-tui-release.mjs --target=windows-x64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
-              ;;
-            macos)
-              node scripts/build-tui-release.mjs --target=macos-arm64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
-              node scripts/build-tui-release.mjs --target=macos-x64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
-              ;;
-            linux)
-              node scripts/build-tui-release.mjs --target=linux-x64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
-              ;;
-          esac
-
-      - name: Sign and verify standalone TUI binaries
-        if: needs.preflight.outputs.require_signing == 'true' && matrix.platform != 'linux'
-        shell: bash
-        env:
-          CSC_LINK: ${{ matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE || secrets.ZYRA_MACOS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD }}
-          ZYRA_WINDOWS_EXPECTED_THUMBPRINT: ${{ matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
-          ZYRA_MACOS_EXPECTED_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_TEAM_ID || '' }}
-          APPLE_API_KEY_CONTENT: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}
-          APPLE_API_KEY_ID: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID || '' }}
-          APPLE_API_ISSUER: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID || '' }}
-        run: |
-          key_path=""
-          cleanup() { if [[ -n "${key_path}" ]]; then rm -f "${key_path}"; fi; }
-          trap cleanup EXIT
-          if [[ "${{ matrix.platform }}" == "macos" ]]; then
-            key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}_tui.p8"
-            printf '%s' "${APPLE_API_KEY_CONTENT}" > "${key_path}"
-            chmod 600 "${key_path}"
-            export APPLE_API_KEY="${key_path}"
-          fi
-          node scripts/sign-standalone-tui.mjs \
-            --platform=${{ matrix.platform }} \
-            --version=${{ needs.preflight.outputs.version }} \
-            --dir=dist/tui/v${{ needs.preflight.outputs.version }} \
-            --marker=desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/.verification/${{ matrix.platform }}.json
-
-      - name: Smoke native standalone TUI
-        shell: bash
-        run: |
-          case "${{ matrix.platform }}" in
-            windows) binary="dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-windows-x64.exe" ;;
-            macos)
-              node scripts/test-standalone-tui-binary.mjs "dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-macos-arm64" "${{ needs.preflight.outputs.version }}"
-              node scripts/test-standalone-tui-binary.mjs "dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-macos-x64" "${{ needs.preflight.outputs.version }}"
-              exit 0
-              ;;
-            linux) binary="dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-linux-x64" ;;
-          esac
-          node scripts/test-standalone-tui-binary.mjs "${binary}" "${{ needs.preflight.outputs.version }}"
-
-      - name: Upload isolated native assets
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          expected = json.loads('[{"name":"SHA256SUMS","size":1351,"sha256":"c995fb7077c4316bbdbd8d53d7fb4d649c124421f5f267f538da18cc23bf5803"},{"name":"Zyra-Desktop-0.7.0-Linux-x64.AppImage","size":329407982,"sha256":"3ffd3ab62e273d0b0ce495d92b5e03dac62a44e6d584052ca4ed862b64a2ca91"},{"name":"Zyra-Desktop-0.7.0-Linux-x64.deb","size":256203888,"sha256":"d7d343f0fc9b7c245befd86f9b50ace85e6334d91ca4b5a081f67093e1f924f1"},{"name":"Zyra-Desktop-0.7.0-Windows-x64.exe","size":350338683,"sha256":"a4c9dcf5cfd0b46f18bf76ed4092776dac29fa390ce9099347df840d715160a3"},{"name":"Zyra-Desktop-0.7.0-Windows-x64.exe.blockmap","size":355936,"sha256":"2fe4aa85e7734eed94a171dec3eec6912373e468976deee416cd46f724163676"},{"name":"Zyra-Desktop-0.7.0-macOS-universal.dmg","size":419331706,"sha256":"7741e0c5f6260c90aa80fb490e5f6ce6729c386ed83ea785ef854cdac93612a2"},{"name":"Zyra-Desktop-0.7.0-macOS-universal.zip","size":427627377,"sha256":"ee14427719e393088f11878635bcd694330ffb07d5f7954deceb1fd456fa3415"},{"name":"Zyra-Desktop-0.7.0-macOS-universal.zip.blockmap","size":443346,"sha256":"af803d47ede8d47a2ba323041200d80df213ff9b329b7bc42ed8cf9f892c306c"},{"name":"Zyra-TUI-0.7.0-linux-x64","size":119085374,"sha256":"21b2a1a7349a8dc461db1a4c70a2630953635646a6fe13b507866460239de18a"},{"name":"Zyra-TUI-0.7.0-macos-arm64","size":77134048,"sha256":"12ce9f0f40fca9555430575fe10a5224b1a839f4a84c2c56d2aa6478540cc069"},{"name":"Zyra-TUI-0.7.0-macos-x64","size":81905904,"sha256":"2f64db5b6c95d2c6432796c8ea620259393dcdc1c2cee393e38c1f8a4218da33"},{"name":"Zyra-TUI-0.7.0-windows-x64.exe","size":130578944,"sha256":"16b46b6640789911a686deba52ffcb7b7c934b5107df5e5d07cc351896a85655"},{"name":"latest-linux.yml","size":559,"sha256":"6f40103ac20dc0e3c38520a93d2340c431adbdd154a8b47889283d4db75c3882"},{"name":"latest-mac.yml","size":542,"sha256":"e60f4301a2374388817262d16fad993834c88aabc539cf4893171ef15a151f8f"},{"name":"latest.yml","size":365,"sha256":"37e5696ffe09e268df5f7bd840ba3216e4237076447c28e09c5403454fd7e4f1"}]')
+          sha = "3d3c045014be9b602a0057a9f89b53cf229cb7c7"
+          def gh(args):
+              result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=1200)
+              assert result.returncode == 0, "GitHub transfer operation failed"
+              return result.stdout.strip()
+          assert gh(["api", "user", "--jq", ".login"]) == "justelson"
+          assert gh(["api", "repos/justelson/zyra/git/ref/tags/v0.7.0", "--jq", ".object.sha"]) == sha
+          assert gh(["api", "repos/justelson/zyra/commits/master", "--jq", ".sha"]) == sha
+          def verify(directory):
+              files = sorted(Path(directory).iterdir(), key=lambda f: f.name)
+              assert len(files) == 15 and all(file.is_file() for file in files)
+              assets = []
+              for file in files:
+                  with file.open("rb") as stream:
+                      digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                  assets.append({"name":file.name,"size":file.stat().st_size,"sha256":digest})
+              assert assets == expected, "Asset bytes differ from exact locally validated build"
+              subprocess.run(["node", "desktop/scripts/release/validate-release-assets.mjs", "--platform=all", "--version=0.7.0", "--dir="+directory, "--checksums=true", "--exact=true"], check=True)
+              return assets
+          verify("bundle")
+          draft = json.loads(gh(["api", "repos/justelson/zyra/releases/402676833"]))
+          assert draft["draft"] and not draft["prerelease"] and draft["tag_name"] == "v0.7.0" and draft["target_commitish"] == sha
+          existing = {asset["name"]:asset for asset in draft["assets"]}
+          assert set(existing).issubset({asset["name"] for asset in expected})
+          missing = []
+          for asset in expected:
+              if asset["name"] not in existing:
+                  missing.append(str(Path("bundle") / asset["name"]))
+              else:
+                  remote = existing[asset["name"]]
+                  assert remote["state"] == "uploaded" and remote["size"] == asset["size"] and remote["digest"] == "sha256:"+asset["sha256"], "Existing draft asset differs; no clobber permitted"
+          if missing:
+              gh(["release", "upload", "v0.7.0", *missing, "--repo", "justelson/zyra"])
+          Path("readback").mkdir()
+          gh(["release", "download", "v0.7.0", "--repo", "justelson/zyra", "--dir", "readback"])
+          assets = verify("readback")
+          draft = json.loads(gh(["api", "repos/justelson/zyra/releases/402676833"]))
+          assert draft["draft"] and len(draft["assets"]) == 15 and draft["target_commitish"] == sha
+          output = Path("cloud-proof")
+          output.mkdir()
+          (output / "owner-draft-metadata.json").write_text(json.dumps(draft,indent=2))
+          (output / "remote-byte-verification.json").write_text(json.dumps({"sha":sha,"sourceRun":"37146844708","ownerDraftId":draft["id"],"remoteValidated":True,"assets":assets},indent=2))
+          print("All 15 owner draft assets independently downloaded and hash-validated. Draft remains unpublished.")
+          PY
+      - name: Retain independent byte verification
         uses: actions/upload-artifact@v4
         with:
-          name: zyra-desktop-assets-${{ matrix.platform }}
-          path: desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/upload/*
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload native verification marker
-        uses: actions/upload-artifact@v4
-        with:
-          name: zyra-desktop-verification-${{ matrix.platform }}
-          path: desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/.verification/${{ matrix.platform }}.json
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload standalone TUI assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: zyra-tui-assets-${{ matrix.platform }}
-          path: dist/tui/v${{ needs.preflight.outputs.version }}/*
-          if-no-files-found: error
-          retention-days: 14
-
-  assemble:
-    name: Assemble and verify release assets
-    needs:
-      - preflight
-      - build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Check out release tooling
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.preflight.outputs.head }}
-
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-
-      - name: Download every native asset set
-        uses: actions/download-artifact@v4
-        with:
-          pattern: zyra-desktop-assets-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Download every native verification marker
-        uses: actions/download-artifact@v4
-        with:
-          pattern: zyra-desktop-verification-*
-          path: release-verification
-          merge-multiple: true
-
-      - name: Download every standalone TUI asset
-        uses: actions/download-artifact@v4
-        with:
-          pattern: zyra-tui-assets-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Validate complete matrix and generate checksums
-        run: >-
-          node desktop/scripts/release/validate-release-assets.mjs
-          --platform=all
-          --version=${{ needs.preflight.outputs.version }}
-          --dir=release-assets
-          --write-checksums=true
-          --exact=true
-
-      - name: Validate signing/notarization evidence
-        run: >-
-          node desktop/scripts/release/validate-signature-markers.mjs
-          --dir=release-verification
-          --assets-dir=release-assets
-          --version=${{ needs.preflight.outputs.version }}
-          --windows-thumbprint=${{ secrets.ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT }}
-          --macos-team-id=${{ secrets.ZYRA_MACOS_TEAM_ID }}
-          --require-signing=${{ needs.preflight.outputs.require_signing }}
-
-      - name: Upload verified rehearsal/release bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: zyra-desktop-${{ needs.preflight.outputs.version }}-all-platforms
-          path: release-assets/*
+          name: owner-0.7.0-independent-readback-proof
+          path: cloud-proof/
           if-no-files-found: error
           retention-days: 30
-
-  release:
-    name: Create verified draft; publish only signed tags
-    needs:
-      - preflight
-      - assemble
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ needs.preflight.outputs.publish == 'true' && needs.preflight.outputs.tag || format('rehearsal-{0}-{1}', needs.preflight.outputs.tag, github.run_id) }}
-      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-      RELEASE_SHA: ${{ needs.preflight.outputs.head }}
-      RELEASE_PUBLISH: ${{ needs.preflight.outputs.publish }}
-    steps:
-      - name: Check out exact candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.preflight.outputs.head }}
-          fetch-depth: 0
-
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-
-      - name: Download verified assembled bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: zyra-desktop-${{ needs.preflight.outputs.version }}-all-platforms
-          path: release-assets
-
-      - name: Revalidate local release bundle
-        run: >-
-          node desktop/scripts/release/validate-release-assets.mjs
-          --platform=all
-          --version=${RELEASE_VERSION}
-          --dir=release-assets
-          --checksums=true
-          --exact=true
-
-      - name: Generate release notes
-        shell: bash
-        run: node desktop/scripts/maint/generate-release-notes.mjs > release-notes.md
-
-      - name: Create or verify the private draft
-        id: draft
-        shell: bash
-        run: |
-          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            is_draft="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)"
-            if [[ "${is_draft}" != "true" ]]; then
-              echo "Release ${RELEASE_TAG} is already public; refusing to replace it."
-              exit 1
-            fi
-            echo "Reusing existing unpublished draft ${RELEASE_TAG}."
-          else
-            create_args=(
-              "${RELEASE_TAG}"
-              --repo "${GITHUB_REPOSITORY}"
-              --target "${RELEASE_SHA}"
-              --title "Zyra ${RELEASE_TAG}"
-              --notes-file release-notes.md
-              --draft
-            )
-            if [[ "${RELEASE_PUBLISH}" == "true" ]]; then
-              create_args+=(--verify-tag)
-            fi
-            gh release create "${create_args[@]}"
-          fi
-          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --title "Zyra ${RELEASE_TAG}" --notes-file release-notes.md
-
-      - name: Upload the complete verified bundle to the draft
-        shell: bash
-        run: gh release upload "${RELEASE_TAG}" release-assets/* --repo "${GITHUB_REPOSITORY}" --clobber
-
-      - name: Re-read and validate draft assets
-        shell: bash
-        run: |
-          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,targetCommitish,assets > github-draft.json
-          node desktop/scripts/release/validate-github-draft.mjs --file=github-draft.json --version="${RELEASE_VERSION}" --tag="${RELEASE_TAG}" --sha="${RELEASE_SHA}" --branch=master --local-dir=release-assets
-          mkdir github-assets
-          gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --dir github-assets
-          node desktop/scripts/release/validate-release-assets.mjs --platform=all --version="${RELEASE_VERSION}" --dir=github-assets --checksums=true --exact=true
-
-      - name: Keep unsigned workflow-dispatch builds unpublished
-        if: needs.preflight.outputs.publish != 'true'
-        shell: bash
-        run: |
-          test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = "true"
-          echo "Unsigned native build remains in the private ${RELEASE_TAG} GitHub draft."
-
-      - name: Publish only the signed and notarized tagged candidate
-        if: needs.preflight.outputs.publish == 'true'
-        shell: bash
-        run: |
-          if [[ "${RELEASE_VERSION}" == *-* ]]; then
-            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease
-          else
-            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
-          fi
-          test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = "false"
