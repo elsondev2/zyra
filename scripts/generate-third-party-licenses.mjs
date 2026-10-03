@@ -28,7 +28,10 @@ const dependencySets = Object.freeze([
   { scope: "Zyra Desktop", directory: path.join(root, "desktop") },
 ]);
 
-const ownedRuntime = { provenance: JSON.parse(await readFile(path.join(root, "src/runtime/provenance.json"), "utf8")), license: await readFile(path.join(root, "src/runtime/engine/LICENSE"), "utf8") };
+const ownedRuntime = {
+  provenance: JSON.parse(await readFile(path.join(root, "src/runtime/provenance.json"), "utf8")),
+  license: normalizeText(await readFile(path.join(root, "src/runtime/engine/LICENSE"), "utf8")),
+};
 const packages = await collectPackages();
 const manifest = buildManifest(packages);
 const manifestHash = sha256(JSON.stringify(manifest));
