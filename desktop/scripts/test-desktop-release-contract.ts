@@ -166,7 +166,7 @@ assert(build.mac.extraResources.some((entry: { to: string }) => entry.to === 'CH
 assert.equal(build.mac.artifactName, 'Zyra-Desktop-${version}-macOS-${arch}.${ext}')
 assert.equal(
     build.mac.x64ArchFiles,
-    'Contents/Resources/{zyra-runtime/node_modules/**,app.asar.unpacked/node_modules/node-pty/prebuilds}/*darwin-{arm64,x64}*/**/*',
+    'Contents/Resources/{zyra-runtime/node_modules/**,zyra-runtime/src/runtime/terminal/native/darwin/prebuilds,app.asar.unpacked/node_modules/node-pty/prebuilds}/*darwin-{arm64,x64}*/**/*',
     'universal merging must preserve explicitly architecture-qualified runtime and node-pty prebuilds without trying to lipo identical copies'
 )
 assert.equal(build.mac.hardenedRuntime, true)

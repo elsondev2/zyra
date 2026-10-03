@@ -1,7 +1,9 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-const assets = fileURLToPath(new URL('./auth-assets/', import.meta.url));
+const assets = process.env.ZYRA_ROOT
+  ? join(process.env.ZYRA_ROOT, 'src', 'auth-assets')
+  : fileURLToPath(new URL('./auth-assets/', import.meta.url));
 const escape = value => String(value).replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function image(file) {
   const mime = file.endsWith('.svg') ? 'image/svg+xml' : file.endsWith('.jpg') ? 'image/jpeg' : 'image/png';

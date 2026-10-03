@@ -49,7 +49,7 @@ try {
   });
   child.onData(chunk => { output = (output + chunk).slice(-2_000_000); });
   child.onExit(event => { exited = true; exitCode = event.exitCode; });
-  await waitUntil(() => text().includes(fixtureModel), 'fresh-session UI');
+  await waitUntil(() => text().includes(fixtureModel.split('/').at(-1)), 'fresh-session UI');
   child.write('/models ');
   await waitUntil(() => text().includes('type provider/model'), 'model picker');
   child.write('\x1b[B'); await delay(100);

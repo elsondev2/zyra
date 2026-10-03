@@ -117,14 +117,25 @@ const nodePtyMachOFiles = collectMachOFiles(
     'Contents/Resources/app.asar.unpacked/node_modules/node-pty'
 )
 const thinRuntimeMachOFiles = runtimeMachOFiles.filter((file) => file.architecture !== 'universal')
-assert(thinRuntimeMachOFiles.length > 0, 'the staged runtime fixture must exercise architecture-qualified thin Mach-O prebuilds')
+if (process.platform === 'darwin') {
+    assert(thinRuntimeMachOFiles.length > 0, 'the native macOS staged runtime must exercise architecture-qualified thin Mach-O prebuilds')
+}
 const thinNodePtyMachOFiles = nodePtyMachOFiles.filter((file) => file.architecture !== 'universal')
 assert.deepEqual(
     [...new Set(thinNodePtyMachOFiles.map((file) => file.architecture))].sort(),
     ['arm64', 'x64'],
     'unpacked node-pty must exercise both Darwin prebuild architectures'
 )
-const packagedMachOFiles = [...runtimeMachOFiles, ...nodePtyMachOFiles]
+const terminalMachOFiles = collectMachOFiles(
+    path.join(runtimeRoot, 'src/runtime/terminal/native/darwin/prebuilds'),
+    'Contents/Resources/zyra-runtime/src/runtime/terminal/native/darwin/prebuilds'
+)
+assert.deepEqual(
+    [...new Set(terminalMachOFiles.map((file) => file.architecture))].sort(),
+    ['arm64', 'x64'],
+    'bundled terminal modifiers must exercise both Darwin prebuild architectures'
+)
+const packagedMachOFiles = [...runtimeMachOFiles, ...nodePtyMachOFiles, ...terminalMachOFiles]
 for (const file of packagedMachOFiles.filter((entry) => entry.architecture !== 'universal')) {
     assert(
         file.packagedPath.includes(`darwin-${file.architecture}`),

@@ -107,6 +107,15 @@ function smokeUpdate() {
   mkdirSync(releaseDirectory, { recursive: true });
   copyFileSync(binary, releaseAsset);
   const digest = createHash("sha256").update(readFileSync(releaseAsset)).digest("hex");
+  writeFileSync(path.join(releaseDirectory, "SHA256SUMS"), `${'0'.repeat(64)}  ${path.basename(releaseAsset)}\n`, "ascii");
+  const corruptUpdate = spawnSync(binary, ["--update"], {
+    cwd: temporaryRoot, env: { ...environment, ZYRA_UPDATE_SOURCE_DIRECTORY: releaseDirectory },
+    encoding: "utf8", windowsHide: true, timeout: 30_000,
+  });
+  if (corruptUpdate.error) throw corruptUpdate.error;
+  if (corruptUpdate.status === 0 || !/SHA-256 verification/.test(`${corruptUpdate.stdout}\n${corruptUpdate.stderr}`)) {
+    throw new Error(`Standalone update did not reject a corrupt checksum: ${corruptUpdate.stdout}\n${corruptUpdate.stderr}`);
+  }
   writeFileSync(path.join(releaseDirectory, "SHA256SUMS"), `${digest}  ${path.basename(releaseAsset)}\n`, "ascii");
   run(["--update"], { ZYRA_UPDATE_SOURCE_DIRECTORY: releaseDirectory });
   run(["--update"], { ZYRA_UPDATE_SOURCE_DIRECTORY: releaseDirectory });
@@ -162,6 +171,9 @@ function assertEmbeddedResources() {
   const root = path.join(runtimeDirectory, extracted.name);
   for (const resource of [
     "assets/zyra.ico",
+    "src/auth-assets/zyra.png",
+    "src/auth-assets/chatgpt.svg",
+    "src/auth-assets/plugins/notion.png",
     "analytics/events.v1.json",
     "prompts/zyra_system_prompt.md",
     "README.md",

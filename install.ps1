@@ -135,7 +135,16 @@ try {
     Select-Object -First 1
   if (-not $checksumLine) { throw "SHA256SUMS does not contain $AssetName." }
   $expectedHash = ($checksumLine -split '  ', 2)[0].ToLowerInvariant()
-  $actualHash = (Get-FileHash -LiteralPath $DownloadedAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+  # Use .NET directly so verification does not depend on inherited PowerShell
+  # module paths or command discovery from a different PowerShell edition.
+  $hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+  $hashStream = [System.IO.File]::OpenRead($DownloadedAsset)
+  try {
+    $actualHash = [BitConverter]::ToString($hashAlgorithm.ComputeHash($hashStream)).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $hashStream.Dispose()
+    $hashAlgorithm.Dispose()
+  }
   if ($actualHash -ne $expectedHash) { throw "Zyra download failed SHA-256 verification." }
 
   $VersionDirectory = Join-Path $InstallDir $ResolvedVersion

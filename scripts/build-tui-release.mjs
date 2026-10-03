@@ -96,7 +96,7 @@ async function collectResources() {
     "install.sh",
     "src/harness-config-plugin.mjs",
   ];
-  for (const directory of ["analytics", "prompts", "agents", "workflows", "commands", "themes", "skills"]) {
+  for (const directory of ["analytics", "prompts", "agents", "workflows", "commands", "themes", "skills", "src/auth-assets"]) {
     files.push(...await walk(directory));
   }
   const unique = [...new Set(files)].sort((left, right) => left.localeCompare(right));
