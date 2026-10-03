@@ -1,11 +1,13 @@
+// @refresh reset
+import { ASSISTANT_COMPOSER_FOCUS_CLASS_NAME, subscribeAssistantComposerFocus } from './assistant-composer-focus'
+import { useNonPassiveWheel } from '@/lib/useNonPassiveWheel'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type WheelEvent as ReactWheelEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
 import { readAssistantSkillSourceRevision } from '@/lib/assistant/assistant-skill-source-revision'
 import { cn } from '@/lib/utils'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
-import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import {
     ChevronDown,
@@ -131,7 +133,6 @@ export function AssistantComposerView({
     const capabilities = controller.capabilities
     const canSend = capabilities.canSend
     const showBusySendActions = capabilities.showBusySendActions
-    const [showBrowserSpeechFallbackModal, setShowBrowserSpeechFallbackModal] = useState(false)
     const [textareaScrollTop, setTextareaScrollTop] = useState(0)
     const [draggedQueuedMessageId, setDraggedQueuedMessageId] = useState<string | null>(null)
     const [promptResources, setPromptResources] = useState<AssistantPromptResourcesPayload | null>(() =>
@@ -176,6 +177,17 @@ export function AssistantComposerView({
     const showCodexRecorder = transcriptionEnabled
         && settings.assistantTranscriptionEngine === 'codex'
         && (controller.voiceInput.isRecording || controller.voiceInput.isTranscribing)
+    const recorderInputRef = useRef<HTMLDivElement | null>(null)
+    useEffect(() => subscribeAssistantComposerFocus(() => {
+        if (showCodexRecorder && !controller.voiceInput.isTranscribing && !capabilities.voiceDisabled) {
+            recorderInputRef.current?.focus({ preventScroll: true })
+            return document.activeElement === recorderInputRef.current
+        }
+        const textarea = controller.textareaRef.current
+        if (!textarea || capabilities.inputDisabled || (voiceBusy && settings.assistantTranscriptionEngine !== 'browser') || showCodexRecorder || !textarea.getClientRects().length) return false
+        textarea.focus()
+        return textarea.ownerDocument.activeElement === textarea
+    }), [controller.textareaRef, controller.voiceInput.isTranscribing, capabilities.voiceDisabled, capabilities.inputDisabled, voiceBusy, showCodexRecorder, settings.assistantTranscriptionEngine])
     const speechError = controller.voiceInput.speechError?.trim() || ''
     const speechErrorNeedsReconnect = settings.assistantTranscriptionEngine === 'codex'
         && /ChatGPT.*(?:login|account)|Reconnect ChatGPT/i.test(speechError)
@@ -269,15 +281,6 @@ export function AssistantComposerView({
         return () => window.clearTimeout(timerId)
     }, [showSlashMenu])
 
-    useEffect(() => {
-        if (settings.assistantTranscriptionEngine !== 'browser') {
-            setShowBrowserSpeechFallbackModal(false)
-            return
-        }
-        if (controller.voiceInput.speechErrorKind === 'network') {
-            setShowBrowserSpeechFallbackModal(true)
-        }
-    }, [controller.voiceInput.speechErrorKind, settings.assistantTranscriptionEngine])
 
     useLayoutEffect(() => {
         const host = attachmentShelfRef.current
@@ -347,16 +350,16 @@ export function AssistantComposerView({
         return deltaY * deltaFactor
     }, [])
 
-    const handleShelfWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    const handleShelfWheel = useCallback((event: WheelEvent) => {
         if (!controller.onOverflowWheel || event.deltaY === 0) return
         event.preventDefault()
-        controller.onOverflowWheel(getNormalizedWheelDelta(event.currentTarget, event.deltaY, event.deltaMode))
+        controller.onOverflowWheel(getNormalizedWheelDelta(event.currentTarget as HTMLDivElement, event.deltaY, event.deltaMode))
     }, [controller.onOverflowWheel, getNormalizedWheelDelta])
 
-    const handleTextareaWheel = useCallback((event: ReactWheelEvent<HTMLTextAreaElement>) => {
+    const handleTextareaWheel = useCallback((event: WheelEvent) => {
         if (!controller.onOverflowWheel || event.deltaY === 0) return
 
-        const element = event.currentTarget
+        const element = event.currentTarget as HTMLTextAreaElement
         const normalizedDeltaY = getNormalizedWheelDelta(element, event.deltaY, event.deltaMode)
         const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
         event.preventDefault()
@@ -391,6 +394,8 @@ export function AssistantComposerView({
             controller.onOverflowWheel(normalizedDeltaY)
         }
     }, [controller.onOverflowWheel, getNormalizedWheelDelta, syncTextareaScroll])
+    const shelfWheelRef = useNonPassiveWheel<HTMLDivElement>(slashMenuPresent ? undefined : handleShelfWheel)
+    const textareaWheelRef = useNonPassiveWheel<HTMLTextAreaElement>(handleTextareaWheel, controller.textareaRef)
 
     const selectCommandItem = useCallback((item: AssistantComposerCommandItem) => {
         if (!slashToken || commandActivationPendingRef.current) return
@@ -493,7 +498,7 @@ export function AssistantComposerView({
                             slashMenuPresent ? 'z-30 mb-[-13px]' : 'z-50 mb-[-2px]'
                         )}
                     >
-                        <div className="flex flex-col gap-1" onWheel={slashMenuPresent ? undefined : handleShelfWheel}>
+                        <div className="flex flex-col gap-1" ref={shelfWheelRef}>
                             {slashMenuPresent ? (
                                 <AnimatedHeight
                                     isOpen={slashMenuAnimatedOpen}
@@ -551,9 +556,10 @@ export function AssistantComposerView({
                                         {controller.queuedMessages.map((queuedMessage, index) => {
                                             const isForce = queuedMessage.dispatchMode === 'force'
                                             const isPaused = queuedMessage.status === 'paused'
+                                            const waitingForCompaction = queuedMessage.status === 'compacting'
                                             const queuePromptLabel = queuedMessage.prompt.trim() || 'Attachment-only message'
                                             const queuedFileCount = queuedMessage.contextFiles.length
-                                            const canForceQueuedMessage = Boolean(controller.onForceQueuedMessage) && (!isForce || isPaused)
+                                            const canForceQueuedMessage = !waitingForCompaction && Boolean(controller.onForceQueuedMessage) && (!isForce || isPaused)
                                             const canEditQueuedMessage = Boolean(controller.onDeleteQueuedMessage)
                                             const editQueuedMessage = () => {
                                                 if (!canEditQueuedMessage) return
@@ -604,8 +610,9 @@ export function AssistantComposerView({
                                                         <GripVertical size={14} />
                                                     </div>
                                                     <div className="min-w-0 flex-1">
-                                                        {isPaused || queuedFileCount > 0 ? (
+                                                        {isPaused || waitingForCompaction || queuedFileCount > 0 ? (
                                                             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                                                {waitingForCompaction ? <span className="text-[11px] text-sparkle-text-muted" role="status">Letting compaction finish</span> : null}
                                                                 {isPaused ? (
                                                                     <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-rose-100/85">
                                                                         Retry needed
@@ -635,6 +642,10 @@ export function AssistantComposerView({
                                                         </button>
                                                     </div>
                                                     <div className="ml-2 flex shrink-0 items-center justify-end gap-1 self-center">
+                                                        {controller.onMoveQueuedMessage && controller.queuedMessages.length > 1 ? <span className="flex flex-col">
+                                                            <button type="button" disabled={index === 0} onClick={() => void controller.onMoveQueuedMessage?.(queuedMessage.id, controller.queuedMessages[index - 1].id)} aria-label={`Move queued message ${index + 1} up`} title="Move up" className="inline-flex size-4 items-center justify-center rounded text-white/45 hover:bg-white/[0.08] focus-visible:text-white disabled:opacity-25"><ChevronUp size={12} /></button>
+                                                            <button type="button" disabled={index === controller.queuedMessages.length - 1} onClick={() => void controller.onMoveQueuedMessage?.(queuedMessage.id, controller.queuedMessages[index + 1].id)} aria-label={`Move queued message ${index + 1} down`} title="Move down" className="inline-flex size-4 items-center justify-center rounded text-white/45 hover:bg-white/[0.08] focus-visible:text-white disabled:opacity-25"><ChevronDown size={12} /></button>
+                                                        </span> : null}
                                                         <button
                                                             type="button"
                                                             onClick={() => void controller.onDeleteQueuedMessage?.(queuedMessage.id)}
@@ -701,6 +712,8 @@ export function AssistantComposerView({
                             projectIconSourcePath={controller.projectIconSourcePath}
                             projectChoices={controller.projectChoices}
                             disabled={controller.projectContextDisabled}
+                            unavailableReason={controller.projectContextUnavailableReason}
+                            onUnavailable={controller.onProjectContextUnavailable}
                             onSelectProject={controller.onSelectProject}
                             onCreateProject={controller.onCreateProject}
                         />
@@ -709,6 +722,7 @@ export function AssistantComposerView({
                         className={cn(
                             'group relative overflow-visible border transition-[background-color,border-radius,box-shadow,min-height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                             showCodexRecorder ? 'rounded-full' : 'rounded-[18px]',
+                            ASSISTANT_COMPOSER_FOCUS_CLASS_NAME,
                             controller.placement === 'bottom'
                                 ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-card)_97%,transparent)] shadow-[0_18px_54px_rgba(0,0,0,0.30),0_1px_0_rgba(255,255,255,0.045),inset_0_1px_0_rgba(255,255,255,0.045),inset_0_-1px_0_rgba(0,0,0,0.18)] backdrop-blur-md'
                                 : 'border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--surface-floating)_94%,transparent)] shadow-[0_22px_68px_color-mix(in_srgb,var(--color-bg)_54%,transparent),0_1px_0_rgba(255,255,255,0.045),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_4%,transparent)] backdrop-blur-[18px]'
@@ -734,7 +748,7 @@ export function AssistantComposerView({
                             type="file"
                             className="hidden"
                             multiple
-                            accept="image/*,text/*,.md,.markdown,.txt,.json,.yaml,.yml,.xml,.csv,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.kt,.cs,.cpp,.c,.h,.css,.scss,.sass,.html,.sql,.toml,.sh,.ps1"
+                            accept={`${!controller.selectedModelInputModes || controller.selectedModelInputModes.includes('image') ? 'image/*,' : ''}text/*,.md,.markdown,.txt,.json,.yaml,.yml,.xml,.csv,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.kt,.cs,.cpp,.c,.h,.css,.scss,.sass,.html,.sql,.toml,.sh,.ps1`}
                             onChange={(event) => {
                                 const files = event.target.files
                                 if (files?.length) {
@@ -802,17 +816,23 @@ export function AssistantComposerView({
                                         </div>
                                     ) : null}
                                     <textarea
-                                        ref={controller.textareaRef}
+                                        ref={textareaWheelRef}
                                         rows={3}
                                         value={controller.text}
                                         onChange={(event) => {
+                                            controller.voiceInput.stopBrowserOnInput()
                                             const nextText = event.target.value
                                             controller.setInlineMentionTags((current) => reconcileInlineMentionTags(controller.text, nextText, current))
                                             controller.setText(nextText)
                                             controller.setComposerCursor(event.target.selectionStart ?? nextText.length)
                                             if (controller.historyCursor != null) controller.setHistoryCursor(null)
                                         }}
-                                        onClick={(event) => controller.syncComposerCursor(event.currentTarget)}
+                                        onPointerDown={() => controller.voiceInput.stopBrowserOnInput()}
+                                        onFocus={() => controller.voiceInput.stopBrowserOnInput()}
+                                        onClick={(event) => {
+                                            controller.voiceInput.stopBrowserOnInput()
+                                            controller.syncComposerCursor(event.currentTarget)
+                                        }}
                                         onScroll={(event) => syncTextareaScroll(event.currentTarget)}
                                         onKeyUp={(event) => {
                                             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') setMenuScrollBehavior('smooth')
@@ -821,7 +841,6 @@ export function AssistantComposerView({
                                         onSelect={(event) => controller.syncComposerCursor(event.currentTarget)}
                                         onKeyDown={handleComposerKeyDown}
                                         onPaste={controller.handlePaste}
-                                        onWheel={handleTextareaWheel}
                                         role="combobox"
                                         aria-autocomplete="list"
                                         aria-haspopup="listbox"
@@ -841,7 +860,7 @@ export function AssistantComposerView({
                                             hasInlineMentionOverlay ? 'text-transparent' : 'text-sparkle-text'
                                         )}
                                         placeholder={composerPlaceholder}
-                                        disabled={capabilities.inputDisabled || voiceBusy}
+                                        disabled={capabilities.inputDisabled || (voiceBusy && settings.assistantTranscriptionEngine !== 'browser')}
                                     />
                                 </div>
                             </div>
@@ -864,6 +883,8 @@ export function AssistantComposerView({
                                         waveformLevels={controller.voiceInput.waveformLevels}
                                         onCancel={controller.voiceInput.cancelRecording}
                                         onSubmit={controller.voiceInput.submitRecording}
+                                        onSend={controller.voiceInput.submitAndSendRecording}
+                                        inputRef={recorderInputRef}
                                     />
                                     {capabilities.canStop ? (
                                         <ComposerSendButton
@@ -1024,19 +1045,6 @@ export function AssistantComposerView({
                 />
             </div>
 
-            <ConfirmModal
-                isOpen={showBrowserSpeechFallbackModal}
-                title="Browser speech failed"
-                message="The browser speech service could not complete dictation. Open assistant settings to switch to ChatGPT voice-note transcription."
-                confirmLabel="Open settings"
-                cancelLabel="Dismiss"
-                variant="info"
-                onConfirm={() => {
-                    setShowBrowserSpeechFallbackModal(false)
-                    navigate('/settings/assistant/defaults?setting=settings-row-voice-transcription-transcription-engine')
-                }}
-                onCancel={() => setShowBrowserSpeechFallbackModal(false)}
-            />
         </>
     )
 }

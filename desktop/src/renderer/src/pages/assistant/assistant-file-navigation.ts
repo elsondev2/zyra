@@ -78,8 +78,8 @@ export async function openAssistantFileTarget(options: {
     await options.openPreview({ name, path: pathInfo.path }, extension, {
         ...options.previewOptions,
         targetKind: 'file',
-        openNavigator: true,
-        revealNavigatorTarget: true,
+        openNavigator: options.previewOptions?.openNavigator ?? true,
+        revealNavigatorTarget: options.previewOptions?.revealNavigatorTarget ?? true,
         focusLine: options.previewOptions?.focusLine ?? resolvedTarget?.focusLine
     })
     return true

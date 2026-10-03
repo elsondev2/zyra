@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { handleMemoryGetOverview, handleMemoryGetJobStatus } from '../src/main/ipc/handlers/memory-handlers'
+import { handleMemoryGetOverview, handleMemoryGetJobStatus, handleMemoryGetModelPreference, handleMemorySetModelPreference } from '../src/main/ipc/handlers/memory-handlers'
 const root = await mkdtemp(join(tmpdir(), 'zyra-memory-overview-'))
 const previous = process.env.ZYRA_DATA_ROOT
 try {
@@ -18,6 +18,14 @@ try {
     assert.equal(result.overview.memoryDirectory, memory)
     assert.equal(result.overview.memoryLayers[0].id, 'memory_summary')
     assert.equal(result.overview.memoryLayers[0].content, 'Fixture durable memory')
+    const defaultModelPreference = await handleMemoryGetModelPreference()
+    assert.ok(defaultModelPreference.success && defaultModelPreference.preference === 'auto')
+    const savedModelPreference = await handleMemorySetModelPreference('openai/gpt-5.6-luna')
+    assert.ok(savedModelPreference.success && savedModelPreference.preference === 'openai/gpt-5.6-luna')
+    const persistedModelPreference = await handleMemoryGetModelPreference()
+    assert.ok(persistedModelPreference.success && persistedModelPreference.preference === 'openai/gpt-5.6-luna')
+    const invalidModelPreference = await handleMemorySetModelPreference('openai/ bad model')
+    assert.equal(invalidModelPreference.success, false)
     const statusDirectory = join(root, 'assistant', 'agent-server')
     await mkdir(statusDirectory, { recursive: true })
     const file = join(statusDirectory, 'memory-jobs.json')
@@ -30,7 +38,7 @@ try {
     await writeFile(file, JSON.stringify({ phase: 'running', queued: 2, pid: 2147483646, lastSuccessAt: 12345 }))
     const stopped = handleMemoryGetJobStatus(root)
     assert.ok(stopped.success && stopped.status.phase === 'offline' && stopped.status.queued === 0 && stopped.status.lastSuccessAt === 12345)
-    console.log('Memory Settings reads the server data root and prioritizes durable memory: ok')
+    console.log('Memory Settings reads the server data root and persists the shared model preference: ok')
 } finally {
     if (previous === undefined) delete process.env.ZYRA_DATA_ROOT
     else process.env.ZYRA_DATA_ROOT = previous

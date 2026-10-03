@@ -262,6 +262,7 @@ export function useInstructorVoicePreview() {
         activityLevel,
         error,
         autoplayEnabled,
+        setAutoplay,
         select,
         toggle,
         reset

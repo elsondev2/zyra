@@ -6,7 +6,9 @@ import type { ConversationGateway } from '../foreground/conversation-gateway'
 import type { ForegroundRouteController } from '../foreground/foreground-route-controller'
 import type { CanonicalVoiceSessionController } from './canonical-voice-session-controller'
 
-type TranscriptEventFields = Omit<Extract<RealtimeDomainEvent, { text: string }>, 'type'>
+type TranscriptEventFields = Omit<Extract<RealtimeDomainEvent, {
+    type: 'realtime.user.transcript.completed' | 'realtime.assistant.transcript.completed'
+}>, 'type'>
 type TranscriptCompletionEvent = TranscriptEventFields & {
     type: 'realtime.user.transcript.completed' | 'realtime.assistant.transcript.completed'
 }
@@ -23,7 +25,7 @@ const USER_TRANSCRIPT_STABILIZATION_MS = 5_000
 export class CanonicalVoiceTranscriptCommitter {
     private queue: Promise<void> = Promise.resolve()
     private readonly unsubscribe: () => void
-    private readonly listeners = new Set<(receipt: CanonicalMessageCommitReceipt) => void>()
+    private readonly listeners = new Set<(receipt: CanonicalMessageCommitReceipt, event: TranscriptCompletionEvent) => void>()
     private readonly errorListeners = new Set<(error: Error, event: RealtimeDomainEvent) => void>()
     private readonly firstCompletionAt = new Map<string, string>()
     private pendingUserCompletion: UserTranscriptCompletionEvent | null = null
@@ -48,7 +50,7 @@ export class CanonicalVoiceTranscriptCommitter {
         })
     }
 
-    onCommit(listener: (receipt: CanonicalMessageCommitReceipt) => void): () => void {
+    onCommit(listener: (receipt: CanonicalMessageCommitReceipt, event: TranscriptCompletionEvent) => void): () => void {
         this.listeners.add(listener)
         return () => this.listeners.delete(listener)
     }
@@ -142,7 +144,7 @@ export class CanonicalVoiceTranscriptCommitter {
             providerCompletedAt,
             idempotencyKey: `voice-transcript:${event.conversationId}:${route.foreground_route_id}:${role}:${event.providerItemId}`
         })
-        for (const listener of this.listeners) listener(receipt)
+        for (const listener of this.listeners) listener(receipt, event)
     }
 }
 

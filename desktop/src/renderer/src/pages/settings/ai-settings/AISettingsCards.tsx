@@ -431,7 +431,7 @@ export function CodexProviderModal({
             {status === 'success' ? (
                 <ProviderMessageRow
                     tone="success"
-                    text="ChatGPT auth and models are available through Pi."
+                    text="ChatGPT auth and models are available through Zyra."
                 />
             ) : null}
             {status === 'error' ? <ProviderMessageRow tone="danger" text={error} /> : null}

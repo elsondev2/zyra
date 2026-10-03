@@ -36,7 +36,7 @@ async function waitUntil(predicate, label, timeoutMs = 60_000) {
 }
 try {
   await new Promise(resolve => fixtureServer.listen(0, '127.0.0.1', resolve));
-  const modelsPath = path.join(process.env.PI_CODING_AGENT_DIR, 'models.json');
+  const modelsPath = path.join(process.env.ZYRA_CODING_AGENT_DIR, 'models.json');
   const models = JSON.parse(readFileSync(modelsPath, 'utf8'));
   models.providers['zyra-offline-fixture'].baseUrl = `http://127.0.0.1:${fixtureServer.address().port}/v1`;
   writeFileSync(modelsPath, JSON.stringify(models));

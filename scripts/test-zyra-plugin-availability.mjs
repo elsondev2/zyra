@@ -18,9 +18,10 @@ async function install(registry, name, version = '1.0.0', supported = true) {
   await mkdir(path.join(packageRoot, '.codex-plugin'), { recursive: true })
   await writeFile(path.join(packageRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({
     name, version, description: 'Availability test fixture.',
-    ...(supported ? { skills: './skills' } : {}), mcpServers: './.mcp.json',
+    ...(supported ? { skills: './skills', mcpServers: './.mcp.json' } : { hooks: './hooks.json' }),
   }))
-  await writeFile(path.join(packageRoot, '.mcp.json'), '{}\n')
+  if (supported) await writeFile(path.join(packageRoot, '.mcp.json'), '{}\n')
+  else await writeFile(path.join(packageRoot, 'hooks.json'), '{}\n')
   if (supported) {
     // Multiple Skills still consume one active Skill package slot.
     for (const skill of ['first', 'second']) {

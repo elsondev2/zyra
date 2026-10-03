@@ -1,4 +1,4 @@
-import { Check, Copy, Globe2, List, Minimize2, Palette, PanelLeftClose, PanelLeftOpen, PanelRight, Play, Square, SquareTerminal, Trash2, X } from 'lucide-react'
+import { Check, Copy, Edit3, Globe2, List, Minimize2, Palette, PanelLeftClose, PanelLeftOpen, PanelRight, Play, Save, Square, SquareTerminal, Trash2, Undo2, X } from 'lucide-react'
 import { type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
@@ -6,7 +6,7 @@ import { useSettings } from '@/lib/settings'
 import type { PreviewFile, PreviewTab } from './types'
 import type { ViewportPreset } from './viewport'
 import { PreviewEditorSettingsMenu } from './PreviewEditorSettingsMenu'
-import { PreviewHeaderEditMenu, type PreviewHeaderEditMenuAction } from './PreviewHeaderEditMenu'
+import type { PreviewHeaderEditMenuAction } from './PreviewHeaderEditMenu'
 import { PreviewHeaderHtmlControls } from './PreviewHeaderHtmlControls'
 import { PreviewHistoryNavigation } from './PreviewHistoryNavigation'
 import { PreviewTabStrip } from './PreviewTabStrip'
@@ -81,6 +81,7 @@ function HeaderIconButton({ active = false, disabled = false, title, onClick, ch
             onClick={disabled ? undefined : onClick}
             disabled={disabled}
             title={title}
+            aria-label={title}
             className={cn(
                 'no-drag inline-flex size-6 items-center justify-center rounded-[5px] border border-transparent text-sparkle-text-muted transition-[opacity,color,background-color,border-color] duration-150 hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
                 active && (activeClassName || 'border-[var(--surface-divider)] bg-[var(--surface-active)] text-sparkle-text'),
@@ -199,7 +200,7 @@ export function PreviewExpandedHeaderBar({
     const toolbar = (
         <div
             className="pointer-events-auto flex h-[34px] w-full items-stretch border-y border-[var(--surface-panel-divider)] bg-[var(--surface-topbar)] text-sparkle-text shadow-[0_1px_0_rgba(255,255,255,0.015)]"
-            style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             data-file-preview-focus-toolbar="true"
         >
             <div className="flex min-w-0 flex-1 items-stretch overflow-hidden">
@@ -247,7 +248,7 @@ export function PreviewExpandedHeaderBar({
                             theme={iconTheme}
                             className="size-3.5 shrink-0"
                         />
-                        <span className="truncate text-[11px] font-semibold text-sparkle-text/92">{file.name}</span>
+                        <span className="truncate text-[11px] font-semibold text-sparkle-text/92">{file.displayName || file.name}</span>
                         {isDirty ? <span className="size-1.5 shrink-0 rounded-full bg-amber-300/85" aria-label="Unsaved changes" /> : null}
                         <button
                             type="button"
@@ -286,15 +287,13 @@ export function PreviewExpandedHeaderBar({
                         onRevert={previewModeEnabled ? undefined : onRevert}
                     />
                 ) : null}
-                {!previewModeEnabled ? (
-                    <HeaderIconButton
-                        active={rightPanelOpen}
-                        title={rightPanelOpen ? 'Hide file side panel' : 'Show file side panel'}
-                        onClick={onToggleRightPanel}
-                    >
-                        <PanelRight size={14} />
-                    </HeaderIconButton>
-                ) : null}
+                <HeaderIconButton
+                    active={rightPanelOpen}
+                    title={rightPanelOpen ? 'Hide file side panel' : 'Show file side panel'}
+                    onClick={onToggleRightPanel}
+                >
+                    <PanelRight size={14} />
+                </HeaderIconButton>
                 <HeaderIconButton title="Exit file focus mode" onClick={onToggleExpanded}>
                     <Minimize2 size={15} />
                 </HeaderIconButton>
@@ -309,22 +308,25 @@ export function PreviewExpandedHeaderBar({
                     />
                 ) : null}
                 {previewModeEnabled ? (
-                    <div className="no-drag">
-                        <PreviewHeaderEditMenu
-                            previewModeEnabled={previewModeEnabled}
-                            isEditable={isEditable}
-                            isEditMode={isEditMode}
-                            isDirty={isDirty}
-                            isSaving={isSaving}
-                            loadingEditableContent={loadingEditableContent}
-                            inspectorOpen={rightPanelOpen}
-                            onToggleInspector={onToggleRightPanel}
-                            contextualActions={contextualActions}
-                            onModeChange={onModeChange}
-                            onSave={onSave}
-                            onRevert={onRevert}
-                        />
-                    </div>
+                    <>
+                        {contextualActions.map((action) => <HeaderIconButton key={action.id} active={action.checked} disabled={action.disabled} title={action.label} onClick={action.onSelect}>{action.icon}</HeaderIconButton>)}
+                        {isDirty ? <>
+                            <HeaderIconButton disabled={isSaving} title="Save changes" onClick={onSave}><Save size={13} /></HeaderIconButton>
+                            <HeaderIconButton disabled={isSaving} title="Discard changes" onClick={onRevert}><Undo2 size={13} /></HeaderIconButton>
+                        </> : null}
+                        <button
+                            type="button"
+                            onClick={() => onModeChange(isEditMode ? 'preview' : 'edit')}
+                            disabled={!isEditMode && (!isEditable || loadingEditableContent)}
+                            aria-pressed={isEditMode}
+                            title={isEditMode ? 'Switch to preview mode' : 'Switch to edit mode'}
+                            className={cn(
+                                'no-drag inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-2.5 text-[11px] text-sparkle-text transition-colors hover:bg-[var(--surface-hover)]',
+                                isEditMode && 'bg-[var(--surface-active)]',
+                                !isEditMode && (!isEditable || loadingEditableContent) && 'cursor-not-allowed opacity-45'
+                            )}
+                        ><Edit3 size={12} /><span>Edit</span></button>
+                    </>
                 ) : null}
                 {showCloseButton ? (
                     <HeaderIconButton title="Close preview" onClick={onClose}>

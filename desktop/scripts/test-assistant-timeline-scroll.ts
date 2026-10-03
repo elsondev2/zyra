@@ -9,6 +9,7 @@ import {
     getAssistantTimelineDistanceFromEnd,
     isAssistantTimelineNearEnd,
     resolveAssistantTimelineModeAfterScroll,
+    resolveAssistantTimelineFocusAfterFollow,
     resolveAssistantTimelineScrollMode
 } from '../src/renderer/src/pages/assistant/assistant-timeline-scroll-policy'
 import {
@@ -20,6 +21,17 @@ import {
 } from '../src/renderer/src/pages/assistant/assistant-history-streaming-policy'
 import { replaceAssistantTimelineActivityEntry } from '../src/renderer/src/pages/assistant/useAssistantTimelineEntries'
 import { resolveAssistantTimelineCompletionAnchor } from '../src/renderer/src/pages/assistant/assistant-timeline-scroll-events'
+
+let focus = resolveAssistantTimelineFocusAfterFollow(null, { windowKey: 'chat-a', followLatestRequestKey: null, focusMessageId: 'older-prompt' })
+assert.equal(focus.focusMessageId, 'older-prompt', 'explicit history search owns the viewport before a send')
+focus = resolveAssistantTimelineFocusAfterFollow(focus.state, { windowKey: 'chat-a', followLatestRequestKey: 'send:one', focusMessageId: 'older-prompt' })
+assert.equal(focus.focusMessageId, null, 'sending invalidates an older search target before its pending reveal can snap back')
+focus = resolveAssistantTimelineFocusAfterFollow(focus.state, { windowKey: 'chat-a', followLatestRequestKey: 'send:one', focusMessageId: 'older-prompt' })
+assert.equal(focus.focusMessageId, null, 'canonical updates cannot resurrect the stale reveal target')
+focus = resolveAssistantTimelineFocusAfterFollow(focus.state, { windowKey: 'chat-a', followLatestRequestKey: 'send:one', focusMessageId: 'new-search-target' })
+assert.equal(focus.focusMessageId, 'new-search-target', 'a fresh deliberate search still takes ownership')
+focus = resolveAssistantTimelineFocusAfterFollow(focus.state, { windowKey: 'chat-b', followLatestRequestKey: null, focusMessageId: 'older-prompt' })
+assert.equal(focus.focusMessageId, 'older-prompt', 'a send in another chat cannot suppress this chat’s reveal')
 
 assert.equal(getAssistantTimelineDistanceFromEnd({ scrollHeight: 2_000, scrollTop: 1_100, clientHeight: 700 }), 200)
 assert.equal(isAssistantTimelineNearEnd({ scrollHeight: 2_000, scrollTop: 1_220, clientHeight: 700 }), true, 'the 96px floor keeps a near-end reader attached')
@@ -313,7 +325,15 @@ assert.equal(virtualTimelineSource.includes("scrollElement.scrollBy({ top: delta
 const pointerHandlerSource = virtualTimelineSource.slice(virtualTimelineSource.indexOf('const handleTimelinePointerDown'), virtualTimelineSource.indexOf('const handleKeyboardClick'))
 assert.match(pointerHandlerSource, /event\.clientX < bounds\.right - scrollbarGutter\) return/, 'an ordinary empty-area click cannot masquerade as scrollbar navigation')
 assert.match(pointerHandlerSource, /const button = target\.closest\('button\[aria-expanded\]'\)[\s\S]*if \(!button[\s\S]*return[\s\S]*stopFollowingForUserNavigation\(\)/, 'ordinary links, copy buttons, and text selection cannot disable live follow')
-assert.equal(virtualTimelineSource.includes("addEventListener(ASSISTANT_TIMELINE_USER_JUMP_EVENT"), true, 'checkpoint and latest-button navigation explicitly leave live-follow mode')
+assert.equal(virtualTimelineSource.includes("addEventListener(ASSISTANT_TIMELINE_USER_JUMP_EVENT"), true, 'checkpoint navigation explicitly leaves live-follow mode')
+assert.equal(virtualTimelineSource.includes('addEventListener(ASSISTANT_TIMELINE_FOLLOW_END_EVENT'), true, 'the latest button restores live-follow through a distinct event')
+assert.match(virtualTimelineSource, /handledFollowRequestRef\.current\.key === key\) return/, 'canonical updates cannot replay a consumed send and steal manual history navigation')
+assert.match(virtualTimelineSource, /maintainScrollAtEndThreshold=\{scrollMode === 'following-end' \? Number\.POSITIVE_INFINITY : 0\.12\}/, 'a tall prompt cannot break explicitly owned live follow')
+assert.match(conversationPaneSource, /followLatestRequestKey=\{optimisticBoundaryBelongsToThread && optimisticPromptBoundary/, 'only a send belonging to the displayed chat can request latest-follow')
+const pageScrollSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantPageTimelineScroll.ts', import.meta.url), 'utf8')
+assert.match(pageScrollSource, /new CustomEvent\(ASSISTANT_TIMELINE_FOLLOW_END_EVENT/, 'Scroll to bottom does not masquerade as a checkpoint jump')
+assert.doesNotMatch(pageScrollSource, /element\.scrollTo\(/, 'LegendList remains the sole owner of end scrolling')
+assert.match(timelineSource, /resolveAssistantTimelineFocusAfterFollow/, 'the rendered timeline suppresses stale focus before its reveal effects run')
 assert.equal(virtualTimelineSource.includes('completionFollowTimerRef'), true, 'completion retains one bounded post-layout correction')
 assert.equal(virtualTimelineSource.includes('if (endAlignmentFrameRef.current !== null) return'), true, 'end corrections coalesce to one animation frame')
 assert.match(virtualTimelineSource, /scrollHeight - element\.scrollTop - element\.clientHeight\) > 1\) return/, 'completion cannot snap the viewport after a visible layout shift')

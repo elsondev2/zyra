@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { ensureSessionManagerDurable } from "./zyra-session-file.mjs";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -103,17 +104,9 @@ export function appendCanonicalMessage(sessionManager, inputValue) {
 function ensureCanonicalMessageDurable(sessionManager) {
   const sessionFile = sessionManager.getSessionFile?.();
   if (!sessionFile || sessionManager.isPersisted?.() === false) return;
-  // Pi intentionally defers a brand-new user-only transcript until the first
-  // assistant message. Voice must receipt the user's completed speech before
-  // that response exists, so force the manager's own full-file rewrite once.
-  if (sessionManager.flushed !== true || !existsSync(sessionFile)) {
-    if (typeof sessionManager._rewriteFile !== "function") {
-      throw new Error("Pi SessionManager cannot durably flush the canonical Voice message.");
-    }
-    sessionManager._rewriteFile();
-    sessionManager.flushed = true;
+  if (!ensureSessionManagerDurable(sessionManager) || !existsSync(sessionFile)) {
+    throw new Error("Canonical Zyra transcript was not durably created.");
   }
-  if (!existsSync(sessionFile)) throw new Error("Canonical Pi transcript was not durably created.");
 }
 
 function validateCanonicalAppendInput(value) {
@@ -156,7 +149,7 @@ function validateRouteClaim(value) {
 function receiptFromEntry(entry, metadata, fallbackSequence) {
   const canonicalSequence = Number(metadata.canonicalSequence || fallbackSequence);
   return {
-    receiptId: `pi_entry_${assertId(entry.id, "Pi entry id")}`,
+    receiptId: `zyra_entry_${assertId(entry.id, "session entry id")}`,
     operationId: assertId(metadata.operationId, "operation id"),
     canonicalMessageId: assertId(metadata.canonicalMessageId, "canonical message id"),
     conversationId: assertId(metadata.conversationId, "conversation id"),

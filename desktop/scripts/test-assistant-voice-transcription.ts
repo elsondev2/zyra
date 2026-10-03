@@ -167,6 +167,21 @@ await assert.rejects(
 )
 assert.equal(forbiddenRequests, 1, '403 must not repeat the same rejected upload as an auth refresh')
 
+for (const [body, expectedMessage] of [
+    [{ text: '' }, /No speech was detected/u],
+    [{ detail: 'Error in ASR API' }, /could not process this recording/u],
+    [{ detail: 'No active organization found' }, /no active organization/u]
+] as const) {
+    await assert.rejects(
+        transcribeCodexVoiceWithDependencies(baseInput, {
+            resolveCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
+            requestTranscription: async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+        }),
+        expectedMessage,
+        'an HTTP success without transcript text must surface the actual transcription failure'
+    )
+}
+
 await assert.rejects(
     transcribeCodexVoiceWithDependencies(baseInput, {
         resolveCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
@@ -217,6 +232,8 @@ const transcriptionSource = readFileSync(resolve(import.meta.dir, '../src/main/a
 const mainIndexSource = readFileSync(resolve(import.meta.dir, '../src/main/index.ts'), 'utf8')
 const recorderBarSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantVoiceRecorderBar.tsx'), 'utf8')
 const composerSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantComposerView.tsx'), 'utf8')
+const composerSectionsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantComposerSections.tsx'), 'utf8')
+assert.doesNotMatch(composerSectionsSource, /assistant-model-name-shimmer/, 'composer model names stay plain while refreshing')
 const rendererCssSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/index.css'), 'utf8')
 assert.doesNotMatch(transcriptionSource, /\.codex|CodexAppServerRuntime|codex-app-server/u, 'subscription transcription must use Zyra auth rather than the retired Codex CLI')
 assert.doesNotMatch(transcriptionSource, /chatgpt-account\.mjs|pathToFileURL|import\(\/\* @vite-ignore \*\//u, 'transcription must not cold-load Pi auth and OAuth modules on Electron main')

@@ -1,4 +1,3 @@
-import type { AssistantRuntimeMode } from '@shared/assistant/contracts'
 import { useSettings } from '@/lib/settings'
 import {
     SettingsRow,
@@ -19,23 +18,6 @@ export function ChatAccessSettings() {
 
     return (
             <SettingsSection title="Tools & approvals" searchSection="Assistant defaults">
-                <SettingsRow
-                    title="Permission mode"
-                    description="Set the approval rules used when a new chat starts."
-                    info="Applies to chat tools, the Browser, paired Chrome and computer use."
-                    control={(
-                        <SettingsSelect
-                            value={settings.assistantDefaultRuntimeMode}
-                            onChange={(event) => updateSettings({ assistantDefaultRuntimeMode: event.target.value as AssistantRuntimeMode })}
-                            aria-label="Default permission mode"
-                        >
-                            <option value="approval-required">Supervised</option>
-                            <option value="auto-review">Auto review</option>
-                            <option value="edits-only">Edits only</option>
-                            <option value="full-access">Full access</option>
-                        </SettingsSelect>
-                    )}
-                />
                 <SettingsRow
                     title="Web access"
                     description="Choose the web tools available to new chats."

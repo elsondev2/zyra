@@ -3,19 +3,27 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,appendFile,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {usageRecord,aggregateUsage} from '../src/usage-records.mjs';
+import {usageRecord,aggregateUsage,priceRecord} from '../src/usage-records.mjs';
 import {UsageIndex} from '../src/usage-index.mjs';
 import {readOpenCodeUsage} from '../src/usage-opencode.mjs';
 import {projectSessionDetails} from '../src/session-details.mjs';
 import {HostRouter,isRead} from '../src/router.mjs';
 const stamp=new Date().toISOString();
-const assistant=(id='m',input=100)=>({type:'message',id,timestamp:stamp,message:{role:'assistant',model:'gpt-5.5',usage:{input,cacheRead:20,output:10,cost:{total:.02}}}});
-test('Pi input excludes cached tokens; duplicates and missing prices do not inflate totals',()=>{
+const assistant=(id='m',input=100)=>({type:'message',id,timestamp:stamp,message:{role:'assistant',model:'gpt-5.5',usage:{input,cacheRead:20,output:10,cost:{total:.02,source:'reported'}}}});
+test('Zyra input excludes cached tokens; duplicates and missing prices do not inflate totals',()=>{
  const state={cwd:'/shared',session:'s'}; const row=usageRecord('zyra',assistant(),state);
  const result=aggregateUsage([row,row]); assert.equal(result.totals.totalTokens,130); assert.equal(result.totals.responses,1); assert.equal(result.totals.reportedCostUsd,.02);
  const unpriced={...row,id:'other',model:'unknown',reportedCostUsd:null}; const unknown=aggregateUsage([unpriced]); assert.equal(unknown.totals.unpricedResponses,1); assert.equal(unknown.totals.estimatedResponses,0);
  const detail=projectSessionDetails({model:'gpt-5.5',turns:[{id:'t',model:'gpt-5.5',usage:{inputTokens:100,cachedInputTokens:20,outputTokens:10,totalTokens:99999,costUsd:.02}}],totals:{contextTokens:2048,modelContextWindow:128000}});
  assert.equal(detail.usage.totalTokens,130); assert.equal(detail.context.usedTokens,2048); assert.equal(detail.usage.reportedCostUsd,.02);
+});
+test('Current GPT catalog prices every supported tier and applies the long-context rate',()=>{
+ const terra={model:'openai-codex/gpt-5.6-terra',inputTokens:100000,cachedInputTokens:10000,cacheWriteTokens:0,outputTokens:10000};
+ assert.equal(priceRecord(terra),.322);
+ assert.equal(priceRecord({...terra,inputTokens:300000}),1.384);
+ assert.equal(priceRecord({...terra,model:'openai-codex/gpt-5.6-luna'}),.0322);
+ assert.ok(Math.abs(priceRecord({...terra,model:'openai-codex/gpt-5.6-sol'})-.604)<1e-12);
+ assert.equal(priceRecord({...terra,model:'openai-codex/gpt-6-astra'}),1.51);
 });
 test('Codex repeated cumulative usage is excluded; ambiguous forks are omitted',()=>{
  const state={}; const date=Date.now();
@@ -57,7 +65,7 @@ test('incremental native index resumes oversized tool lines, stays warm, resets 
   await writeFile(file,session+'\n'+JSON.stringify(assistant('replacement',1))+'\n'); result=await index.read(args); assert.equal(result.totals.responses,1); assert.equal(result.totals.inputTokens,1);
   const restored=new UsageIndex({directory:path.join(root,'cache'),roots:{}}); assert.equal((await restored.read(args)).bytesRead,0);
   const cacheFile=path.join(root,'cache','usage-index-v1.json'),prior=JSON.parse(await readFile(cacheFile,'utf8'));
-  assert.equal(prior.version,2);prior.version=1;prior.limited=true;await writeFile(cacheFile,JSON.stringify(prior));
+  assert.equal(prior.version,3);prior.version=1;prior.limited=true;await writeFile(cacheFile,JSON.stringify(prior));
   const rebuilt=new UsageIndex({directory:path.join(root,'cache'),roots:{}});const rebuiltUsage=await rebuilt.read(args);
   assert.ok(rebuiltUsage.bytesRead>0,'previous numeric cache parser version is rebuilt');assert.equal(rebuiltUsage.totals.inputTokens,1);assert.equal(rebuiltUsage.limited,false);
   assert.equal((await readFile(file,'utf8')).includes('replacement'),true,'canonical history is preserved');

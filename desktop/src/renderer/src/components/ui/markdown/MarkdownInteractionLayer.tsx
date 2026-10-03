@@ -172,7 +172,7 @@ export function MarkdownInteractionLayer({
                 applyLinkState(target, 'checking', resolvedTarget.path)
                 activeAvailabilityChecks += 1
                 void inspectMarkdownLinkAvailability(href, filePath, searchRootPath, {
-                    allowProjectSearch: !target.dataset.devscopeFileReference
+                    allowProjectSearch: false
                 }).then((result) => {
                     const currentInspection = inspectedTargets.get(target)
                     if (

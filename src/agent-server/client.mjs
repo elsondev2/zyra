@@ -97,12 +97,19 @@ export class ZyraAgentServerClient extends EventEmitter {
 
   async connectInternal() {
     this.publishConnectionStatus({ phase: "checking", connection: "connecting", errorCode: undefined, updatePending: false });
-    const expectedRevision = this.verifyRuntimeRevision ? await readRuntimeRevision(this.root) : null;
     let descriptor = readDescriptor(this.paths.descriptorFile);
+    let expectedRevision;
     if (!descriptor && this.autoStart) {
       assertNoLiveIncompatibleAgentServer(this.paths);
       this.startServer();
-      descriptor = await waitForDescriptor(this.paths.descriptorFile, DEFAULT_CONNECT_TIMEOUT_MS, undefined, this.paths);
+      // A new server validates its own files. Hash the client's runtime while
+      // that process starts, then verify both revisions before accepting it.
+      [expectedRevision, descriptor] = await Promise.all([
+        this.verifyRuntimeRevision ? readRuntimeRevision(this.root) : null,
+        waitForDescriptor(this.paths.descriptorFile, DEFAULT_CONNECT_TIMEOUT_MS, undefined, this.paths),
+      ]);
+    } else {
+      expectedRevision = this.verifyRuntimeRevision ? await readRuntimeRevision(this.root) : null;
     }
     if (!descriptor) throw Object.assign(new Error("Zyra agent server is not running."), { code: "AGENT_SERVER_UNAVAILABLE" });
     try {
@@ -310,8 +317,15 @@ export class ZyraAgentServerClient extends EventEmitter {
         this.publishConnectionStatus({ phase: this.connectionStatus.updatePending ? "waiting" : "ready", connection: "connected", instance: observedInstance || this.instance, errorCode: undefined, lastConfirmedAt: new Date().toISOString() });
       } catch (error) {
         // A previous connection's timeout must never tear down its replacement.
-        if (this.socket === socket) socket.destroy(error);
-        return;
+        if (this.socket !== socket) return;
+        if (error?.code !== 'AGENT_SERVER_TIMEOUT') {
+          socket.destroy(error);
+          return;
+        }
+        // A delayed health reply is not a broken transport. Tearing down this
+        // shared pipe also detaches every active chat and cancels browser input.
+        this.publishConnectionStatus({ phase: 'checking', connection: 'connected',
+          errorCode: 'AGENT_SERVER_HEARTBEAT_DELAYED' });
       }
       if (this.socket === socket) {
         this.heartbeatTimer = setTimeout(check, this.heartbeatIntervalMs);

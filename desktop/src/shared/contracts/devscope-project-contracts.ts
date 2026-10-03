@@ -11,6 +11,8 @@ export type DevScopeProject = {
     isProject: boolean
 }
 
+export type DevScopeGitHubLocalMatch = { path: string; fullName: string }
+
 export type DevScopeFolderItem = {
     name: string
     path: string

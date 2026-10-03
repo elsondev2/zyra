@@ -22,6 +22,7 @@ import { AssistantTimelineSearchAction } from './AssistantTimelineSearchAction'
 import { AssistantTimelineSkillAction } from './AssistantTimelineSkillAction'
 import { AssistantTimelineWebAction } from './AssistantTimelineWebAction'
 import { TimelineToolCallCard } from './AssistantTimelineToolCallCard'
+import { AssistantTimelineThreadMessage } from './AssistantTimelineThreadMessage'
 
 function normalizeTimelineFilePath(value: string): string {
     return value.trim().replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase()
@@ -107,6 +108,7 @@ export const TimelineToolCallList = memo(({
     const activeRunningCommandCount = runningCommandCount ?? localRunningCommandCount
 
     const renderActivity = (activity: AssistantActivity) => {
+        if (activity.kind === 'thread-message' || activity.kind === 'thread-collaboration') return <AssistantTimelineThreadMessage key={activity.id} activity={activity} displayMode={displayMode} />
         if (isAssistantConnectionRecoveryActivity(activity)) return <AssistantTimelineNetworkRecovery key={activity.id} activity={activity} />
         if (isIssueActivity(activity)) return <TimelineIssueList key={activity.id} activities={[activity]} />
         const family = getAssistantActionFamily(activity)
@@ -151,7 +153,7 @@ export const TimelineToolCallList = memo(({
 
     return (
         <div className="max-w-4xl space-y-0.5 py-0.5" data-assistant-tool-call-list={displayMode}>
-            {actionRuns.length > 1 ? (
+            {actionRuns.length > 1 && !displayActivities.some(activity => activity.kind === 'thread-message' || activity.kind === 'thread-collaboration') ? (
                 <AssistantTimelineActionBatch activities={displayActivities} projectRootPath={projectRootPath}>
                     {actionRows}
                 </AssistantTimelineActionBatch>

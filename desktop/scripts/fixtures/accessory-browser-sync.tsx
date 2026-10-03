@@ -161,10 +161,12 @@ export function SyntheticAssistantBrowserWorkspace(props: any) {
 
 let root: Root | null = null
 let host: HTMLDivElement | null = null
+let headerSlot: HTMLDivElement | null = null
 async function mount(api: SyntheticApi, workspaceId: string) {
     if (root) {
         await act(async () => { root!.unmount(); await tick() })
         host?.remove()
+        headerSlot?.remove()
     }
     ;(globalThis as any).__transferredCloses = []
     ;(window as any).devscope = {
@@ -172,8 +174,11 @@ async function mount(api: SyntheticApi, workspaceId: string) {
         browserView: { close: async () => ({ success: true }) },
         window: { setFullScreen: () => undefined }
     }
+    headerSlot = document.createElement('div')
+    headerSlot.id = 'fixture-header-slot'
+    headerSlot.style.cssText = 'display:flex;align-items:center;width:900px;height:34px;'
     host = document.createElement('div')
-    document.body.append(host)
+    document.body.append(headerSlot, host)
     root = createRoot(host)
     await act(async () => {
         root!.render(<AccessoryBrowser
@@ -228,6 +233,42 @@ async function run() {
     assert.ok(localApi.current.browserTabs.some((entry) => entry.id === createdId), 'local create synchronizes')
     await act(async () => { (globalThis as any).__workspaceController.activateTab(localA); await tick(); await tick() })
     assert.equal(localApi.current.activeBrowserTabId, localA, 'local activation synchronizes')
+    const pills = [...document.querySelectorAll<HTMLElement>('[data-accessory-browser-tab-id]')]
+    assert.equal(pills.length, 2)
+    assert.equal(pills[0].style.width, pills[1].style.width, 'Browser tabs have uniform widths regardless of title')
+    assert.ok(Number.parseInt(pills[0].style.width, 10) > 112, 'wide Browser windows give each tab more than its minimum width')
+    await act(async () => { pills[1].click(); await tick(); await tick() })
+    assert.equal(localApi.current.activeBrowserTabId, createdId, 'clicking the pill outside its label selects the tab')
+    const inactiveClose = document.querySelector<HTMLElement>(`[data-accessory-browser-tab-id="${localA}"] button[aria-label^="Close"]`)
+    assert.ok(inactiveClose)
+    await act(async () => { inactiveClose!.click(); await tick(); await tick() })
+    assert.equal(localApi.current.activeBrowserTabId, createdId, 'closing an inactive tab does not select it through the pill')
+    assert.equal(document.querySelectorAll('[data-accessory-browser-tab-id]').length, 1)
+    const wideStrip = document.querySelector<HTMLElement>('[role="tablist"][aria-label="Browser tabs"]')!
+    const addTabButton = wideStrip.querySelector<HTMLElement>('[aria-label="New Browser tab"]')!
+    assert.ok(addTabButton, 'the add-tab button belongs to the scrolling tab rail')
+    assert.ok(Math.abs(addTabButton.getBoundingClientRect().left - document.querySelector<HTMLElement>('[data-accessory-browser-tab-id]')!.getBoundingClientRect().right - 4) < 2, 'with spare room, plus sits directly after the last tab')
+    await act(async () => {
+        for (let index = 0; index < 12; index++) (globalThis as any).__workspaceController.createTab('')
+        headerSlot!.style.width = '250px'
+        window.dispatchEvent(new Event('resize'))
+        await tick()
+        await tick()
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 220)) })
+    const narrowStrip = document.querySelector<HTMLElement>('[role="tablist"][aria-label="Browser tabs"]')!
+    const narrowPills = [...narrowStrip.querySelectorAll<HTMLElement>('[data-accessory-browser-tab-id]')]
+    assert.equal(narrowPills.length, 13, 'the Browser strip renders tabs beyond the old eight-tab ceiling')
+    assert.equal(localApi.current.browserTabs.length, 13, 'the accessory sync keeps every Browser tab')
+    assert.ok(narrowPills.every((pill) => pill.style.width === '112px'), 'crowded Browser tabs share the readable minimum width')
+    assert.ok(addTabButton.className.includes('before:pointer-events-none'), 'overflowing tabs fade beneath the pinned plus')
+    assert.ok(narrowStrip.scrollWidth > narrowStrip.clientWidth, 'crowded tabs overflow inside the strip')
+    narrowStrip.scrollLeft = 0
+    const visibleRight = narrowStrip.getBoundingClientRect().left + narrowStrip.clientWidth
+    const addBounds = addTabButton.getBoundingClientRect()
+    assert.ok(addBounds.right <= visibleRight + 1 && addBounds.right >= visibleRight - 8, 'the plus sticks to the visible rail edge when tabs overflow')
+    assert.ok(addBounds.width > 0, 'the add-tab button remains visible during overflow')
+    headerSlot!.style.width = '900px'
 
     const transferId = 'browser-normal-transfer'
     const transferA = `${transferId}:a`

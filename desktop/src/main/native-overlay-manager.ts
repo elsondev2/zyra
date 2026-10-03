@@ -1,3 +1,4 @@
+import { prepareAppShortcutInput } from './keybindings'
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow, WebContentsView, dialog, screen, type IpcMainInvokeEvent, type WebContents, type WebFrameMain, type WindowOpenHandlerResponse, type HandlerDetails } from 'electron'
 import { ipcMain } from './ipc/trusted-ipc'
@@ -211,6 +212,7 @@ export class NativeOverlayManager {
                     const view = new WebContentsView({ webContents: supplied, webPreferences: options.webPreferences })
                     slot.view = view
                     slot.contents = view.webContents
+                    slot.contents.setBackgroundThrottling(false)
                     view.setBackgroundColor('#00000000')
                     view.setVisible(false)
                     addNativeWindowView(window, view, 'overlay')
@@ -269,6 +271,7 @@ export class NativeOverlayManager {
                     if (isDeliverablePreviewLink(activation.resolvedTarget)) this.emitActivatedLink(owner, slot, contents, activation, activation.resolvedTarget)
                 })
                 contents.on('before-input-event', (event, input) => {
+                    prepareAppShortcutInput(contents, input, owner.contents)
                     const frame = slot.previewFrame
                     if (!frame || frame.isDestroyed() || input.key !== 'Enter' || !sameFrame(contents.focusedFrame, frame)) return
                     if ((input.type === 'keyDown' || input.type === 'rawKeyDown') && !input.isAutoRepeat) {
@@ -413,7 +416,7 @@ export class NativeOverlayManager {
             const changed = slot.view.getVisible() !== visible
             const heldFocus = slot.contents.isFocused()
             if (changed) slot.view.setVisible(visible)
-            if (changed && visible && slot.focus && owner.window.isFocused()) slot.contents.focus()
+            if (visible && slot.focus && owner.window.isFocused() && !slot.contents.isFocused()) slot.contents.focus()
             else if (changed && !visible && heldFocus && allowed && !owner.contents.isDestroyed()) owner.contents.focus()
         } else if (slot.companion) {
             // React removes passive content when its lease ends. Keep that transparent,

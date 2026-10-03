@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import type {
     AssistantApprovalResponseInput,
     AssistantApprovePendingPlaygroundLabRequestInput,
@@ -41,29 +41,30 @@ export function useAssistantStoreSelector<T>(
     selector: (state: AssistantStoreState) => T,
     isEqual: (left: T, right: T) => boolean = Object.is
 ): T {
-    const selectedRef = useRef<T | null>(null)
-
-    return useSyncExternalStore(
-        assistantStore.subscribe,
-        () => {
-            const next = selector(assistantStore.getState())
-            const previous = selectedRef.current
-            if (previous !== null && isEqual(previous, next)) {
-                return previous
-            }
-            selectedRef.current = next
-            return next
-        },
-        () => {
-            const next = selector(assistantStore.getState())
-            const previous = selectedRef.current
-            if (previous !== null && isEqual(previous, next)) {
-                return previous
-            }
-            selectedRef.current = next
-            return next
+    const committed = useRef<{ hasValue: boolean; value: T }>({ hasValue: false, value: undefined as T })
+    // Each render's selector owns its cache, so concurrent renders cannot overwrite
+    // one another. Only a committed selection is shared when a closure changes.
+    const getSelection = useMemo(() => {
+        let hasSnapshot = false
+        let snapshot: AssistantStoreState
+        let selection: T
+        return () => {
+            const nextSnapshot = assistantStore.getState()
+            if (hasSnapshot && Object.is(snapshot, nextSnapshot)) return selection
+            const next = selector(nextSnapshot)
+            const previous = hasSnapshot ? selection : committed.current.value
+            const hasPrevious = hasSnapshot || committed.current.hasValue
+            selection = hasPrevious && isEqual(previous, next) ? previous : next
+            snapshot = nextSnapshot
+            hasSnapshot = true
+            return selection
         }
-    )
+    }, [selector, isEqual])
+    const selected = useSyncExternalStore(assistantStore.subscribe, getSelection, getSelection)
+    useEffect(() => {
+        committed.current = { hasValue: true, value: selected }
+    }, [selected])
+    return selected
 }
 
 export function useAssistantStoreLifecycle() {
@@ -118,6 +119,7 @@ const assistantStoreActions = {
     warmSelectedSessionConnection: (voicePreparation?: AssistantVoiceExecutionConfiguration) =>
         assistantStore.warmSelectedSessionConnection(voicePreparation),
     interruptTurn: (turnId?: string, sessionId?: string) => assistantStore.interruptTurn(turnId, sessionId).then(() => undefined),
+    interruptTurnResult: (turnId?: string, sessionId?: string) => assistantStore.interruptTurn(turnId, sessionId),
     connect: (sessionId?: string) => assistantStore.connect(sessionId ? { sessionId } : undefined).then(() => undefined),
     connectResult: (sessionId?: string) => assistantStore.connect(sessionId ? { sessionId } : undefined),
     disconnect: (sessionId?: string) => assistantStore.disconnect(sessionId).then(() => undefined),

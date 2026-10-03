@@ -1,0 +1,9 @@
+/** A recovered request can keep its durable ID while gaining a new runtime ID.
+ * Replace both aliases together so replay cannot leave two visible questions. */
+export function upsertAssistantRequest<T extends { id: string; requestId: string; createdAt: string }>(items: T[], incoming: T): T[] {
+    const matches = (item: T) => item.id === incoming.id || item.requestId === incoming.requestId
+    const index = items.findIndex(matches)
+    if (index < 0) return [...items, incoming].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    if (items[index] === incoming && !items.slice(index + 1).some(matches)) return items
+    return items.flatMap((item, position) => position === index ? [incoming] : matches(item) ? [] : [item])
+}

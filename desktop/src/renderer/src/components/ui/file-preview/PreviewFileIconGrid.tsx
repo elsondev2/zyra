@@ -23,6 +23,8 @@ import {
 import { getFileThumbnailUrl } from './utils'
 import { PreviewTreeContextMenu, type PreviewTreeMenuAnchor } from './PreviewTreeContextMenu'
 import { usePreviewVirtualWindow } from './usePreviewVirtualWindow'
+import { handleFileSelectionShortcut } from './previewFileSelectionKeyboard'
+import { startPreviewFileMove, endPreviewFileMove } from './previewFileMoveDrag'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif'])
 const ICON_GRID_HORIZONTAL_PADDING = 12
@@ -80,6 +82,10 @@ const PreviewFileIconCell = memo(function PreviewFileIconCell({
     return (
         <button
             data-explorer-icon-item="true"
+            data-explorer-path={node.path}
+            data-file-drop-path={node.type === 'directory' ? node.path : undefined}
+            data-file-drop-name={node.name}
+            draggable
             type="button"
             role="gridcell"
             aria-selected={selected}
@@ -92,7 +98,7 @@ const PreviewFileIconCell = memo(function PreviewFileIconCell({
             }}
             onKeyDown={(event) => onKeyDown(event, node, index)}
             onContextMenu={(event) => onOpenMenu(event, node, index)}
-            className={cn('group relative flex h-[106px] min-w-0 flex-col items-center justify-start rounded-lg px-2 py-2 text-center outline-none transition-[background-color,box-shadow,transform] duration-150', selected ? 'text-sparkle-text' : 'hover:bg-white/[0.035] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]/45')}
+            className={cn('group relative flex h-[106px] min-w-0 flex-col items-center justify-start rounded-[2px] px-2 py-2 text-center outline-none transition-[background-color,box-shadow,transform] duration-150', selected ? 'text-sparkle-text' : 'hover:bg-white/[0.035] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]/45')}
             style={selected ? {
                 background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 17%, transparent), color-mix(in srgb, var(--accent-primary) 9%, transparent))',
                 boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 68%, transparent), 0 7px 22px color-mix(in srgb, var(--accent-primary) 10%, transparent)'
@@ -318,6 +324,8 @@ export function PreviewFileIconGrid({
         const target = event.target as Element | null
         if (target?.closest('[data-explorer-icon-item="true"]')) return
         const scrollElement = event.currentTarget
+        event.preventDefault()
+        scrollElement.focus({ preventScroll: true })
         const rect = scrollElement.getBoundingClientRect()
         const additive = event.ctrlKey || event.metaKey || event.shiftKey
         dragSelectionRef.current = {
@@ -362,6 +370,8 @@ export function PreviewFileIconGrid({
                 ref={scrollElementRef}
                 className="project-surface-scrollbar relative min-h-0 flex-1 select-none overflow-y-auto p-3"
                 role="grid"
+                tabIndex={0}
+                onKeyDownCapture={(event) => handleFileSelectionShortcut(event, nodes, selectedNodePathsRef.current, replaceSelection, getNodeActions, getSelectionActions)}
                 aria-label="Workspace icon view"
                 aria-multiselectable="true"
                 aria-colcount={columnCount}
@@ -370,6 +380,17 @@ export function PreviewFileIconGrid({
                 onPointerMove={handlePointerMove}
                 onPointerUp={finishMarquee}
                 onPointerCancel={finishMarquee}
+                onDragStart={(event) => {
+                    const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-explorer-path]')
+                    const node = nodes.find((entry) => entry.path === cell?.dataset.explorerPath)
+                    if (!node) { event.preventDefault(); return }
+                    const selection = selectedNodePathsRef.current
+                    const sources = selection.has(node.path)
+                        ? nodes.filter((entry) => selection.has(entry.path))
+                        : [node]
+                    if (startPreviewFileMove(event, sources) && !selection.has(node.path)) replaceSelection(new Set([node.path]))
+                }}
+                onDragEnd={endPreviewFileMove}
             >
                 <div className="relative w-full" style={{ height: virtualContentHeight }}>
                     <div

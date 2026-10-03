@@ -99,9 +99,17 @@ export type OpenAIConnectionsStatus = {
 }
 
 export type AccountConnectionAnalyticsAction = 'connect' | 'replace'
+export type ChatGptSignInMethod = 'browser' | 'device-code'
+
+export type ChatGptDeviceCode = {
+    verificationUrl: string
+    userCode: string
+    expiresAt: string | null
+}
 
 export type AccountConnectionAnalyticsInput = {
     analyticsAction?: AccountConnectionAnalyticsAction
+    signInMethod?: ChatGptSignInMethod
 }
 
 export type AccountConnectionStatusInput = {
@@ -150,10 +158,15 @@ export type AgentRoleModelInput = { provider: string; role: string; model: strin
 
 export type ModelProviderInput = { provider: 'opencode' | 'anthropic' | 'custom'; apiKey: string; name?: string; baseUrl?: string; model?: string; api?: 'openai-completions' | 'openai-responses' | 'anthropic-messages' }
 export type ModelProviderConnection = { provider: string; label: string; model: string; verified: boolean; verifiedAt?: string }
+export type ModelHarnessConnectInput = { model?: string }
+export type HarnessDetection = { detected: { executable: string; version: string } | null }
+export const HARNESS_PROVIDER_ID = 'opencode-harness'
 export const ONBOARDING_IPC = {
     connectModelProvider: 'zyra:providers:connect',
     disconnectModelProvider: 'zyra:providers:disconnect',
     listModelProviders: 'zyra:providers:list',
+    detectHarness: 'zyra:providers:detectHarness',
+    connectHarness: 'zyra:providers:connectHarness',
     getDelegationPreferences: 'zyra:providers:delegationPreferences',
     saveDelegationPreferences: 'zyra:providers:saveDelegationPreferences',
     getAgentRoleModels: 'zyra:providers:roleModels',
@@ -161,7 +174,9 @@ export const ONBOARDING_IPC = {
     getState: 'zyra:onboarding:get-state',
     getAuthStatus: 'zyra:onboarding:get-auth-status',
     getConnectionsStatus: 'zyra:account:get-openai-connections',
+    getChatGptDeviceCode: 'zyra:account:get-chatgpt-device-code',
     connectChatGpt: 'zyra:onboarding:connect-chatgpt',
+    cancelChatGpt: 'zyra:onboarding:cancel-chatgpt',
     connectApiKey: 'zyra:onboarding:connect-api-key',
     disconnectOpenAI: 'zyra:account:disconnect-openai',
     updateAppearance: 'zyra:onboarding:update-appearance',

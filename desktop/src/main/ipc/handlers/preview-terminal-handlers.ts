@@ -1,5 +1,6 @@
 import { TerminalScreen } from '../../../../../mobile/gateway/src/terminal-screen.mjs'
 import * as pty from 'node-pty'
+import { homedir } from 'os'
 import { dirname, resolve } from 'path'
 import { stat } from 'fs/promises'
 import log from 'electron-log'
@@ -286,7 +287,7 @@ function syncSessionProcessLabel(session: PreviewTerminalSession): void {
 
 async function resolveTerminalCwd(targetPathInput?: string): Promise<string> {
     const targetPath = String(targetPathInput || '').trim()
-    if (!targetPath) return process.cwd()
+    if (!targetPath) return homedir()
 
     const resolved = resolve(targetPath)
     try {
@@ -294,7 +295,7 @@ async function resolveTerminalCwd(targetPathInput?: string): Promise<string> {
         if (targetStats.isDirectory()) return resolved
         return dirname(resolved)
     } catch {
-        return process.cwd()
+        return homedir()
     }
 }
 

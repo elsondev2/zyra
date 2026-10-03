@@ -1,7 +1,12 @@
 import { normalizePromptImages } from './prompt-images.mjs';
+import { assistantMessageCost } from './model-pricing/message-cost.mjs';
+import { normalizeCanonicalMessageSourceId } from './message-identity.mjs';
 import { ensureSessionDurable } from './agent-server/session-durability.mjs';
 import { sessionPreferences } from './session-preferences.mjs';
-import { registerSavedProviders } from "./provider-connections.mjs";
+import { refreshSavedProviderModels, registerSavedProviders } from "./provider-connections.mjs";
+import { stopHarnessServe } from './opencode-harness.mjs';
+import { HARNESS_PROVIDER_ID } from "./opencode-harness.mjs";
+import { HarnessTransportBrokerClient, borrowedHarnessHooks } from './agent-server/harness-transport-broker.mjs';
 import { createIdleMemoryScheduler } from "./memory/idle-memory-scheduler.mjs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -11,6 +16,9 @@ import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { formatRequestUserInputContinuationPrompt, normalizeRequestUserInputQuestions } from "./request-user-input.mjs";
 import { classifyRecoveryError } from "./network-recovery.mjs";
 import { AgentControlBridgeClient } from "./agent-control/bridge-client.mjs";
+import { ThreadBridgeClient } from './threads/bridge-client.mjs';
+import { deliverThreadMessage } from './threads/delivery.mjs';
+import { agentEndOutcome } from './agent-server/agent-end-outcome.mjs';
 import { revokePluginRuntime } from "./plugins/revoke-runtime.mjs";
 import { startTemporaryBrowserRelay } from "./agent-control/temporary-browser-relay.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./agent-server/canonical-message-ledger.mjs";
@@ -30,6 +38,7 @@ let runtime;
 let unsubscribe;
 let unsubscribeManagedBash;
 let unsubscribeFleet;
+let unsubscribeChildSessions;
 let temporaryBrowserRelay;
 let activePermissionMode = "approval-required";
 let permissionReviewer;
@@ -40,6 +49,8 @@ const ZYRA_CHAT_CONFIG_CUSTOM_TYPE = "zyra.chat-config.v1";
 const pendingPermissionRequests = new Map();
 const pendingUserInputRequests = new Map();
 const controlBridgeClient = new AgentControlBridgeClient({ send: (message) => send(message) });
+const threadBridgeClient = new ThreadBridgeClient(message => send(message));
+const harnessTransportBroker = new HarnessTransportBrokerClient(message => send(message));
 
 function stringifyProtocol(value) {
   return JSON.stringify(value);
@@ -78,7 +89,7 @@ function requestToolPermission(request = {}) {
 }
 
 function reviewToolPermission(request = {}) {
-  if (activePermissionMode !== "auto-review" && activePermissionMode !== "full-access") {
+  if (activePermissionMode !== "auto-review") {
     return Promise.resolve({ decision: "ask", reason: "Automatic permission review is not active for this mode." });
   }
   syncPermissionReviewer();
@@ -100,10 +111,14 @@ function latestUserRequest() {
 }
 
 function syncPermissionReviewer() {
-  if (!runtime || (activePermissionMode !== "auto-review" && activePermissionMode !== "full-access")) {
+  if (!runtime || activePermissionMode !== "auto-review") {
     permissionReviewer?.dispose?.();
     permissionReviewer = undefined;
     return;
+  }
+  if (permissionReviewer && permissionReviewer.model !== runtime.session?.model) {
+    permissionReviewer.dispose();
+    permissionReviewer = undefined;
   }
   permissionReviewer ??= createZyraPermissionReviewer({
     runtime,
@@ -172,11 +187,14 @@ function stopTemporaryBrowserRelay() {
 }
 
 function modelToInfo(model, sdk) {
+  if (model.zyraModelInfo) return { ...model.zyraModelInfo, id: `${model.provider}/${model.id}` };
+  const isHarness = model.provider === "opencode-harness";
   return {
     id: `${model.provider}/${model.id}`,
-    label: model.id,
-    description: model.name && model.name !== model.id ? model.name : model.provider,
+    label: isHarness ? (model.name && !model.name.includes("/") ? model.name : String(model.id).split("/").pop()) : model.id,
+    description: isHarness ? "OpenCode harness" : model.name && model.name !== model.id ? model.name : model.provider,
     supportedEfforts: sdk.getZyraModelThinkingLevels(model),
+    inputModes: Array.isArray(model.input) ? [...model.input] : ["text"],
     contextWindow: numberValue(model.contextWindow),
   };
 }
@@ -214,12 +232,16 @@ function disposeRuntime() {
     unsubscribeFleet();
   }
   unsubscribeFleet = undefined;
+  unsubscribeChildSessions?.();
+  unsubscribeChildSessions = undefined;
   runtime?.managedBash?.abortAll?.("Zyra bridge disposed");
   void runtime?.fleet?.cancelAll?.("Zyra bridge disposed");
   runtime?.session?.dispose?.();
+  const harnessDisposal = runtime?.harnessHooks?.conversation?.dispose();
   runtime = undefined;
   liveContextBaselineTokens = undefined;
   lastLiveContextPublishedAt = 0;
+  return harnessDisposal;
   activeActionBatchIntent = undefined;
 }
 
@@ -228,12 +250,18 @@ function isMissingLocalChatError(error) {
 }
 
 async function handleConnect(payload) {
-  disposeRuntime();
+  await disposeRuntime();
   activePermissionMode = normalizeRuntimeMode(payload.runtimeMode);
   const sdk = await loadSdk();
   const requestedThreadId = payload.threadId || payload.providerThreadId || undefined;
+  // Draft connection warms the selected harness alongside session setup.
+  // Model calls remain owned by the eventual prompt, with its chosen effort.
+  const preparation = sdk.prepareZyraSessionRuntime({ model: payload.harnessTransport ? undefined : payload.model });
+  void preparation.catch(() => {});
   const createRuntime = (overrides = {}) => sdk.createZyraSession({
     project: payload.cwd,
+    harnessTransport: payload.harnessTransport,
+    memoryEnabled: payload.memoryEnabled !== false,
     filesystemScope: payload.filesystemScope,
     pluginSkillSources: Array.isArray(payload.pluginSkillSources) ? payload.pluginSkillSources : [],
     session: requestedThreadId,
@@ -251,8 +279,13 @@ async function handleConnect(payload) {
     persistStartupPreferences: payload.purpose === "voice-primary" ? false : undefined,
     rootThreadId: payload.localThreadId || undefined,
     controlBridgeClient,
+    threadBridgeClient,
     permissionRequest: requestToolPermission,
     permissionReview: reviewToolPermission,
+    harnessToolActivity: (event) => {
+      const normalized = normalizeEvent(event, getRuntimeContextWindow(runtime));
+      if (normalized) send({ type: "event", event: normalized });
+    },
     requestUserInput,
     getPermissionMode: () => activePermissionMode,
     ...overrides,
@@ -268,6 +301,7 @@ async function handleConnect(payload) {
   const storedChatConfig = readStoredChatConfig(runtime.session.sessionManager);
   await applyChatConfig(sdk, storedChatConfig || normalizeChatConfig(payload), { emit: false });
   const chatConfig = currentChatConfig(sdk);
+  await preparation;
   if (payload.persistNewSession === true) ensureSessionDurable(runtime.session.sessionManager);
   activeActionBatchIntent = undefined;
   if (payload.memoryQueueOwner !== "server" && payload.surface !== "memory-worker" && !payload.noSession && process.env.ZYRA_MEMORY_BACKGROUND !== "0") {
@@ -306,7 +340,7 @@ async function handleConnect(payload) {
       const now = Date.now();
       const shouldPublishLiveContext = event.type !== "message_update" || now - lastLiveContextPublishedAt >= 250;
       if (shouldPublishLiveContext) {
-        const current = sdk.getRuntimeUsageSnapshot(runtime);
+        const current = sdk.getRuntimeUsageSnapshot(runtime, { completedMessage: event.type === 'message_end' ? event.message : undefined });
         if (event.type === "message_start") {
           liveContextBaselineTokens = Number(current.contextUsage?.tokens) || 0;
         }
@@ -332,6 +366,10 @@ async function handleConnect(payload) {
   });
   unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => {
     send({ type: "event", event: { ...summarizeFleetEvent(event), fleet: projectFleetSnapshot(snapshot) } });
+  });
+  unsubscribeChildSessions = runtime.fleet?.subscribeSessionEvents?.(({ agentRunId, event }) => {
+    const normalized = normalizeEvent(event);
+    if (normalized) send({ type: 'event', event: { type: 'zyra_child_session_event', agentRunId, event: normalized } });
   });
   if (payload.surface !== "memory-worker") {
     try {
@@ -437,7 +475,7 @@ function normalizeEvent(event, modelContextWindow) {
   }
 
   if (type === "agent_end") {
-    return { type, willRetry: event.willRetry === true };
+    return { type, willRetry: event.willRetry === true, ...agentEndOutcome(event) };
   }
 
   if (type === "auto_retry_start") {
@@ -494,14 +532,17 @@ function normalizeMessage(message, modelContextWindow) {
   const timestamp = normalizeMessageTimestamp(message.timestamp);
   const role = stringValue(message.role);
   return {
-    id: stringValue(message.id)
+    id: normalizeCanonicalMessageSourceId(stringValue(message.id)
       || stringValue(message.messageId)
       || stringValue(message.entryId)
       || stringValue(message.uuid)
-      || stablePiMessageId(role, timestamp),
+      || stableZyraMessageId(role, timestamp)),
     role,
+    ...(role === 'custom' ? { customType: stringValue(message.customType), details: cloneJsonValue(message.details), display: message.display !== false } : {}),
     content: normalizeContent(message.content),
-    usage: normalizeUsage(message.usage, modelContextWindow),
+    model: stringValue(message.model),
+    provider: stringValue(message.provider),
+    usage: normalizeUsage(message.usage ? { ...message.usage, cost: assistantMessageCost(message) ?? { total: 0, source: 'unpriced' } } : undefined, modelContextWindow),
     stopReason: stringValue(message.stopReason),
     errorMessage: stringValue(message.errorMessage),
     timestamp,
@@ -517,9 +558,9 @@ function normalizeMessageTimestamp(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function stablePiMessageId(role, timestamp) {
+function stableZyraMessageId(role, timestamp) {
   if (!Number.isFinite(timestamp)) return undefined;
-  return `pi-message:${role || "unknown"}:${Math.trunc(timestamp)}`;
+  return `zyra-message:${role || "unknown"}:${Math.trunc(timestamp)}`;
 }
 
 function normalizeAssistantMessageEvent(event) {
@@ -528,7 +569,7 @@ function normalizeAssistantMessageEvent(event) {
   const type = stringValue(event.type);
   if (type) normalized.type = type;
   const id = stringValue(event.id) || stringValue(event.itemId) || stringValue(event.messageId);
-  if (id) normalized.id = id;
+  if (id) normalized.id = normalizeCanonicalMessageSourceId(id);
   const channel = stringValue(event.channel);
   if (channel) normalized.channel = channel;
   const kind = stringValue(event.kind);
@@ -595,6 +636,9 @@ function normalizeUsage(usage, modelContextWindow) {
     cacheRead: numberValue(usage.cost.cacheRead),
     cacheWrite: numberValue(usage.cost.cacheWrite),
     total: numberValue(usage.cost.total),
+    source: stringValue(usage.cost.source),
+    serviceTier: stringValue(usage.cost.serviceTier),
+    pricingFetchedAt: stringValue(usage.cost.pricingFetchedAt),
   } : undefined;
   return {
     input: numberValue(usage.input),
@@ -734,9 +778,9 @@ async function handleAuthRefresh(payload) {
 async function refreshServerAuthProvider(provider) {
   if (!runtime) throw new Error("Zyra bridge is not connected.");
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider)) throw new Error("Auth refresh provider is invalid.");
-  const modelRuntime = runtime.session?.modelRegistry?.authStorage?.modelRuntime;
-  if (typeof modelRuntime?.refresh !== "function") throw new Error("The server model runtime cannot refresh authentication.");
-  const result = await modelRuntime.refresh({ allowNetwork: false, providers: [provider] });
+  const authStorage = runtime.session?.modelRegistry?.authStorage;
+  if (typeof authStorage?.refreshAuthProvider !== "function") throw new Error("The server auth store cannot refresh authentication.");
+  const result = await authStorage.refreshAuthProvider(provider);
   const refreshError = result?.errors?.get?.(provider);
   if (refreshError) throw refreshError;
 }
@@ -747,6 +791,7 @@ async function handlePrompt(payload) {
   }
   const sdk = await loadSdk();
   await applyChatConfig(sdk, payload);
+  if (typeof payload.memoryEnabled === "boolean") sdk.setZyraMemoryEnabled(runtime, payload.memoryEnabled);
   sdk.setZyraReasoningSummary(runtime, payload.reasoningSummary);
   const shouldGenerateTitle = !runtime.session.sessionManager?.getSessionName?.();
   const images = normalizePromptImages(payload.images);
@@ -822,8 +867,16 @@ async function handleGenerateText(payload) {
   const models = await sdk.listAvailableModels({ skipAvailability: true });
   const requestedModel = models.some(model => model.id === payload.model) ? payload.model : models[0]?.id;
   if (!requestedModel) throw new Error('Connect a model provider before generating a title.');
+  if (requestedModel.startsWith(`${HARNESS_PROVIDER_ID}/`)) {
+    const text = await sdk.runZyraHarnessBackgroundTextPrompt(requestedModel, prompt, {
+      thinking: payload.thinking || "low",
+      cwd: payload.cwd,
+    });
+    return { text, model: requestedModel };
+  }
   const titleRuntime = await sdk.createZyraSession({
     project: payload.cwd,
+    memoryEnabled: false,
     noSession: true,
     noTools: "all",
     model: requestedModel,
@@ -850,10 +903,15 @@ async function handleGenerateText(payload) {
 async function handleModels(payload) {
   const sdk = await loadSdk();
   if (runtime?.session?.modelRegistry) {
-    if (payload.forceRefresh && typeof runtime.session.modelRegistry.refresh === "function") {
-      registerSavedProviders(runtime.session.modelRegistry);
-      await runtime.session.modelRegistry.refresh();
+    if (payload.forceRefresh) {
+      const modelRegistry = runtime.session.modelRegistry;
+      await refreshSavedProviderModels({ authStorage: modelRegistry.authStorage, harness: runtime.harnessHooks });
+      registerSavedProviders(modelRegistry, undefined, { authStorage: modelRegistry.authStorage, harness: runtime?.harnessHooks });
+      await modelRegistry.refresh?.({ allowNetwork: false });
     }
+    const { syncOpenAIModelCatalog, applyOpenAIModelCatalog } = await import('./openai-model-catalog.mjs');
+    const registry = runtime.session.modelRegistry;
+    await applyOpenAIModelCatalog(registry, await syncOpenAIModelCatalog({ ...registry.zyraOpenAIModelCatalogOptions, authStorage: registry.authStorage, forceRefresh: Boolean(payload.forceRefresh) }));
     return {
       models: sdk.getZyraAvailableModels(runtime.session.modelRegistry).map((model) => modelToInfo(model, sdk)),
     };
@@ -868,15 +926,27 @@ async function handleWarmup(payload) {
   return sdk.warmupZyraRuntime({
     forceRefresh: Boolean(payload.forceRefresh),
     skipAvailability: payload.skipAvailability === true,
+    ...(payload.serverOwnedHarness ? { harness: borrowedHarnessHooks(() => harnessTransportBroker.get()) } : {}),
   });
 }
 
 async function handleAbort() {
+  const currentRuntime = runtime;
+  declinePendingPermissions("Root turn stopped.");
+  abandonPendingUserInputs();
+  controlBridgeClient.cancelPending("Root turn stopped.");
+  currentRuntime?.managedBash?.abortAll?.("Root turn stopped");
   runtime?.session?.abortCompaction?.();
-  await Promise.allSettled([
-    runtime?.fleet?.cancelAll?.("root turn aborted"),
-    runtime?.session?.abort?.(),
+  const results = await Promise.allSettled([
+    currentRuntime?.fleet?.cancelAll?.("root turn aborted"),
+    currentRuntime?.session?.abort?.(),
+    ...[...(currentRuntime?.managedBash?.jobs?.values?.() || [])].map(job => job.done),
   ]);
+  const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+  for (const job of currentRuntime?.managedBash?.jobs?.values?.() || []) {
+    if (job.error?.code === "SHELL_CLEANUP_FAILED") failures.push(job.error);
+  }
+  if (failures.length) throw new AggregateError(failures, failures.map(error => error?.message || String(error)).join("; "));
   return {};
 }
 
@@ -886,7 +956,8 @@ async function handleCanonicalMessageOperation(type, payload = {}) {
   if (type === "canonical_message.append") {
     const receipt = appendCanonicalMessage(sessionManager, payload);
     const entries = sessionManager.getEntries();
-    const index = entries.findIndex(entry => `pi_entry_${entry.id}` === receipt.receiptId);
+    const receiptEntryId = /^(?:pi|zyra)_entry_(.+)$/.exec(String(receipt.receiptId || ""))?.[1];
+    const index = entries.findIndex(entry => entry.id === receiptEntryId);
     const entry = entries[index];
     if (!entry?.message) throw new Error("The committed canonical message could not be read back.");
     // Publish only after the ledger has durably flushed the exact entry. Every
@@ -928,6 +999,7 @@ async function handleFleetOperation(type, payload = {}) {
   const workflows = runtime.workflows;
   switch (type) {
     case "agents.list": return { definitions: agents.listDefinitions(), runs: Object.values(agents.snapshot()?.agents ?? {}), snapshot: projectFleetSnapshot(agents.snapshot()) };
+    case "agents.models": return agents.delegationModelOptions(payload);
     case "agents.listDefinitions": return agents.listDefinitions();
     case "agents.listRuns": return { runs: Object.values(agents.snapshot()?.agents ?? {}) };
     case "agents.get":
@@ -935,7 +1007,13 @@ async function handleFleetOperation(type, payload = {}) {
     case "agents.wait": return agents.wait(payload.agentRunId, payload);
     case "agents.spawn": return agents.spawn({ ...payload, goal: payload.goal ?? payload.prompt });
     case "agents.send": return agents.send(payload.agentRunId, payload.message ?? payload.prompt);
-    case "agents.stop": return agents.stop(payload.agentRunId, payload.reason);
+    case 'agents.inspectSession': {
+      const result = await agents.inspectSession(payload.agentRunId);
+      return { ...result, messages: result.messages.filter(message => message.role !== 'toolResult').map(message => normalizeMessage(message)).filter(Boolean) };
+    }
+    case 'agents.chatPrompt': return agents.chatPrompt(payload.agentRunId, String(payload.prompt || ''));
+    case 'agents.receiveThreadMessage': return agents.send(payload.agentRunId, payload.message.text, payload.message);
+    case "agents.stop": return agents.stop(payload.agentRunId, payload.reason, payload.interruption || { kind: 'stopped', source: 'user' });
     case "agents.retry": return agents.retry(payload.agentRunId, payload.overrides ?? {});
     case "agents.resume": return agents.resume(payload.agentRunId, payload.message);
     case "agents.transcript":
@@ -973,7 +1051,7 @@ function projectFleetSnapshot(snapshot) {
     worktree: run.worktree, providerSessionId: run.providerSessionId, sessionFile: run.sessionFile,
     createdAt: run.createdAt, queuedAt: run.createdAt, startedAt: run.startedAt, completedAt: run.completedAt, heartbeatAt: run.heartbeatAt,
     elapsedMs: run.elapsedMs, activity: run.activity, usage: run.usage,
-    result: run.result ? { text: String(run.result.text ?? "").slice(0, 4000), warnings: run.result.warnings, truncated: run.result.truncated } : null,
+    result: run.result ? { text: String(run.result.text ?? "").slice(0, 4000), warnings: run.result.warnings, truncated: run.result.truncated, source: run.result.source, untrusted: run.result.untrusted, transcriptRef: run.result.transcriptRef } : null,
     error: run.error,
   });
   const summarizeWorkflow = (run) => ({
@@ -1022,7 +1100,7 @@ let pluginRevocationPromise;
 let pendingConnect;
 
 async function consolidateIdleMemory() {
-  if (!runtime || runtime.session.isStreaming || runtime.session.isCompacting || process.env.ZYRA_MEMORY_BACKGROUND === "0") return { skipped: true };
+  if (!runtime || runtime.memoryEnabled === false || runtime.session.isStreaming || runtime.session.isCompacting || process.env.ZYRA_MEMORY_BACKGROUND === "0") return { skipped: true };
   if (memoryJobController) return { skipped: true };
   const controller = new AbortController(); memoryJobController = controller;
   try {
@@ -1034,6 +1112,8 @@ async function consolidateIdleMemory() {
 }
 
 async function handleMessage(message) {
+  if (message?.type === 'harness.transport.response') { harnessTransportBroker.handleResponse(message); return; }
+  if (message?.type === 'threads.response') { threadBridgeClient.handleResponse(message); return; }
   if (message?.type === "control.response") {
     controlBridgeClient.handleResponse(message);
     return;
@@ -1041,6 +1121,14 @@ async function handleMessage(message) {
   const id = message?.id;
   try {
     if (message?.type === "memory.cancel") { memoryJobController?.abort(); sendResponse(id, true, { cancelled: true }); return; }
+    if (message?.type === "memory.global.configure") {
+      if (!runtime) throw new Error("Zyra bridge is not connected.");
+      const sdk = await loadSdk();
+      const enabled = message.payload?.enabled === true;
+      if (!enabled) memoryJobController?.abort();
+      sendResponse(id, true, { result: { enabled: sdk.setZyraMemoryEnabled(runtime, enabled) } });
+      return;
+    }
     if (message?.type === "memory.consolidate") { sendResponse(id, true, await consolidateIdleMemory()); return; }
     if (message?.type === 'plugin.revoke') {
       pluginRevocationPromise ??= Promise.resolve().then(async () => {
@@ -1057,6 +1145,11 @@ async function handleMessage(message) {
       return;
     }
     if (pluginRevocationPromise && message?.type !== 'dispose') throw new Error('Chat Plugin authority revoked.');
+    if (message?.type === 'prepare') {
+      const sdk = await loadSdk();
+      sendResponse(id, true, { result: await sdk.prepareZyraSessionRuntime(message.payload || {}) });
+      return;
+    }
     if (message?.type === "connect") {
       pendingConnect = handleConnect(message.payload ?? {});
       sendResponse(id, true, { result: await pendingConnect });
@@ -1068,6 +1161,13 @@ async function handleMessage(message) {
     }
     if (message?.type === "configure") {
       sendResponse(id, true, { result: await handleConfigure(message.payload ?? {}) });
+      return;
+    }
+    if (message?.type === 'harness.transport') {
+      if (!runtime) throw new Error('Zyra bridge is not connected.');
+      const sdk = await loadSdk();
+      sdk.setZyraHarnessTransport(runtime, message.payload);
+      sendResponse(id, true, { result: { prepared: true } });
       return;
     }
     if (message?.type === 'preferences.get' || message?.type === 'memory.configure') {
@@ -1121,13 +1221,21 @@ async function handleMessage(message) {
       sendResponse(id, true, { result: await handleSessionOperation(message.type, message.payload ?? {}) });
       return;
     }
+    if (message?.type === 'thread_message.receive') {
+      if (!runtime?.session) throw new Error('Recipient thread is not connected.');
+      sendResponse(id, true, { result: await deliverThreadMessage(runtime.session, message.payload.message) });
+      return;
+    }
     if (/^(?:agents|workflows)\./.test(message?.type ?? "")) {
       sendResponse(id, true, { result: await handleFleetOperation(message.type, message.payload ?? {}) });
       return;
     }
     if (message?.type === "dispose") {
+      threadBridgeClient.dispose();
+      harnessTransportBroker.dispose();
       controlBridgeClient.dispose();
-      disposeRuntime();
+      await disposeRuntime();
+      await stopHarnessServe();
       sendResponse(id, true, { result: {} });
       process.exit(0);
     }
@@ -1153,12 +1261,16 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 
 process.on("SIGTERM", () => {
+  threadBridgeClient.dispose();
+  harnessTransportBroker.dispose();
   controlBridgeClient.dispose();
   disposeRuntime();
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
+  threadBridgeClient.dispose();
+  harnessTransportBroker.dispose();
   controlBridgeClient.dispose();
   disposeRuntime();
   process.exit(0);

@@ -42,9 +42,9 @@ export async function testChatGptConnection(model?: string): Promise<{ success: 
             action: 'testConnection',
             status: 'error',
             model,
-            error: result.error || 'ChatGPT could not be verified through Pi.'
+            error: result.error || 'ChatGPT could not be verified through Zyra.'
         })
-        return { success: false, error: result.error || 'ChatGPT could not be verified through Pi.' }
+        return { success: false, error: result.error || 'ChatGPT could not be verified through Zyra.' }
     }
 
     recordAiDebugLog({
@@ -52,7 +52,7 @@ export async function testChatGptConnection(model?: string): Promise<{ success: 
         action: 'testConnection',
         status: 'success',
         model: result.model || model,
-        finalMessage: 'Zyra verified ChatGPT auth and models through Pi without making a paid request.'
+        finalMessage: 'Zyra verified ChatGPT auth and models through Zyra without making a paid request.'
     })
     return { success: true }
 }

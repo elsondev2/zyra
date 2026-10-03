@@ -32,6 +32,13 @@ export interface PreparedRealtimeScope {
     realtimeSessionGeneration: number
 }
 
+export type InitializeForegroundChatInput = {
+    conversationId: string
+    contextVersion: number
+    activationReason?: 'conversation_open' | 'migration'
+    attachedTaskIds?: string[]
+}
+
 export class ForegroundRouteController {
     constructor(
         private readonly store: ForegroundControllerStore,
@@ -39,12 +46,7 @@ export class ForegroundRouteController {
         private readonly clock: ForegroundClock = systemForegroundClock
     ) {}
 
-    initializeChat(input: {
-        conversationId: string
-        contextVersion: number
-        activationReason?: 'conversation_open' | 'migration'
-        attachedTaskIds?: string[]
-    }): ForegroundRoute {
+    initializeChat(input: InitializeForegroundChatInput): ForegroundRoute {
         const existing = this.store.activeRoute(input.conversationId)
         if (existing) return existing
         return this.store.initializeConversation(createInitialChatRoute({
@@ -55,6 +57,28 @@ export class ForegroundRouteController {
             createdAt: this.clock.now(),
             identities: this.identities
         }))
+    }
+
+    initializeChats(inputs: readonly InitializeForegroundChatInput[]): ForegroundRoute[] {
+        if (!this.store.initializeConversations) return inputs.map(input => this.initializeChat(input))
+        const resolved = new Map<string, ForegroundRoute>()
+        const created: ForegroundRoute[] = []
+        for (const input of inputs) {
+            if (resolved.has(input.conversationId)) continue
+            const existing = this.store.activeRoute(input.conversationId)
+            const route = existing || createInitialChatRoute({
+                conversationId: input.conversationId,
+                activationReason: input.activationReason || 'conversation_open',
+                contextVersion: input.contextVersion,
+                attachedTaskIds: input.attachedTaskIds,
+                createdAt: this.clock.now(),
+                identities: this.identities
+            })
+            resolved.set(input.conversationId, route)
+            if (!existing) created.push(route)
+        }
+        this.store.initializeConversations(created)
+        return inputs.map(input => resolved.get(input.conversationId)!)
     }
 
     activeRoute(conversationId: string): ForegroundRoute {

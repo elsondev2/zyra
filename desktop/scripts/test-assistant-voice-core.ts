@@ -46,6 +46,9 @@ import { createCodexRealtimeCapabilityReport } from '../src/main/assistant/voice
 import { FakeRealtimeContinuitySource } from '../src/main/assistant/voice/fake-realtime-continuity-source'
 import { FakeRealtimeForegroundAdapter } from '../src/main/assistant/voice/fake-realtime-foreground-adapter'
 import { createRealtimeHydrationDelta } from '../src/main/assistant/voice/realtime-hydration'
+import { VoiceTaskSpeechBinding } from '../src/shared/assistant/voice-task-speech-binding'
+import { buildVoiceStrongTaskActivity } from '../src/main/assistant/voice/voice-strong-task-activity'
+import { serializeAssistantActivityPayload } from '../src/main/assistant/persistence-activity-payload'
 
 class DeterministicClock implements ForegroundClock {
     private value = Date.parse('2026-08-09T02:00:00.000Z')
@@ -62,6 +65,7 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
     appendedContext: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }> = []
     requestedSpeech: string[] = []
     requestedSpeechCanonicalMessageIds: Array<string | undefined> = []
+    requestedSpeechVoiceTaskIds: Array<string | undefined> = []
     presentedComposerResponses: Array<{ turnId: string; text?: string; error?: string }> = []
 
     async start(input: Parameters<CodexRealtimeTransport['start']>[0]) {
@@ -81,9 +85,10 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
         this.appendedContext.push(...structuredClone(items))
     }
 
-    async requestSpeech(text: string, canonicalMessageId?: string): Promise<void> {
+    async requestSpeech(text: string, canonicalMessageId?: string, voiceTaskId?: string): Promise<void> {
         this.requestedSpeech.push(text)
         this.requestedSpeechCanonicalMessageIds.push(canonicalMessageId)
+        this.requestedSpeechVoiceTaskIds.push(voiceTaskId)
     }
     presentComposerResponse(input: { turnId: string; text?: string; error?: string }): void {
         this.presentedComposerResponses.push(structuredClone(input))
@@ -898,6 +903,81 @@ assert.equal(codexEvents.at(-1)?.type, 'realtime.transcript.suppressed')
 assert.ok(!codexEvents.some(event => event.type === 'realtime.assistant.transcript.completed' && event.providerItemId === 'spoken-canonical-turn'))
 assert.deepEqual(scriptedTransport.requestedSpeech.at(-1), 'Canonical typed answer.')
 assert.equal(scriptedTransport.requestedSpeechCanonicalMessageIds.at(-1), 'voice_assistant_typed_canonical')
+// Private agent results are inputs to the voice, not pre-written chat answers.
+const storageRoute = routes.activatePreparedVoice({
+    conversationId: 'chat_codex_adapter', expected: routeExpectation(foregroundRouteClaim(codexRoute)),
+    contextVersion: 1, attachedTaskIds: ['storage-task'],
+    prepared: { realtimeProviderThreadId: codexHandle.realtimeProviderThreadId,
+        realtimeSessionId: codexHandle.realtimeSessionId,
+        realtimeSessionGeneration: codexHandle.realtimeSessionGeneration }
+})
+const storageCommitter = new CanonicalVoiceTranscriptCommitter(
+    { subscribe: codexAdapter.subscribe.bind(codexAdapter) } as unknown as CanonicalVoiceSessionController,
+    routes, gateway
+)
+let storageLink: { messageId: string; taskId?: string } | null = null
+storageCommitter.onCommit((receipt, event) => {
+    storageLink = { messageId: receipt.canonicalMessageId, taskId: event.voiceTaskId }
+})
+const storageBinding = new VoiceTaskSpeechBinding()
+const privateResult = buildVoiceStrongTaskActivity({
+    taskId: 'storage-task', sourceProviderItemId: 'storage-request', status: 'completed',
+    startedAt: clock.now(), occurredAt: clock.now(), summary: 'Finished', detail: '24.9 GB free out of 475.8 GB.'
+})
+assert.equal(privateResult.payload?.resultText, '24.9 GB free out of 475.8 GB.')
+assert.equal(JSON.parse(serializeAssistantActivityPayload(privateResult.payload)).resultText, privateResult.payload?.resultText,
+    'the hidden result survives persistence separately from the spoken transcript')
+assert.equal(writer.records('chat_codex_adapter').length, 0, 'background facts are not visible chat messages')
+await codexAdapter.requestSpeech(codexHandle.adapterSessionId, {
+    narrationId: 'private-storage-result', deliveryId: 'private-storage-delivery',
+    canonicalMessageId: 'private-storage-answer', voiceTaskId: 'storage-task',
+    text: '24.9 GB free out of 475.8 GB.', safeFacts: ['24.9 GB free'],
+    expiresAt: '2099-01-01T00:00:00.000Z',
+    routeClaim: foregroundRouteClaim(storageRoute)
+})
+assert.equal(scriptedTransport.requestedSpeechCanonicalMessageIds.at(-1), undefined,
+    'private results must not suppress the actual spoken answer as a canonical replay')
+assert.equal(scriptedTransport.requestedSpeechVoiceTaskIds.at(-1), 'storage-task')
+storageBinding.dispatched(scriptedTransport.requestedSpeechVoiceTaskIds.at(-1)!)
+const storageCreated = {
+    type: 'turn.created',
+    turn: { id: 'storage-spoken-turn', role: 'assistant', transcript: '' }
+}
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    ...storageCreated, zyraVoiceTaskId: storageBinding.bind(storageCreated)
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done', turn: { id: 'storage-spoken-turn', role: 'assistant',
+        transcript: 'You have about twenty-five gigabytes left.' }
+})
+const storageReplies = codexEvents.filter(event => event.type === 'realtime.assistant.transcript.completed'
+    && event.providerItemId === 'storage-spoken-turn')
+assert.equal(storageReplies.length, 1)
+assert.equal((storageReplies[0] as any).voiceTaskId, 'storage-task', 'result links survive paraphrasing')
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done', turn: { id: 'storage-spoken-turn', role: 'assistant', transcript: 'Repeated transport event.' }
+})
+assert.equal(codexEvents.filter(event => event.type === 'realtime.assistant.transcript.completed'
+    && event.providerItemId === 'storage-spoken-turn').length, 1)
+await storageCommitter.flush()
+assert.equal(writer.records('chat_codex_adapter').length, 1, 'one spoken answer reaches the durable ledger')
+assert.equal(writer.records('chat_codex_adapter')[0]?.input.text, 'You have about twenty-five gigabytes left.')
+assert.equal((storageLink as any)?.taskId, 'storage-task')
+assert.equal((storageLink as any)?.messageId, writer.records('chat_codex_adapter')[0]?.input.messageId)
+storageCommitter.dispose()
+storageBinding.dispatched('interrupted-task')
+storageBinding.bind({ type: 'input_audio_buffer.speech_started' })
+assert.equal(storageBinding.bind({ type: 'turn.created', turn: { id: 'unrelated-after-interruption', role: 'assistant' } }), undefined)
+storageBinding.dispatched('another-task')
+assert.equal(storageBinding.bind({ type: 'turn.done', turn: { id: 'older-turn', role: 'assistant' } }), undefined,
+    'an older completion cannot consume a newly dispatched delivery')
+assert.equal(storageBinding.bind({ type: 'turn.created', turn: { id: 'another-reply', role: 'assistant' } }), 'another-task')
+storageBinding.dispatched('last-task')
+assert.equal(storageBinding.bind({ type: 'turn.created', turn: { id: 'another-reply', role: 'assistant' } }), 'another-task',
+    'a replayed turn start must not steal the next task delivery')
+assert.equal(storageBinding.bind({ type: 'turn.created', turn: { id: 'last-reply', role: 'assistant' } }), 'last-task')
+storageBinding.clear()
+assert.equal(storageBinding.bind({ type: 'turn.done', turn: { id: 'another-reply', role: 'assistant' } }), undefined)
 codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
     type: 'turn.created',
     turn: { id: 'webrtc_turn_1', role: 'assistant', transcript: '' }

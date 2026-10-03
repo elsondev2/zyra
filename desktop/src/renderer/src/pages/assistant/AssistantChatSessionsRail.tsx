@@ -1,9 +1,11 @@
+import { RailButton } from './AssistantRailButton'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { isNativeOverlayActive, subscribeNativeOverlayActivity } from '@/components/ui/native-overlay-host'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
-import { Bot, ChevronDown, Copy, Folder, MoreHorizontal, PanelLeftOpen, Pin, Plug, Plus, Search, SquarePen, Trash2, X } from 'lucide-react'
+import { ChevronDown, Copy, Folder, MoreHorizontal, PanelLeftOpen, Pin, Plug, Plus, Search, SquarePen, Trash2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import type { AssistantMessage, AssistantProject, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
+import type { AssistantProject, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { useCommandPalette } from '@/lib/commandPalette'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
@@ -15,16 +17,19 @@ import { AssistantAgentInboxSidebar } from './AssistantAgentInboxSidebar'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
+import { AssistantAgentPresenceIndicator } from './AssistantAgentPresenceIndicator'
 import { assistantMobileDevices, assistantSessionMobileDevices, hasAssistantTuiPresence, isAssistantSessionOpenInTui } from './assistant-tui-presence'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
 import { ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolveAssistantLeftSidebarWidth } from './assistant-pane-layout'
 import {
     ASSISTANT_BUBBLE_SIDEBAR_WIDTH,
     ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
-    ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS
+    ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS,
+    isAssistantSidebarWindowEdgePoint,
+    shouldCloseAssistantSidebarPreview
 } from './assistant-sidebar-preview-state'
 import { createSessionActionMenuItems } from './assistant-sessions-rail-menus'
-import { isAssistantDraftSession, resolveAssistantProjectPresentation, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
+import { getAssistantThreadLastMessageAt, isAssistantDraftSession, resolveAssistantProjectPresentation, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import { useAssistantRailContextMenu } from './useAssistantRailContextMenu'
 import { useAssistantRailTitleRegeneration } from './useAssistantRailTitleRegeneration'
 
@@ -110,22 +115,7 @@ function formatRelativeTime(value?: string | null): string {
 }
 
 function getThreadLastActivityAt(thread: AssistantThread | null): string {
-    if (!thread) return ''
-
-    const latestMessageAt = (thread.messages || []).reduce<string | null>((latest, message: AssistantMessage) => {
-        if (message.role === 'system') return latest
-        const messageAt = message.createdAt || message.updatedAt
-        if (!messageAt) return latest
-        if (!latest) return messageAt
-        return getSortableTimestamp(messageAt) > getSortableTimestamp(latest) ? messageAt : latest
-    }, null)
-
-    return latestMessageAt
-        || thread.latestTurn?.completedAt
-        || thread.latestTurn?.startedAt
-        || thread.latestTurn?.requestedAt
-        || thread.updatedAt
-        || thread.createdAt
+    return getAssistantThreadLastMessageAt(thread)
 }
 
 function getSessionLastActivityAt(session: AssistantSession): string {
@@ -255,6 +245,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     const resizeFrameRef = useRef(0)
     const layoutShellRef = useRef<HTMLDivElement | null>(null)
     const sidebarSurfaceRef = useRef<HTMLElement | null>(null)
+    const previewEdgeRef = useRef<HTMLDivElement | null>(null)
     const previewCloseTimerRef = useRef<number | null>(null)
     const wasCollapsedRef = useRef(collapsed)
     const shouldBootstrapProjectExpansionRef = useRef<boolean | null>(null)
@@ -265,6 +256,9 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     const [isResizing, setIsResizing] = useState(false)
     const loadingScreenActive = useLoadingScreenActive()
     const [previewOpen, setPreviewOpen] = useState(previewPinned)
+    const nativeOverlayActive = useSyncExternalStore(subscribeNativeOverlayActivity, isNativeOverlayActive, () => false)
+    const previewPointerInsideRef = useRef(false)
+    const previewCloseDeferredRef = useRef(false)
     const [pendingDeleteSession, setPendingDeleteSession] = useState<AssistantSession | null>(null)
     const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
     const [renameDraft, setRenameDraft] = useState('')
@@ -576,6 +570,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     }
 
     const openPreview = useCallback(() => {
+        previewCloseDeferredRef.current = false
         if (previewCloseTimerRef.current !== null) {
             window.clearTimeout(previewCloseTimerRef.current)
             previewCloseTimerRef.current = null
@@ -588,9 +583,72 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
         previewCloseTimerRef.current = window.setTimeout(() => {
             previewCloseTimerRef.current = null
+            const nativeOverlayActive = isNativeOverlayActive()
+            if (!shouldCloseAssistantSidebarPreview({ previewPinned, pointerInside: previewPointerInsideRef.current, nativeOverlayActive })) {
+                previewCloseDeferredRef.current = nativeOverlayActive && !previewPointerInsideRef.current && !previewPinned
+                return
+            }
+            previewCloseDeferredRef.current = false
             setPreviewOpen(false)
         }, delayMs)
     }, [previewPinned])
+
+    const isPreviewTarget = useCallback((target: EventTarget | null) => {
+        const nodeType = previewEdgeRef.current?.ownerDocument.defaultView?.Node
+        return Boolean(nodeType && target instanceof nodeType
+            && (previewEdgeRef.current?.contains(target as Node) || sidebarSurfaceRef.current?.contains(target as Node)))
+    }, [])
+    const isPreviewWindowEdge = useCallback((point: { clientX: number; clientY: number }) => {
+        const edge = previewEdgeRef.current
+        const owner = edge?.ownerDocument.defaultView
+        return Boolean(edge && owner && isAssistantSidebarWindowEdgePoint({
+            ...point, edgeBounds: edge.getBoundingClientRect(), viewportWidth: owner.innerWidth
+        }))
+    }, [])
+    const handlePreviewMouseLeave = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+        if (!collapsed || !hoverPreviewEnabled) return
+        // Native border crossings have no DOM destination. Keep this seam and
+        // the bubble/trigger handoff in one logical hover region.
+        const nodeType = event.currentTarget.ownerDocument.defaultView?.Node
+        const nativeLeave = !nodeType || !(event.relatedTarget instanceof nodeType)
+        previewPointerInsideRef.current = isPreviewTarget(event.relatedTarget)
+            || (nativeLeave && isPreviewWindowEdge(event))
+        if (previewPointerInsideRef.current) openPreview()
+        else schedulePreviewClose()
+    }, [collapsed, hoverPreviewEnabled, isPreviewTarget, isPreviewWindowEdge, openPreview, schedulePreviewClose])
+
+    useEffect(() => {
+        if (!collapsed || !previewOpen || !hoverPreviewEnabled) return
+        const owner = previewEdgeRef.current?.ownerDocument
+        if (!owner) return
+        const handleMove = (event: MouseEvent) => {
+            if (!previewPointerInsideRef.current || isPreviewTarget(event.target) || isPreviewWindowEdge(event)) return
+            previewPointerInsideRef.current = false
+            schedulePreviewClose()
+        }
+        const handleBlur = () => { previewPointerInsideRef.current = false; schedulePreviewClose() }
+        owner.addEventListener('mousemove', handleMove)
+        owner.defaultView?.addEventListener('blur', handleBlur)
+        return () => {
+            owner.removeEventListener('mousemove', handleMove)
+            owner.defaultView?.removeEventListener('blur', handleBlur)
+        }
+    }, [collapsed, previewOpen, hoverPreviewEnabled, isPreviewTarget, isPreviewWindowEdge, schedulePreviewClose])
+
+    useEffect(() => {
+        if (nativeOverlayActive) {
+            if (previewCloseTimerRef.current !== null) {
+                window.clearTimeout(previewCloseTimerRef.current)
+                previewCloseTimerRef.current = null
+            }
+            previewCloseDeferredRef.current = !previewPointerInsideRef.current && !previewPinned
+            return
+        }
+        if (!previewCloseDeferredRef.current) return
+        previewCloseDeferredRef.current = false
+        if (!previewOpen || !collapsed || !hoverPreviewEnabled || previewPinned || previewPointerInsideRef.current) return
+        schedulePreviewClose()
+    }, [collapsed, hoverPreviewEnabled, nativeOverlayActive, previewOpen, previewPinned, schedulePreviewClose])
 
     useEffect(() => {
         if (hoverPreviewEnabled || previewPinned) return
@@ -753,9 +811,10 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         <>
             {collapsed && hoverPreviewEnabled && !loadingScreenActive ? (
                 <div
+                    ref={previewEdgeRef}
                     className="group/sidebar-peek pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-4"
-                    onMouseEnter={openPreview}
-                    onMouseLeave={() => schedulePreviewClose()}
+                    onMouseEnter={() => { previewPointerInsideRef.current = true; openPreview() }}
+                    onMouseLeave={handlePreviewMouseLeave}
                     aria-hidden="true"
                 >
                     <div
@@ -779,11 +838,10 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 <aside
                     ref={sidebarSurfaceRef}
                     onMouseEnter={() => {
+                        previewPointerInsideRef.current = true
                         if (collapsed && hoverPreviewEnabled) openPreview()
                     }}
-                    onMouseLeave={() => {
-                        if (collapsed && hoverPreviewEnabled) schedulePreviewClose()
-                    }}
+                    onMouseLeave={handlePreviewMouseLeave}
                     className={cn(
                         collapsed
                             ? 'zyra-sidebar-floating-surface absolute bottom-3 left-2 top-2 z-[60] h-auto overflow-hidden rounded-[22px] transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)]'
@@ -797,6 +855,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 {agentInboxEnabled ? (
                     <AssistantAgentInboxSidebar
                         sessions={sessions}
+                        pinnedSessionIds={pinnedSessionIds}
                         activeSessionId={activeSessionId}
                         activeThreadId={activeThreadId}
                         commandPending={commandPending}
@@ -1000,48 +1059,49 @@ function ChatDeleteConfirmModal(props: {
     return createPortal(
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/55 px-4 backdrop-blur-md animate-fadeIn" onClick={onCancel}>
             <div
-                className="w-full max-w-[380px] rounded-2xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-4 shadow-[0_22px_70px_rgba(0,0,0,0.32)]"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="chat-delete-title"
+                aria-describedby="chat-delete-description"
+                className="w-full max-w-[360px] rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-5 shadow-[0_22px_70px_rgba(0,0,0,0.32)]"
                 onClick={(event) => event.stopPropagation()}
             >
                 <div className="flex items-start gap-3">
-                    <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl border border-red-300/15 bg-red-500/[0.09] text-red-200">
-                        <Trash2 size={17} strokeWidth={1.8} />
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-red-500/[0.1] text-red-200">
+                        <Trash2 size={16} strokeWidth={1.8} />
                     </div>
                     <div className="min-w-0 flex-1">
-                        <div className="flex items-start gap-2">
-                            <div className="min-w-0 flex-1">
-                                <h2 className="text-[15px] font-semibold leading-5 text-sparkle-text">Delete this chat?</h2>
-                                <p className="mt-1 truncate text-[13px] text-sparkle-text-muted/75" title={title}>{title}</p>
-                            </div>
+                        <div className="flex items-center gap-2">
+                            <h2 id="chat-delete-title" className="min-w-0 flex-1 text-sm font-semibold leading-5 text-sparkle-text">Delete chat?</h2>
                             <button
                                 type="button"
                                 onClick={onCancel}
                                 disabled={deleting}
-                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-50"
-                                aria-label="Cancel delete"
+                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/50 disabled:pointer-events-none disabled:opacity-50"
+                                aria-label="Close dialog"
                             >
                                 <X size={15} />
                             </button>
                         </div>
-                        <p className="mt-3 text-[13px] leading-5 text-sparkle-text-secondary">
-                            This removes the chat and its thread history from Zyra. This cannot be undone.
-                        </p>
                     </div>
                 </div>
+                <p id="chat-delete-description" className="mt-4 break-words text-[13px] leading-5 text-sparkle-text-secondary">
+                    This permanently deletes <span className="font-medium text-sparkle-text">“{title}”</span> and its history.
+                </p>
                 <div className="mt-5 flex justify-end gap-2">
                     <button
                         type="button"
                         onClick={onCancel}
                         disabled={deleting}
-                        className="rounded-lg border border-[var(--surface-divider)] px-3 py-1.5 text-[13px] font-medium text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-50"
+                        className="h-8 rounded-lg border border-[var(--surface-divider)] px-3 text-[13px] font-medium text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/50 disabled:pointer-events-none disabled:opacity-50"
                     >
-                        Keep chat
+                        Cancel
                     </button>
                     <button
                         type="button"
                         onClick={onConfirm}
                         disabled={deleting}
-                        className="rounded-lg border border-red-300/15 bg-red-500/[0.13] px-3 py-1.5 text-[13px] font-semibold text-red-100 transition-colors hover:bg-red-500/[0.22] disabled:pointer-events-none disabled:opacity-70"
+                        className="h-8 rounded-lg border border-red-300/15 bg-red-500/[0.13] px-3 text-[13px] font-semibold text-red-100 transition-colors hover:bg-red-500/[0.22] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/50 disabled:pointer-events-none disabled:opacity-70"
                     >
                         {deleting ? 'Deleting...' : 'Delete chat'}
                     </button>
@@ -1151,6 +1211,7 @@ function ChatRow(props: {
                             <span>{statusPill.label}</span>
                         </span>
                     ) : null}
+                    <AssistantAgentPresenceIndicator thread={statusThread} compact />
                     {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
                     {mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} compact mobileDevices={mobileDevices} /> : null}
                     <span className="shrink-0 transition-opacity duration-150 ease-out group-hover:opacity-0 motion-reduce:transition-none">
@@ -1159,7 +1220,7 @@ function ChatRow(props: {
                         </span>
                     </span>
                 </span>
-                <div className="pointer-events-none absolute right-2.5 top-1/2 z-[1] -translate-y-1/2 opacity-0 transition-opacity duration-150 ease-out group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none">
+                <div className="pointer-events-none absolute right-2.5 top-1/2 z-[1] -translate-y-1/2 opacity-0 transition-opacity duration-150 ease-out group-hover:pointer-events-auto group-hover:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 motion-reduce:transition-none">
                     <span
                         className={cn(
                             'pointer-events-none absolute -inset-y-1 -left-4 -right-1 bg-gradient-to-r from-transparent',
@@ -1197,8 +1258,8 @@ function ChatRow(props: {
                                         : 'text-sparkle-text-muted/70 hover:bg-[var(--surface-hover)] hover:text-sparkle-text-secondary'
                                 )}
                             >
-                                <Bot size={12} className="shrink-0" />
                                 <span className="min-w-0 flex-1 truncate">{getThreadDisplayTitle(thread, index)}</span>
+                                <AssistantAgentPresenceIndicator thread={thread} compact />
                                 {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
                                 {mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} compact mobileDevices={mobileDevices} /> : null}
                             </button>
@@ -1220,39 +1281,5 @@ function NewProjectIcon() {
                 className="absolute -bottom-0.5 -right-0.5 rounded-[3px] bg-[var(--surface-sidebar)]"
             />
         </span>
-    )
-}
-
-function RailButton(props: {
-    icon: ReactNode
-    label: string
-    shortcut?: string
-    disabled?: boolean
-    onClick: () => void
-}) {
-    const { icon, label, shortcut, disabled = false, onClick } = props
-
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
-            className={cn(
-                'group flex h-7 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] leading-none transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',
-                disabled
-                    ? 'cursor-not-allowed text-sparkle-text-muted/45'
-                    : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
-            )}
-        >
-            <span className={cn('inline-flex h-4 w-4 shrink-0 items-center justify-center text-sparkle-text-secondary/70 transition-colors group-hover:text-sparkle-text', disabled && 'text-sparkle-text-muted/40')}>
-                {icon}
-            </span>
-            <span className="min-w-0 flex-1 truncate">{label}</span>
-            {shortcut ? (
-                <span className="pointer-events-none hidden shrink-0 rounded-md bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] leading-none text-sparkle-text-secondary/80 group-hover:inline-flex">
-                    {shortcut}
-                </span>
-            ) : null}
-        </button>
     )
 }

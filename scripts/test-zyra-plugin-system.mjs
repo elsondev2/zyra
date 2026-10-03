@@ -173,10 +173,13 @@ try {
   const repeatedInspection = await inspectZyraPluginPackage(pluginRoot, { expectedName: 'release-helper' })
   assert.equal(firstInspection.release.contentDigest, repeatedInspection.release.contentDigest, 'unchanged Plugin bytes have a deterministic digest')
   assert.equal(firstInspection.release.skills[0]?.name, 'release-check')
-  assert.equal(firstInspection.release.contributions.find((entry) => entry.kind === 'mcp')?.support, 'planned')
+  assert.equal(firstInspection.release.contributions.find((entry) => entry.kind === 'mcp')?.support, 'supported')
   assert.equal(firstInspection.release.contributions.find((entry) => entry.kind === 'apps')?.support, 'planned')
   assert.equal(firstInspection.release.containsExecutableFiles, true, 'bundled helper scripts are visible in install review')
   assert.equal(existsSync(executionMarker), false, 'inspection never executes bundled scripts')
+  await writeFile(path.join(pluginRoot, '.mcp.json'), '{"mcpServers":{"bad":{"url":"file:///secret"}}}\n')
+  await expectPluginError(() => inspectZyraPluginPackage(pluginRoot), 'PLUGIN_MCP_CONFIG_INVALID')
+  await writeFile(path.join(pluginRoot, '.mcp.json'), '{}\n')
 
   const duplicateRoot = path.join(fixture, 'duplicate-skills')
   await mkdir(path.join(duplicateRoot, '.codex-plugin'), { recursive: true })
@@ -242,6 +245,8 @@ try {
   assert.equal(chatA.plugins[0]?.version, '1.0.0')
   assert.equal((await registry.createChatScope({ sessionId: 'chat-a', projectId: 'project-one' })).scopeRevision, 1, 'creating an existing Chat scope never refreshes it')
   assert.equal((await registry.getChatSkillSources('chat-a')).length, 1)
+  assert.equal(chatA.plugins[0]?.mcpPath, './.mcp.json', 'new Chat scopes pin the MCP contribution path')
+  assert.equal((await registry.getChatMcpSources('chat-a'))[0]?.servers.length, 0, 'MCP sources are resolved from the pinned package')
 
   await writePlugin({ version: '1.1.0', skillBody: 'Inspect the newer release and report its exact digest.' })
   const secondInspection = await inspectZyraPluginPackage(pluginRoot)
@@ -316,10 +321,16 @@ try {
   await writeFile(installedSkillFile, originalInstalledSkill)
   assert.equal((await registry.getChatSkillSources('chat-c')).length, 1, 'restoring exact bytes restores the digest check')
 
+  assert.deepEqual((await registry.getCatalog()).appViews, { enabled: false, displayMode: 'manual', pluginIds: [] }, 'app views stay off for existing installations')
+  await registry.setAppViewSettings({ enabled: true, displayMode: 'automatic' })
+  await registry.setAppViewSettings({ pluginId, enabled: true })
+  await expectPluginError(() => registry.setAppViewSettings({ pluginId: 'missing-plugin', enabled: true }), 'PLUGIN_NOT_FOUND')
+
   const reopened = new ZyraPluginRegistry({ rootPath: devRoot, now })
   const reopenedCatalog = await reopened.getCatalog()
   assert.equal(reopenedCatalog.plugins.length, 1)
   assert.equal(reopenedCatalog.releases.length, 2)
+  assert.deepEqual(reopenedCatalog.appViews, { enabled: true, displayMode: 'automatic', pluginIds: [pluginId] }, 'app view choices survive restart')
   assert.equal((await reopened.getChatScope('chat-a'))?.plugins[0]?.version, '1.1.0')
   assert.deepEqual(await readdir(path.join(devRoot, 'staging')), [], 'staging directories are empty after success and failure')
 

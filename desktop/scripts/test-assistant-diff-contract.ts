@@ -22,7 +22,6 @@ import {
 import {
     activateAssistantBrowserTab,
     addAssistantBrowserTab,
-    ASSISTANT_BROWSER_TAB_LIMIT,
     closeAssistantBrowserTab,
     createAssistantBrowserWorkspaceState,
     normalizeAssistantBrowserFaviconUrl,
@@ -78,10 +77,10 @@ assert.equal(
     'compact Review rows project Markdown into a clean semantic excerpt instead of leaking syntax markers'
 )
 let browserWorkspaceState = createAssistantBrowserWorkspaceState('browser:0')
-for (let index = 1; index <= ASSISTANT_BROWSER_TAB_LIMIT; index += 1) {
+for (let index = 1; index <= 16; index += 1) {
     browserWorkspaceState = addAssistantBrowserTab(browserWorkspaceState, `browser:${index}`)
 }
-assert.equal(browserWorkspaceState.tabs.length, ASSISTANT_BROWSER_TAB_LIMIT, 'browser workspaces enforce the tested tab limit')
+assert.equal(browserWorkspaceState.tabs.length, 17, 'browser workspaces can hold more than the old eight-tab ceiling')
 const activeBrowserTabId = browserWorkspaceState.activeTabId
 browserWorkspaceState = closeAssistantBrowserTab(browserWorkspaceState, activeBrowserTabId, 'browser:replacement')
 assert.equal(browserWorkspaceState.tabs.some((tab) => tab.id === activeBrowserTabId), false, 'closed browser tabs release their persisted metadata')
@@ -733,19 +732,17 @@ assert.equal(terminalWorkspaceSource.includes("createTerminal('split', 'vertical
 assert.equal(terminalWorkspaceSource.includes('clearPreviewTerminal'), true, 'Clear removes retained output as well as visible xterm rows')
 assert.equal(terminalWorkspaceSource.includes('restartTerminal'), true, 'exited or broken sessions can restart in place')
 assert.equal(terminalWorkspaceSource.includes('persistAssistantTerminalWorkspaceState'), true, 'per-chat groups and active terminal survive workspace remounts')
-assert.equal(terminalWorkspaceSource.includes('data-terminal-session-group'), true, 'each split layout has a distinct visual group in the Sessions rail')
-assert.equal(terminalWorkspaceSource.includes('data-terminal-group-connector'), true, 'terminals shown together share the requested bracket connector')
-assert.equal(terminalWorkspaceSource.includes('data-terminal-group-branch'), true, 'each terminal entry visibly joins its group bracket')
-assert.equal(terminalWorkspaceSource.includes('rounded-r-[7px]'), false, 'the grouped terminal bracket uses sharp terminal-panel corners')
-assert.equal(terminalWorkspaceSource.includes("'pointer-events-none absolute bottom-3 right-0 top-3 w-px'"), true, 'the group uses one crisp vertical spine rather than overlapping borders')
-assert.equal(terminalWorkspaceSource.includes("'pointer-events-none absolute -right-3 top-1/2 h-px w-3'"), true, 'each entry meets the spine at one square ninety-degree join')
-assert.equal(terminalWorkspaceSource.includes('group/session relative mb-1 flex min-h-6 items-center gap-1 rounded-lg'), false, 'grouped terminal entries remain sharp-cornered')
-assert.equal(terminalWorkspaceSource.includes("group.splitDirection === 'vertical'"), true, 'the grouped rail identifies horizontal and vertical split orientation')
-assert.equal(terminalWorkspaceSource.includes('No project attached'), true, 'projectless chats get an honest empty Terminal state')
+assert.equal(terminalWorkspaceSource.includes('data-terminal-session-group'), false, 'the session sidebar has no group headings')
+assert.equal(terminalWorkspaceSource.includes('groupSessions.map'), true, 'the sidebar lists sessions without group headings')
+assert.equal(terminalWorkspaceSource.includes('data-terminal-connector'), true, 'split sessions retain a visible connector between status dots')
+assert.equal(terminalWorkspaceSource.includes('<TerminalNewSessionMenu'), true, 'new-session options contain the shell and folder choices')
+assert.equal(terminalWorkspaceSource.includes('targetPath: session.cwd'), true, 'restart keeps each session directory')
+assert.equal(terminalWorkspaceSource.includes('No project attached'), false, 'projectless chats can start in the user home')
 assert.equal(terminalViewportSource.includes('loadPreviewTerminalRuntime'), true, 'Inspector and preview terminals share one lazy xterm runtime')
 assert.equal(terminalViewportSource.includes('ResizeObserver'), true, 'each visible terminal fits and resizes its PTY from real pane geometry')
-assert.equal(terminalViewportSource.includes("event.code === 'Backquote'"), true, 'focused terminal supports the New Terminal shortcut')
-assert.equal(terminalViewportSource.includes("event.code === 'Digit5'"), true, 'focused terminal supports split shortcuts')
+assert.equal(terminalViewportSource.includes("command === 'terminal.new'"), true, 'focused terminal supports the configured New Terminal shortcut')
+assert.equal(terminalViewportSource.includes("command === 'terminal.splitHorizontal'"), true, 'focused terminal supports configured split shortcuts')
+assert.equal(terminalViewportSource.includes('if (!activeRef.current || !visibleRef.current) return'), true, 'inactive terminals cannot receive input')
 assert.equal(terminalRuntimeSource.includes("import('xterm')"), true, 'xterm remains outside the initial Inspector bundle')
 assert.equal(previewTerminalHandlerSource.includes("type: 'clear'"), true, 'main process broadcasts durable buffer clears to every mounted terminal surface')
 assert.equal(previewTerminalHandlerSource.includes('previewTerminalSessions.get(sessionKey) !== session'), true, 'late events from a restarted or closed PTY cannot affect its replacement')
@@ -1051,7 +1048,7 @@ assert.equal(inspectorSource.includes('truncate text-left'), true, 'Inspector tu
 assert.equal(turnReviewSource.includes('displayedSelectedDiff.provisional'), false, 'first-row actions contain only edit identity, copy, and view mode controls')
 assert.equal(turnReviewSource.includes('headerMetadata={renderDiffHeaderActions()}'), true, 'selected-file actions render inside the rich diff header')
 assert.equal(turnReviewSource.includes('headerPrefix={selectedFileStatus'), true, 'file status renders at the start of the rich diff header')
-assert.equal(patchDiffViewerSource.includes('renderHeaderMetadata={headerMetadata'), true, 'the shared viewer forwards embedded header actions through Pierre slots')
+assert.equal(patchDiffViewerSource.includes('renderHeaderMetadata={headerMetadata'), true, 'the shared viewer forwards embedded header actions through Zyraerre slots')
 assert.equal(patchDiffViewerSource.includes("border-radius: ${flush ? '0' : '16px'}"), true, 'flush mode removes the rich renderer corner radius without changing other diff surfaces')
 assert.equal(patchDiffViewerSource.includes('[data-diffs-header] [data-change-icon]'), true, 'flush review diffs hide Pierre’s redundant change icon')
 assert.equal(rawPatchFallbackSource.includes("flush ? 'rounded-none"), true, 'raw fallback diffs also remove embedded corner rounding')

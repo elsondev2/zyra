@@ -563,20 +563,23 @@ class MobileSession(private val app: ZyraApplication) : AutoCloseable {
     }
     fun consumeNewChatAction() { mutable.update { it.copy(newChatAction = null) } }
     /** Draft selection is local. Allocate a canonical chat only for Send or a session tool. */
-    fun createFromDraft(machineId: String, project: String, draft: String, action: String): Boolean {
+    fun createFromDraft(machineId: String, project: String, draft: String, action: String, runtimeMode: String? = null): Boolean {
+        if (runtimeMode != null && runtimeMode !in setOf("approval-required", "auto-review", "edits-only", "full-access")) {
+            error(IllegalArgumentException("Choose a valid permission mode.")); return false
+        }
         if (mutable.value.page == "chat" && mutable.value.busy) return false
         if (action == "send" && draft.isBlank()) return false
         val machine = machinesFor(machineId) ?: return false
         if (pool.links.value[machineId]?.connection == null) { error(IllegalStateException("Reconnect to ${machine.name} to start a chat.")); return false }
         if (project !in mutable.value.machineProjects[machineId].orEmpty()) { error(IllegalStateException("Choose an available project on ${machine.name}.")); return false }
         if (mutable.value.machine?.id != machineId) connect(machine)
-        val intent = listOf(machineId, project, draft.take(60000))
+        val intent = listOf(machineId, project, draft.take(60000), runtimeMode.orEmpty())
         val creation = pendingCreation?.takeIf { it.first == intent }?.second ?: UUID.randomUUID().toString()
         pendingCreation = intent to creation
-        startOpen(null, "New chat", project, initialDraft = draft.take(60000), entryAction = action, creationId = creation)
+        startOpen(null, "New chat", project, initialDraft = draft.take(60000), entryAction = action, creationId = creation, initialRuntimeMode = runtimeMode)
         return true
     }
-    private fun startOpen(id: String?, title: String, project: String?, navigate: Boolean = true, initialDraft: String? = null, entryAction: String? = null, creationId: String? = null) {
+    private fun startOpen(id: String?, title: String, project: String?, navigate: Boolean = true, initialDraft: String? = null, entryAction: String? = null, creationId: String? = null, initialRuntimeMode: String? = null) {
         modelPicker.close()
         if (navigate) pluginDetails.close() else pluginDetails.disconnect()
         if (navigate) pluginStore.close() else pluginStore.disconnect()
@@ -592,11 +595,11 @@ class MobileSession(private val app: ZyraApplication) : AutoCloseable {
         previous.machine?.let { rememberView(it.id, previous.session) }
         val warm = recentViews["${previous.machine?.id}:$id"]
         mutable.update { it.copy(page = if (navigate) "chat" else it.page, navigationBack = if (navigate) false else it.navigationBack, title = title, activeProject = project ?: if (previous.session.id == id) previous.activeProject else "", busy = true, error = null,
-            session = warm ?: SessionView(id.orEmpty()), draft = initialDraft ?: if (previous.session.id == id) previous.draft else "", pendingSends = emptyList(), newChatAction = null) }
+            session = warm ?: SessionView(id.orEmpty(), config = ChatConfiguration(runtimeMode = initialRuntimeMode.orEmpty())), draft = initialDraft ?: if (previous.session.id == id) previous.draft else "", pendingSends = emptyList(), newChatAction = null) }
         val openingNavigation = navigation
         val openingMachine = mutable.value.machine?.id
         openJob = scope.launch {
-            openSession(id, project, previous, warm, initialDraft, creationId)
+            openSession(id, project, previous, warm, initialDraft, creationId, initialRuntimeMode)
             // Opening the local attachment store is asynchronous, even for a new empty chat.
             // Do not lose the first Send because that store is still restoring.
             if (entryAction == "send" && withTimeoutOrNull(15000L) { attachments.state.first { !it.preparing && !it.uploading } } == null) return@launch
@@ -608,7 +611,7 @@ class MobileSession(private val app: ZyraApplication) : AutoCloseable {
             }
         }
     }
-    private suspend fun openSession(id: String?, project: String?, previousState: MobileState, warm: SessionView?, initialDraft: String? = null, creationId: String? = null) {
+    private suspend fun openSession(id: String?, project: String?, previousState: MobileState, warm: SessionView?, initialDraft: String? = null, creationId: String? = null, initialRuntimeMode: String? = null) {
         val draftHydration = DraftHydration(draftRevision)
         val connection = host
         media.close()
@@ -624,12 +627,16 @@ class MobileSession(private val app: ZyraApplication) : AutoCloseable {
             val cached = warm ?: id?.let { withContext(Dispatchers.IO) { cache.get("session:$machineId:$it") } }?.let { runCatching { TimelineReducer.decode(it) }.getOrNull() }
             val savedDraft = initialDraft ?: if (previous == id) previousDraft else id?.let { withContext(Dispatchers.IO) { cache.get("draft:$machineId:$it") } }.orEmpty()
             if (epoch != navigation || mutable.value.machine?.id != machineId) return
-            mutable.update { it.copy(session = cached ?: SessionView(id.orEmpty()), draft = draftHydration.restore(draftRevision, it.draft, savedDraft), pendingSends = emptyList()) }
+            mutable.update { it.copy(session = cached ?: SessionView(id.orEmpty(), config = ChatConfiguration(runtimeMode = initialRuntimeMode.orEmpty())), draft = draftHydration.restore(draftRevision, it.draft, savedDraft), pendingSends = emptyList()) }
             attachments.open(machineId, id.orEmpty(), null)
             if (id != null) reloadOutbox(machineId, id)
             if (connection == null || mutable.value.connection != ConnectionState.Connected) return
             val params = JSONObject().put("localThreadId", creationId ?: UUID.randomUUID().toString()).put("lastSequence", cached?.sequence ?: 0)
-            if (id != null) params.put("session", id) else params.put("project", project)
+            if (id != null) params.put("session", id) else {
+                params.put("project", project)
+                // Apply draft permissions at creation, before the first send or session tool.
+                initialRuntimeMode?.let { params.put("runtimeMode", it) }
+            }
             // Reveal persisted history while Desktop prepares the live runtime.
             // The attachment snapshot still gates sends and reconciles live events.
             val (attached, history) = dev.zyra.mobile.network.SessionHydration.load(id, params, cached?.items.isNullOrEmpty(),
@@ -745,7 +752,7 @@ class MobileSession(private val app: ZyraApplication) : AutoCloseable {
         val current = mutable.value
         val text = current.draft.trim()
         if (current.session.id.isBlank() && !current.busy && current.page == "chat") {
-            current.machine?.id?.let { createFromDraft(it, current.activeProject, current.draft, "send") }
+            current.machine?.id?.let { createFromDraft(it, current.activeProject, current.draft, "send", runtimeMode = current.session.config.runtimeMode.takeIf(String::isNotBlank)) }
             return
         }
         if (voice.state.value.inCall) {

@@ -1,4 +1,5 @@
 import type { AssistantTextUpdate } from '../stream-text-update'
+import type { AssistantInterruption } from '../interruption'
 export type AssistantRuntimeMode = 'approval-required' | 'auto-review' | 'edits-only' | 'full-access'
 
 export function isAssistantRuntimeMode(value: unknown): value is AssistantRuntimeMode {
@@ -29,6 +30,8 @@ export type AssistantContentStreamKind =
     | 'file_change_output'
 
 export interface AssistantTurnUsage {
+    /** Provider responses accumulated in this turn; thresholds apply per response. */
+    responseCount?: number
     /** Whether inputTokens already includes cache reads (legacy Codex). */
     inputIncludesCachedTokens?: boolean
     inputTokens?: number | null
@@ -40,6 +43,9 @@ export interface AssistantTurnUsage {
     modelContextWindow?: number | null
     /** Cost attributed to this Desktop turn. */
     costUsd?: number | null
+    costSource?: 'api-equivalent' | 'unpriced' | 'reported'
+    pricingFetchedAt?: string
+    pricingServiceTier?: string
     /** Cumulative model cost recorded for the canonical thread at turn completion. */
     sessionCostUsd?: number | null
     /** True only when every metered provider response was represented in sessionCostUsd. */
@@ -169,6 +175,7 @@ export type AssistantRuntimeEvent =
         type: 'turn.completed'
         payload: {
             outcome: AssistantTurnOutcome
+            interruption?: AssistantInterruption
             errorMessage?: string
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast' | 'flex'

@@ -23,7 +23,9 @@ mock.module('electron', () => ({
     },
     nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
     webContents: { fromId: () => null },
-    safeStorage: { isEncryptionAvailable: () => false }
+    safeStorage: { isEncryptionAvailable: () => false },
+    shell: { openExternal: electronNoop, openPath: async () => '' },
+    globalShortcut: { register: () => true, unregisterAll: electronNoop }
 }))
 
 const canonicalChatId = 'canonical-review-chat'
@@ -105,8 +107,8 @@ const secondTurn = [
 
 let timelineVersion = 0
 const historyRequests: Array<{ before: string | null; version: number }> = []
-const { ZyraPiRuntime } = await import('../src/main/assistant/zyra-pi-runtime')
-ZyraPiRuntime.prototype.listCanonicalChats = async () => [{
+const { ZyraRuntime } = await import('../src/main/assistant/zyra-runtime')
+ZyraRuntime.prototype.listCanonicalChats = async () => [{
     version: 1,
     canonicalChatId,
     sessionPath: 'C:/fixture/.zyra/sessions/canonical-review.jsonl',
@@ -123,7 +125,7 @@ ZyraPiRuntime.prototype.listCanonicalChats = async () => [{
     entryCount: timelineVersion === 0 ? 4 : 6,
     archived: false
 }]
-ZyraPiRuntime.prototype.readCanonicalChatHistory = async (_session, _project, options = {}) => {
+ZyraRuntime.prototype.readCanonicalChatHistory = async (_session, _project, options = {}) => {
     const before = options.before || null
     historyRequests.push({ before, version: timelineVersion })
     if (timelineVersion === 1) {
@@ -175,14 +177,14 @@ ZyraPiRuntime.prototype.readCanonicalChatHistory = async (_session, _project, op
             : { startCursor: '2', endCursor: '4', oldestCursor: '2', hasOlder: true, totalEntries: 4 }
     }
 }
-ZyraPiRuntime.prototype.prewarm = async () => []
+ZyraRuntime.prototype.prewarm = async () => []
 let historyBodyReads = 0
 const toolOutputSearches: string[] = []
-ZyraPiRuntime.prototype.searchCanonicalToolOutputs = async (_session, _project, query) => {
+ZyraRuntime.prototype.searchCanonicalToolOutputs = async (_session, _project, query) => {
     toolOutputSearches.push(query)
     return query === 'provider-only-output' ? [{ toolCallId: 'review-edit-call' }] : []
 }
-ZyraPiRuntime.prototype.readCanonicalHistoryEntryBody = async (_session, _project, ref) => {
+ZyraRuntime.prototype.readCanonicalHistoryEntryBody = async (_session, _project, ref) => {
     historyBodyReads += 1
     const isEdit = ref.entryId === 'entry:deferred-edit-result'
     const isReviewEdit = ref.entryId === 'entry:review-edit-result'
@@ -219,6 +221,17 @@ ZyraPiRuntime.prototype.readCanonicalHistoryEntryBody = async (_session, _projec
 }
 
 const { AssistantService, projectCanonicalTimeline, reconcileCanonicalFileChangeActivity } = await import('../src/main/assistant/service')
+const oldDelegation = 'Delegated goal: Inspect the sidebar.\n\nKeep its animations.\n\nRead scope:\n- desktop\n\nAttempt: 1 (11111111-1111-1111-1111-111111111111)\n\nReturn only the bounded work result and evidence. Parent policy remains authoritative.'
+const delegationEntry = { type: 'message', id: 'delegated-task', timestamp: canonicalCreatedAt, message: { role: 'user', content: [{ type: 'text', text: oldDelegation }] } }
+const legacyDelegation = projectCanonicalTimeline([delegationEntry], 'child', 'child', canonicalCreatedAt, 0, 'C:/fixture', 'parent')
+assert.equal(legacyDelegation.messages.length, 0, 'Legacy delegation is agent context rather than a user bubble')
+assert.equal(legacyDelegation.activities[0]?.detail, 'Inspect the sidebar.\n\nKeep its animations.', 'Multi-paragraph goals stay intact without internal envelope fields')
+assert(legacyDelegation.legacyMessageIds.length > 0, 'Existing raw projection is replaced rather than duplicated')
+assert.equal(projectCanonicalTimeline([delegationEntry], 'root', 'root', canonicalCreatedAt, 0).messages.length, 1, 'A user quoting an envelope in an ordinary chat keeps their message')
+const newDelegation = projectCanonicalTimeline([{ type: 'custom_message', id: 'task', customType: 'zyra_thread_message', timestamp: canonicalCreatedAt,
+    details: { messageId: 'task', senderThreadId: 'parent', recipientThreadId: 'child', senderLabel: 'Xara', text: 'Inspect the sidebar.', origin: 'delegation' } }], 'child', 'child', canonicalCreatedAt, 0)
+assert.equal(newDelegation.messages.length, 0)
+assert.equal(newDelegation.activities[0]?.payload?.senderLabel, 'Xara')
 const reconciledCanonicalActivity = reconcileCanonicalFileChangeActivity({
     id: 'zyra-tool-review-edit-call',
     kind: 'file-change',

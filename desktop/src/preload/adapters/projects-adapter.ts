@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import { BROWSER_EXTENSIONS_IPC } from '../../shared/browser-extensions'
 import type {
     DevScopeBrowserAdDetection,
     DevScopeBrowserAnnotationInput,
@@ -51,6 +52,7 @@ export function createProjectsAdapter() {
         listInstalledPackageRuntimes: () => ipcRenderer.invoke('devscope:listInstalledPackageRuntimes'),
         scanProjects: (folderPath: string, options?: { forceRefresh?: boolean }) =>
             ipcRenderer.invoke('devscope:scanProjects', folderPath, options),
+        discoverLocalGitHubProjects: (paths: string[]) => ipcRenderer.invoke('devscope:discoverLocalGitHubProjects', paths),
         openInExplorer: (path: string) => ipcRenderer.invoke('devscope:openInExplorer', path),
         openInTerminal: (path: string, preferredShell: 'powershell' | 'cmd' = 'powershell', initialCommand?: string) =>
             ipcRenderer.invoke('devscope:openInTerminal', path, preferredShell, initialCommand),
@@ -87,7 +89,7 @@ export function createProjectsAdapter() {
         ) => ipcRenderer.invoke('devscope:getWorkingDiff', projectPath, filePath, mode),
         getWorkingChangesForAI: (projectPath: string) => ipcRenderer.invoke('devscope:getWorkingChangesForAI', projectPath),
         getGitStatus: (projectPath: string) => ipcRenderer.invoke('devscope:getGitStatus', projectPath),
-        getGitStatusDetailed: (projectPath: string, options?: { includeStats?: boolean }) =>
+        getGitStatusDetailed: (projectPath: string, options?: { includeStats?: boolean; includeIgnored?: boolean }) =>
             ipcRenderer.invoke('devscope:getGitStatusDetailed', projectPath, options),
         getGitStatusEntryStats: (projectPath: string, filePaths: string[]) =>
             ipcRenderer.invoke('devscope:getGitStatusEntryStats', projectPath, filePaths),
@@ -262,6 +264,14 @@ export function createProjectsAdapter() {
         },
         getBrowserPreviewConfig: () =>
             ipcRenderer.invoke('devscope:browserPreview:getConfig'),
+        listBrowserExtensions: () => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.list),
+        installBrowserExtension: () => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.install),
+        inspectBrowserExtensionFromWebStore: (urlOrId: string) => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.inspectWebStore, { urlOrId }),
+        approveBrowserExtensionFromWebStore: (id: string) => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.approveWebStore, id),
+        discardBrowserExtensionFromWebStore: (id: string) => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.discardWebStore, id),
+        setBrowserExtensionEnabled: (input: { id: string; enabled: boolean }) => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.setEnabled, input),
+        removeBrowserExtension: (id: string) => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.remove, id),
+        reloadBrowserExtension: (id: string) => ipcRenderer.invoke(BROWSER_EXTENSIONS_IPC.reload, id),
         getBrowserPageIcon: (pageUrl: string) => ipcRenderer.invoke(BROWSER_PAGE_ICON_CHANNEL, pageUrl),
         listBrowserDownloads: () => ipcRenderer.invoke(BROWSER_DOWNLOADS_LIST_CHANNEL),
         actOnBrowserDownload: (action: BrowserDownloadAction) => ipcRenderer.invoke(BROWSER_DOWNLOADS_ACTION_CHANNEL, action),
@@ -275,6 +285,9 @@ export function createProjectsAdapter() {
         },
         getBrowserHistory: (input?: { query?: string; limit?: number }) =>
             ipcRenderer.invoke('devscope:browserPreview:getHistory', input),
+        getBrowserBookmarks: () => ipcRenderer.invoke('devscope:browserPreview:getBookmarks'),
+        saveBrowserBookmark: (input: { url: string; title?: string | null; faviconUrl?: string | null }) => ipcRenderer.invoke('devscope:browserPreview:saveBookmark', input),
+        removeBrowserBookmark: (url: string) => ipcRenderer.invoke('devscope:browserPreview:removeBookmark', url),
         getBrowserSearchSuggestions: (input: { query: string }) =>
             ipcRenderer.invoke('devscope:browserPreview:getSearchSuggestions', input),
         scanExternalBrowserHistoryProfiles: () =>
@@ -335,7 +348,7 @@ export function createProjectsAdapter() {
             ipcRenderer.invoke('devscope:browserPreview:setZoom', input),
         setBrowserPreviewColorScheme: (input: DevScopeBrowserGuestTargetInput & { colorScheme: 'system' | 'light' | 'dark' }) =>
             ipcRenderer.invoke('devscope:browserPreview:setColorScheme', input),
-        openBrowserPreviewDevTools: (input: DevScopeBrowserGuestTargetInput) =>
+        openBrowserPreviewDevTools: (input: DevScopeBrowserGuestTargetInput & { mode?: 'docked' | 'popout' }) =>
             ipcRenderer.invoke('devscope:browserPreview:openDevTools', input),
         captureBrowserPreviewScreenshot: (input: DevScopeBrowserGuestTargetInput) =>
             ipcRenderer.invoke('devscope:browserPreview:captureScreenshot', input),

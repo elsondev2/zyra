@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { installKeybindingBridge } from './keybindings'
 import { createBrowserPopupAdapter } from './adapters/browser-popup-adapter'
 import { createWindowAdapter } from './adapters/window-adapter'
 import {
@@ -12,6 +13,7 @@ const unavailable = () => Promise.resolve({
 })
 
 export function installBrowserPopupPreload(): void {
+    installKeybindingBridge()
     // Popup chrome is trusted local UI, but it receives only window controls,
     // popup navigation, main-owned Browser download controls, and read-only appearance preferences. The remote website
     // runs in a separate sandboxed WebContentsView with no preload at all.

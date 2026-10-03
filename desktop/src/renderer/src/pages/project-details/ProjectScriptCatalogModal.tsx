@@ -1,6 +1,6 @@
 import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
-import { useMemo } from 'react'
-import { Command, Play, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Command, Play, Search, X } from 'lucide-react'
 
 type ProjectScriptCatalogModalProps = {
     projectName?: string
@@ -17,9 +17,10 @@ export function ProjectScriptCatalogModal({
     onRunScript,
     onClose
 }: ProjectScriptCatalogModalProps) {
+    const [query, setQuery] = useState('')
     const entries = useMemo(
-        () => Object.entries(scripts || {}).sort(([left], [right]) => left.localeCompare(right)),
-        [scripts]
+        () => Object.entries(scripts || {}).filter(([name, command]) => `${name} ${command}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).sort(([left], [right]) => left.localeCompare(right)),
+        [scripts, query]
     )
 
     return (
@@ -48,6 +49,7 @@ export function ProjectScriptCatalogModal({
                     </button>
                 </div>
 
+                <div className="relative border-b border-white/5 px-4 py-3"><Search size={15} className="pointer-events-none absolute left-7 top-1/2 -translate-y-1/2 text-white/35" /><input type="search" aria-label="Search scripts" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search scripts or commands" className="w-full rounded-md border border-white/10 bg-black/10 py-2 pl-9 pr-3 text-sm text-white/85 outline-none focus:border-[var(--accent-primary)]" /></div>
                 <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-3">
                     {entries.length > 0 ? (
                         <div className="space-y-2">
@@ -87,7 +89,7 @@ export function ProjectScriptCatalogModal({
                     ) : (
                         <div className="flex h-full flex-col items-center justify-center text-white/30">
                             <Command size={42} className="mb-4 opacity-25" />
-                            <p className="text-sm">No scripts found</p>
+                            <p className="text-sm">{query ? 'No matching scripts' : 'No scripts found'}</p>
                         </div>
                     )}
                 </div>

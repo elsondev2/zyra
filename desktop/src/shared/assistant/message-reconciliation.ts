@@ -1,4 +1,5 @@
 import type { AssistantMessage } from './contracts'
+import { normalizeAssistantMessageReferenceId } from './message-identity'
 import {
     isSerializedClipboardAttachment,
     parseSerializedAssistantMessage,
@@ -9,7 +10,9 @@ const USER_REPLAY_WINDOW_MS = 5 * 60_000
 const ASSISTANT_REPLAY_WINDOW_MS = 10 * 60_000
 
 function isCanonicalProjectedMessage(message: AssistantMessage): boolean {
-    return !message.id.startsWith('assistant-message-') || message.id.includes('pi-message:')
+    return !message.id.startsWith('assistant-message-')
+        || message.id.includes('pi-message:')
+        || message.id.includes('zyra-message:')
 }
 
 function replayWindowMs(role: AssistantMessage['role']): number {
@@ -75,7 +78,18 @@ function messageReplayTextIdentity(text: string): string {
 export function findAssistantMessageReplayDuplicateIds(messages: AssistantMessage[]): string[] {
     const canonicalMessages = messages.filter(isCanonicalProjectedMessage)
     const textIdentityById = new Map(messages.map((message) => [message.id, messageReplayTextIdentity(message.text)]))
-    return messages.flatMap((message) => {
+    const currentCanonicalById = new Map(canonicalMessages.map((message) => [message.id, message]))
+    const legacyCanonicalAliases = canonicalMessages.flatMap((message) => {
+        const currentId = normalizeAssistantMessageReferenceId(message.id)!
+        if (currentId === message.id) return []
+        const current = currentCanonicalById.get(currentId)
+        return current
+            && current.role === message.role
+            && (message.role === 'assistant'
+                || textIdentityById.get(current.id)?.trim() === textIdentityById.get(message.id)?.trim())
+            ? [message.id] : []
+    })
+    return [...legacyCanonicalAliases, ...messages.flatMap((message) => {
         if (isCanonicalProjectedMessage(message)) return []
         const createdAt = Date.parse(message.createdAt)
         if (!Number.isFinite(createdAt)) return []
@@ -104,7 +118,7 @@ export function findAssistantMessageReplayDuplicateIds(messages: AssistantMessag
                 || left.id.localeCompare(right.id)
             ))[0]
         return duplicate ? [message.id] : []
-    })
+    })]
 }
 
 export function reconcileAssistantMessageReplays(messages: AssistantMessage[]): AssistantMessage[] {

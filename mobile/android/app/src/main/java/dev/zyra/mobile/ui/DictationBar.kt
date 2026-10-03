@@ -28,7 +28,7 @@ data class DictationActions(val finish: () -> Unit = {}, val retry: () -> Unit =
                     val level by animateFloatAsState((state.levels.getOrNull(index) ?: 0f).coerceIn(0f, 1f), tween(if (LocalReduceMotion.current) 0 else 160), label = "Dictation level $index")
                     level
                 }
-                Canvas(Modifier.weight(1f).height(24.dp).padding(horizontal = 12.dp)) {
+                Canvas(Modifier.weight(1f).height(32.dp).padding(horizontal = 12.dp)) {
                     // Desktop recorder uses fine 2px strokes separated by 2px.
                     // Interpolate actual measured history across the available width.
                     val step = 4.dp.toPx()
@@ -37,8 +37,9 @@ data class DictationActions(val finish: () -> Unit = {}, val retry: () -> Unit =
                         val sample = i.toFloat() / (count - 1).coerceAtLeast(1) * levels.lastIndex
                         val a = sample.toInt(); val b = (a + 1).coerceAtMost(levels.lastIndex)
                         val level = levels[a] + (levels[b] - levels[a]) * (sample - a)
-                        val height = 2.dp.toPx() + level * 16.dp.toPx()
-                        drawRoundRect(color, Offset(i * step, (size.height - height) / 2), Size(2.dp.toPx(), height), CornerRadius(1.dp.toPx()))
+                        val contrast = level.coerceIn(0f, 1f).let { kotlin.math.sqrt(it) }
+                        val height = 3.dp.toPx() + contrast * 24.dp.toPx()
+                        drawRoundRect(color, Offset(i * step, (size.height - height) / 2), Size(2.25.dp.toPx(), height), CornerRadius(1.125.dp.toPx()))
                     }
                 }
                 FilledIconButton(actions.finish, Modifier.size(44.dp)) { AppIcon(R.drawable.ic_check, "Use dictation", Modifier.size(20.dp)) }

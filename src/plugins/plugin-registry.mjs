@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { mergeZyraPluginConnectionSources, parsePinnedZyraPluginConnectionConfig } from './plugin-connection-sources.mjs'
 import {
   ZYRA_PLUGIN_LIMITS,
   ZyraPluginValidationError,
@@ -93,8 +94,8 @@ function sameStrings(left, right) {
 }
 
 function assertSupportedSkillRelease(release) {
-  if (!release?.skills.length || !release.manifest.contributions.skills) {
-    fail('PLUGIN_NO_SUPPORTED_SKILLS', 'This Plugin has no usable Skills.')
+  if (!(release?.skills.length && release.manifest.contributions.skills) && !release?.manifest.contributions.mcp) {
+    fail('PLUGIN_NO_SUPPORTED_SKILLS', 'This Plugin has no usable Skills or MCP servers.')
   }
 }
 
@@ -112,6 +113,9 @@ function releaseSnapshot(plugin, release) {
     version: release.version,
     contentDigest: release.contentDigest,
     skillsPath: release.manifest.contributions.skills,
+    mcpPath: release.manifest.contributions.mcp,
+    ...(release.appMcpPath !== undefined ? { appMcpPath: release.appMcpPath } : {}),
+    ...(release.mcpServerPins !== undefined ? { mcpServerPins: clone(release.mcpServerPins) } : {}),
     capabilityCeiling: release.manifest.declaredCapabilityCeiling,
   }
 }
@@ -124,7 +128,10 @@ function scopeDiff(previous, next) {
     removed: (previous?.plugins || []).filter((plugin) => !after.has(plugin.pluginId)),
     changed: next.plugins.filter((plugin) => {
       const old = before.get(plugin.pluginId)
-      return old && (old.releaseId !== plugin.releaseId || old.contentDigest !== plugin.contentDigest)
+      return old && (old.releaseId !== plugin.releaseId || old.contentDigest !== plugin.contentDigest
+        || old.skillsPath !== plugin.skillsPath || old.mcpPath !== plugin.mcpPath || old.appMcpPath !== plugin.appMcpPath
+        || JSON.stringify(old.mcpServerPins) !== JSON.stringify(plugin.mcpServerPins)
+        || JSON.stringify(old.capabilityCeiling) !== JSON.stringify(plugin.capabilityCeiling))
     }).map((plugin) => ({ before: before.get(plugin.pluginId), after: plugin })),
   }
 }
@@ -202,12 +209,13 @@ export class ZyraPluginRegistry {
     }
   }
 
-  async #mutate(work) {
+  async #mutate(work, persistIf = () => true) {
     await this.initialize()
     const run = this.queue.then(async () => {
       const before = clone(this.state)
       try {
         const result = await work(this.state)
+        if (!persistIf(result)) return clone(result)
         this.state.revision += 1
         await this.#writeState()
         // Notifications are advisory and follow persistence. A failed observer
@@ -227,6 +235,32 @@ export class ZyraPluginRegistry {
     await this.initialize()
     await this.queue
     return clone(this.state)
+  }
+
+  async setAppViewSettings(input = {}) {
+    return this.#mutate((catalog) => {
+      assertReviewedCatalog(catalog, input.expectedCatalogRevision)
+      const pluginId = bounded(input.pluginId, 128)
+      if (pluginId && !catalog.plugins.some((plugin) => plugin.id === pluginId)) {
+        fail('PLUGIN_NOT_FOUND', 'Plugin installation was not found.')
+      }
+      if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
+        fail('PLUGIN_APP_VIEW_INVALID', 'Choose whether app views are enabled.')
+      }
+      if (input.displayMode !== undefined && !['manual', 'automatic'].includes(input.displayMode)) {
+        fail('PLUGIN_APP_VIEW_INVALID', 'Choose a valid app view display mode.')
+      }
+      if (pluginId) {
+        if (input.enabled === undefined) fail('PLUGIN_APP_VIEW_INVALID', 'Choose whether this Plugin can show app views.')
+        catalog.appViews.pluginIds = input.enabled
+          ? [...new Set([...catalog.appViews.pluginIds, pluginId])]
+          : catalog.appViews.pluginIds.filter((id) => id !== pluginId)
+      } else {
+        if (input.enabled !== undefined) catalog.appViews.enabled = input.enabled
+        if (input.displayMode !== undefined) catalog.appViews.displayMode = input.displayMode
+      }
+      return catalog.appViews
+    })
   }
 
   async inspectLocalPackage(packageRoot, options = {}) {
@@ -343,9 +377,19 @@ export class ZyraPluginRegistry {
             totalBytes: staged.release.totalBytes,
             containsExecutableFiles: staged.release.containsExecutableFiles,
             skills: staged.release.skills,
+            ...(staged.release.appMcpPath ? { appMcpPath: staged.release.appMcpPath } : {}),
+            ...(staged.release.mcpServerPins !== undefined ? { mcpServerPins: staged.release.mcpServerPins } : {}),
             installedAt: occurredAt,
           }
           state.releases.push(release)
+        } else {
+          // Explicit reinspection/approval may adopt newly supported connection
+          // metadata for these same bytes. Existing Chat MCP pins stay intact.
+          release.manifest = staged.manifest
+          if (staged.release.appMcpPath) release.appMcpPath = staged.release.appMcpPath
+          else delete release.appMcpPath
+          if (staged.release.mcpServerPins !== undefined) release.mcpServerPins = staged.release.mcpServerPins
+          else delete release.mcpServerPins
         }
         plugin.state = preserveDisabledState ? 'disabled' : 'active'
         plugin.activeReleaseId = releaseId
@@ -497,6 +541,45 @@ export class ZyraPluginRegistry {
     })
   }
 
+  // Desktop regular Chats discover installed integrations automatically. Keep
+  // existing release pins: installing an update must not silently upgrade them.
+  async ensureAvailableChatScope(input = {}) {
+    const sessionId = bounded(input.sessionId, 192)
+    if (!sessionId) fail('PLUGIN_SCOPE_INVALID', 'Chat Plugin scope requires a session ID.')
+    const result = await this.#mutate((state) => {
+      const index = state.chatScopes.findIndex((entry) => entry.sessionId === sessionId)
+      const previous = index >= 0 ? state.chatScopes[index] : null
+      if (!previous && state.chatScopes.length >= ZYRA_PLUGIN_LIMITS.maxChatScopes) {
+        fail('PLUGIN_SCOPE_LIMIT', 'Chat Plugin scope capacity has been reached; no existing scope was changed.')
+      }
+      const owner = scopeOwner(input.projectId)
+      const plugins = state.plugins.filter((plugin) => plugin.state === 'active').flatMap((plugin) => {
+        const pinned = previous?.plugins.find((entry) => entry.pluginId === plugin.id)
+        const release = state.releases.find((entry) => entry.pluginId === plugin.id && entry.id === (pinned?.releaseId || plugin.activeReleaseId))
+        if (pinned) {
+          if (!release || release.contentDigest !== pinned.contentDigest) fail('PLUGIN_SCOPE_RELEASE_MISSING', 'Pinned Chat Plugin release is unavailable.')
+          // Keep every existing contribution and capability pin, including null
+          // MCP pins and descriptor caps after same-byte explicit reinspection.
+          return [clone(pinned)]
+        }
+        if (!release || (!(release.skills.length && release.manifest.contributions.skills) && !release.manifest.contributions.mcp)) return []
+        return [releaseSnapshot(plugin, release)]
+      })
+      assertSkillPluginLimit(plugins.filter((plugin) => plugin.skillsPath).length)
+      if (previous && previous.ownerKind === owner.ownerKind && previous.ownerId === owner.ownerId && JSON.stringify(previous.plugins) === JSON.stringify(plugins)) {
+        return { scope: previous, changed: false }
+      }
+      const occurredAt = nowIso(this.now)
+      const scope = { sessionId, ...owner, pluginSetRevision: previous?.pluginSetRevision || 1,
+        scopeRevision: (previous?.scopeRevision || 0) + 1, plugins,
+        createdAt: previous?.createdAt || occurredAt, updatedAt: occurredAt }
+      if (index >= 0) state.chatScopes[index] = scope
+      else state.chatScopes.push(scope)
+      return { scope, changed: true }
+    }, (result) => result.changed)
+    return result.scope
+  }
+
   async refreshChatScope(input = {}) {
     const sessionId = bounded(input.sessionId, 192)
     if (!sessionId) fail('PLUGIN_SCOPE_INVALID', 'Chat Plugin scope requires a session ID.')
@@ -579,6 +662,77 @@ export class ZyraPluginRegistry {
         })
       }
       return result
+    })
+    this.queue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  async #readMcpServers(release, plugin, pin) {
+    if (pin.mcpPath !== release.manifest.contributions.mcp) fail('PLUGIN_SCOPE_INVALID', 'Pinned Plugin MCP contribution no longer matches its release.')
+    if (pin.appMcpPath && (pin.appMcpPath !== release.manifest.contributions.apps || pin.appMcpPath === pin.mcpPath || pin.mcpServerPins === undefined)) {
+      fail('PLUGIN_SCOPE_INVALID', 'Pinned additional Plugin app MCP contribution is invalid.')
+    }
+    // Config reads always verify bytes and real root containment, even when a
+    // caller disables optional verification for another contribution adapter.
+    const inspected = await inspectZyraPluginPackage(release.packagePath, { expectedName: plugin.name, connectionServerPins: pin.mcpServerPins ?? [] })
+    if (inspected.release.contentDigest !== pin.contentDigest) fail('PLUGIN_RELEASE_TAMPERED', `Plugin ${plugin.name} no longer matches its reviewed release.`)
+    const installationRoot = await realpath(this.releasesRoot)
+    if (!pathInside(inspected.packageRoot, installationRoot)) fail('PLUGIN_PATH_ESCAPE', 'Plugin package escaped the installation root.')
+    const sources = []
+    for (const relativePath of [pin.mcpPath, pin.appMcpPath].filter(Boolean)) {
+      const configPath = resolvePluginRelativePath(inspected.packageRoot, relativePath, 'mcp')
+      const configRealPath = await realpath(configPath)
+      if (!pathInside(configRealPath, inspected.packageRoot) || !pathInside(configRealPath, installationRoot)) fail('PLUGIN_PATH_ESCAPE', 'Plugin MCP configuration escaped its reviewed root.')
+      const text = await readFile(configRealPath, 'utf8')
+      sources.push(parsePinnedZyraPluginConnectionConfig(text, relativePath === release.manifest.contributions.apps, pin.mcpServerPins))
+    }
+    return mergeZyraPluginConnectionSources(...sources)
+  }
+
+  async getChatMcpSources(sessionIdValue, options = {}) {
+    await this.initialize()
+    const sessionId = bounded(sessionIdValue, 192)
+    const run = this.queue.then(async () => {
+      const scope = this.state.chatScopes.find((entry) => entry.sessionId === sessionId)
+      if (!scope) return []
+      const result = []
+      for (const scopedPlugin of scope.plugins) {
+        const release = this.state.releases.find((entry) => entry.id === scopedPlugin.releaseId && entry.pluginId === scopedPlugin.pluginId)
+        const plugin = this.state.plugins.find((entry) => entry.id === scopedPlugin.pluginId)
+        if (!release || !plugin || release.contentDigest !== scopedPlugin.contentDigest) {
+          fail('PLUGIN_SCOPE_RELEASE_MISSING', `Chat Plugin release ${scopedPlugin.releaseId} is unavailable.`)
+        }
+        if (plugin.state !== 'active') fail('PLUGIN_DISABLED', `Plugin ${plugin.name} is disabled for this installation.`)
+        // A Chat pinned before MCP support cannot gain executable authority just
+        // because the release contained a previously inert contribution.
+        if (!scopedPlugin.mcpPath) continue
+        const servers = await this.#readMcpServers(release, plugin, scopedPlugin)
+        result.push({ pluginId: plugin.id, releaseId: release.id, contentDigest: release.contentDigest,
+          name: release.manifest.interface.displayName || plugin.name, slug: plugin.name, packagePath: release.packagePath,
+          servers, logo: release.manifest.interface.logo || release.manifest.interface.composerIcon || null })
+      }
+      return result
+    })
+    this.queue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  async getInstalledMcpSource(pluginIdValue) {
+    await this.initialize()
+    const pluginId = bounded(pluginIdValue, 128)
+    const run = this.queue.then(async () => {
+      const plugin = this.state.plugins.find((entry) => entry.id === pluginId)
+      const release = plugin?.activeReleaseId
+        ? this.state.releases.find((entry) => entry.id === plugin.activeReleaseId && entry.pluginId === pluginId)
+        : null
+      if (!plugin || plugin.state !== 'active' || !release) fail('PLUGIN_NOT_ACTIVE', 'Plugin is not active.')
+      const mcpPath = release.manifest.contributions.mcp
+      if (!mcpPath) return null
+      const servers = await this.#readMcpServers(release, plugin, releaseSnapshot(plugin, release))
+      return { pluginId: plugin.id, releaseId: release.id, contentDigest: release.contentDigest,
+        name: release.manifest.interface.displayName || plugin.name, slug: plugin.name, packagePath: release.packagePath,
+        logo: release.manifest.interface.logo || release.manifest.interface.composerIcon || null,
+        servers }
     })
     this.queue = run.then(() => undefined, () => undefined)
     return run

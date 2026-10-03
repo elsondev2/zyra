@@ -118,7 +118,7 @@ export function sessionInfoPanel(info = {}, theme = fallbackTheme) {
     ` Total: ${formatCount(tokens.total)}`,
     "",
     `${bold} Cost${reset}`,
-    ` Total: ${Number(cost.total || 0).toFixed(4)}`,
+    ` Total: ${cost.complete === false ? 'Unavailable' : `~$${Number(cost.total || 0).toFixed(4)}`}`,
   ]);
 }
 

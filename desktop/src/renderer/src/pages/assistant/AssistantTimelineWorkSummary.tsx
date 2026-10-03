@@ -44,15 +44,15 @@ function formatWorkSummaryStatus(
     return `${duration} · ${actionCount} ${actionCount === 1 ? 'action' : 'actions'}`
 }
 
-export function TimelineTurnInterruptionMarker() {
+export function TimelineTurnInterruptionMarker({ label = 'Interrupted' }: { label?: string } = {}) {
     return (
         <div
             className="flex min-h-7 w-full max-w-4xl items-center gap-3 py-1"
             role="status"
-            aria-label="Interrupted"
+            aria-label={label}
             data-assistant-turn-interruption="true"
         >
-            <span className="shrink-0 text-[11px] font-medium text-sparkle-text-secondary">Interrupted</span>
+            <span className="shrink-0 text-[11px] font-medium text-sparkle-text-secondary">{label}</span>
             <span className="h-px min-w-6 flex-1 bg-[var(--surface-divider)]" aria-hidden="true" />
         </div>
     )
@@ -68,6 +68,8 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     actionCount = 0,
     hasWork = true,
     revealContent = false,
+    statusLabel = null,
+    interruptionLabel = 'Interrupted',
     renderChildren
 }: {
     startedAt: string
@@ -79,6 +81,8 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     actionCount?: number
     hasWork?: boolean
     revealContent?: boolean
+    statusLabel?: string | null
+    interruptionLabel?: string
     renderChildren: () => ReactNode
 }) {
     const { settings } = useSettings()
@@ -101,24 +105,24 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     const contentUnmountTimerRef = useRef<number | null>(null)
     const pendingExpansionAnchorRef = useRef<HTMLElement | null>(null)
     const minimal = displayMode === 'minimal'
-    const statusText = formatWorkSummaryStatus(startedAt, completedAt, running, visibleActionCount)
+    const statusText = statusLabel || formatWorkSummaryStatus(startedAt, completedAt, running, visibleActionCount)
     useEffect(() => {
         const updateStatusText = () => {
             if (statusTextRef.current) {
-                statusTextRef.current.textContent = formatWorkSummaryStatus(startedAt, completedAt, running, visibleActionCount)
+                statusTextRef.current.textContent = statusLabel || formatWorkSummaryStatus(startedAt, completedAt, running, visibleActionCount)
             }
         }
         updateStatusText()
-        if (!running) return
+        if (!running || statusLabel) return
         const intervalId = window.setInterval(updateStatusText, 1000)
         return () => window.clearInterval(intervalId)
-    }, [visibleActionCount, completedAt, displayMode, running, startedAt])
+    }, [visibleActionCount, completedAt, displayMode, running, startedAt, statusLabel])
     const outcomeLabel = outcome === 'failed'
         ? 'Failed'
         : outcome === 'no-response'
             ? 'No response'
             : null
-    const interruptionMarker = outcome === 'interrupted' ? <TimelineTurnInterruptionMarker /> : null
+    const interruptionMarker = outcome === 'interrupted' ? <TimelineTurnInterruptionMarker label={interruptionLabel} /> : null
     const cancelPendingContentWork = () => {
         if (contentRevealFrameRef.current !== null) {
             window.cancelAnimationFrame(contentRevealFrameRef.current)

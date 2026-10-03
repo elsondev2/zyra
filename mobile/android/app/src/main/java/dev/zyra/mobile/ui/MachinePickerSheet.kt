@@ -22,6 +22,7 @@ import dev.zyra.mobile.data.ConnectionState
         ZyraSettingRow(R.drawable.ic_monitor, "All machines", "Every conversation, together", click = { select(null) }, trailing = { if (state.machineFilter == null) AppIcon(R.drawable.ic_check, "Selected") })
         HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         state.machines.forEach { machine ->
-            ZyraSettingRow(R.drawable.ic_monitor, machine.name, connectionLabel(state.machineStatus[machine.id] ?: ConnectionState.Offline), click = { select(machine.id) }, trailing = { if (state.machineFilter == machine.id) AppIcon(R.drawable.ic_check, "Selected") })
+            val connection = state.machineStatus[machine.id] ?: ConnectionState.Offline
+            ZyraSettingRow(icon = null, title = machine.name, subtitle = connectionLabel(connection), leading = { MachineStatusIcon(connection) }, click = { select(machine.id) }, trailing = { if (state.machineFilter == machine.id) AppIcon(R.drawable.ic_check, "Selected") })
         }
 }

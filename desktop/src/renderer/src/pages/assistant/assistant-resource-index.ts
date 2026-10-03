@@ -4,6 +4,7 @@ import { resolveMarkdownLinkTarget } from '@/components/ui/markdown/linkNavigati
 import type { ParsedUserAttachment } from './assistant-timeline-helpers'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 import { getAssistantLinkBaseFilePath, getAssistantRelativeFilePath } from './assistant-file-navigation'
+import { assistantImageDisplayName } from './assistant-resource-labels'
 
 export type AssistantResourceKind = 'image' | 'link'
 export type AssistantResourceSource = 'changed' | 'generated' | 'attached' | 'mentioned'
@@ -307,7 +308,10 @@ export function buildAssistantResourceIndex(input: {
             existing.occurrenceCount += 1
             if (inputResource.kind === 'image') {
                 existing.kind = 'image'
-                existing.title = inputResource.title || existing.title
+                const hasOriginLabel = existing.attachment || existing.sources.has('generated') || existing.sources.has('changed')
+                if (inputResource.attachment || (!existing.attachment && (inputResource.source !== 'mentioned' || !hasOriginLabel))) {
+                    existing.title = inputResource.title || existing.title
+                }
             }
             existing.sources.add(inputResource.source)
             if (existing.origins.size < ASSISTANT_RESOURCE_ORIGIN_LIMIT) {
@@ -341,7 +345,7 @@ export function buildAssistantResourceIndex(input: {
         })
     }
 
-    const addImage = (turn: AssistantDiffTurn, rawTarget: string, source: AssistantResourceSource, originKind: AssistantResourceOriginKind, diffTarget?: AssistantDiffTarget | null, attachment?: ParsedUserAttachment | null) => {
+    const addImage = (turn: AssistantDiffTurn, rawTarget: string, source: AssistantResourceSource, originKind: AssistantResourceOriginKind, diffTarget?: AssistantDiffTarget | null, attachment?: ParsedUserAttachment | null, position = 1) => {
         if (!looksLikeImageTarget(rawTarget) && (!attachment || !isImageAttachment(attachment))) return
         const path = resolveResourceFilePath(rawTarget, input.projectPath)
         if (!path) return
@@ -350,7 +354,7 @@ export function buildAssistantResourceIndex(input: {
         upsert({
             key,
             kind: 'image',
-            title: attachment?.displayName || attachment?.name || basename(path),
+            title: assistantImageDisplayName(attachment?.displayName || attachment?.name || basename(path), turn.number, source, position),
             subtitle: displayPath,
             path,
             attachment,
@@ -360,7 +364,7 @@ export function buildAssistantResourceIndex(input: {
         })
     }
 
-    const addLink = (turn: AssistantDiffTurn, rawUrl: string, originKind: AssistantResourceOriginKind, title?: string, image = false) => {
+    const addLink = (turn: AssistantDiffTurn, rawUrl: string, originKind: AssistantResourceOriginKind, title?: string, image = false, position = 1) => {
         const url = normalizeWebUrl(rawUrl)
         if (!url) return
         let hostname = url
@@ -376,7 +380,7 @@ export function buildAssistantResourceIndex(input: {
         upsert({
             key: `url:${url}`,
             kind: resourceKind,
-            title: title || (resourceKind === 'image' && imageTitle ? imageTitle : hostname),
+            title: title || (resourceKind === 'image' ? assistantImageDisplayName(imageTitle, turn.number, 'mentioned', position) : hostname),
             subtitle: url,
             url,
             source: 'mentioned',
@@ -386,28 +390,32 @@ export function buildAssistantResourceIndex(input: {
 
     for (const turn of input.turns.slice(0, ASSISTANT_RESOURCE_TURN_LIMIT)) {
         const changes = turn.changes.length > 0 ? turn.changes : turn.files
+        let imagePosition = 0
         for (const change of changes) {
+            if (looksLikeImageTarget(change.target.filePath)) imagePosition += 1
             addImage(
                 turn,
                 change.target.filePath,
                 change.target.isNew || change.target.changeKind === 'add' ? 'generated' : 'changed',
                 'change',
-                change.target
+                change.target,
+                null,
+                imagePosition
             )
         }
 
-        for (const attachment of reconcileMaterializedImageAttachments(turn.promptAttachments)) {
-            if (!isImageAttachment(attachment)) continue
+        const imageAttachments = reconcileMaterializedImageAttachments(turn.promptAttachments).filter(isImageAttachment)
+        for (const [attachmentIndex, attachment] of imageAttachments.entries()) {
             const path = String(attachment.path || '').trim()
             if (path && !attachment.isClipboard && !path.toLowerCase().startsWith('clipboard://')) {
-                addImage(turn, path, 'attached', 'attachment', null, attachment)
+                addImage(turn, path, 'attached', 'attachment', null, attachment, attachmentIndex + 1)
                 continue
             }
             const key = `image-attachment:${attachmentIdentity(attachment)}`
             upsert({
                 key,
                 kind: 'image',
-                title: attachment.displayName || attachment.name || 'Image',
+                title: assistantImageDisplayName(attachment.displayName || attachment.name || '', turn.number, 'attached', attachmentIndex + 1),
                 subtitle: attachment.mime || 'Image attachment',
                 attachment,
                 source: 'attached',
@@ -415,6 +423,7 @@ export function buildAssistantResourceIndex(input: {
             })
         }
 
+        const mentionedImagePositions = new Map<string, number>()
         for (const [kind, text] of [['prompt', turn.prompt], ['response', turn.response]] as const) {
             if (resources.size >= ASSISTANT_RESOURCE_INDEX_LIMIT) {
                 if (String(text || '').trim()) truncated = true
@@ -431,8 +440,12 @@ export function buildAssistantResourceIndex(input: {
             if (availableTextBudget < textLength) truncated = true
             remainingTextBudget -= availableTextBudget
             for (const reference of extractTextReferences(text, availableTextBudget)) {
-                if (reference.kind === 'file') addImage(turn, reference.target, 'mentioned', kind)
-                else addLink(turn, reference.url, kind, reference.title, reference.image)
+                const target = reference.kind === 'file' ? reference.target : reference.url
+                const image = looksLikeImageTarget(target) || (reference.kind !== 'file' && reference.image)
+                if (image && !mentionedImagePositions.has(target)) mentionedImagePositions.set(target, mentionedImagePositions.size + 1)
+                const position = mentionedImagePositions.get(target) || 1
+                if (reference.kind === 'file') addImage(turn, reference.target, 'mentioned', kind, null, null, position)
+                else addLink(turn, reference.url, kind, reference.title, reference.image, position)
             }
         }
     }

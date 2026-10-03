@@ -269,15 +269,13 @@ export function AppearanceThemeSelector({
     appearance,
     lightTheme,
     darkTheme,
-    onLightThemeChange,
-    onDarkThemeChange,
+    onThemeChange,
     className
 }: {
     appearance: 'light' | 'dark'
     lightTheme: LightTheme
     darkTheme: DarkTheme
-    onLightThemeChange: (theme: LightTheme) => void
-    onDarkThemeChange: (theme: DarkTheme) => void
+    onThemeChange: (theme: Theme) => void
     className?: string
 }) {
     return (
@@ -288,7 +286,7 @@ export function AppearanceThemeSelector({
                     value={lightTheme}
                     themes={LIGHT_THEMES}
                     active={appearance === 'light'}
-                    onChange={(theme) => onLightThemeChange(theme as LightTheme)}
+                    onChange={onThemeChange}
                 />
             </div>
             <div data-settings-search-target={createSettingsRowTargetId('Theme', 'Dark theme')} tabIndex={-1}>
@@ -297,7 +295,7 @@ export function AppearanceThemeSelector({
                     value={darkTheme}
                     themes={DARK_THEMES}
                     active={appearance === 'dark'}
-                    onChange={(theme) => onDarkThemeChange(theme as DarkTheme)}
+                    onChange={onThemeChange}
                 />
             </div>
         </div>

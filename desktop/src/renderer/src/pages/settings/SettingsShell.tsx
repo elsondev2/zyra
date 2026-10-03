@@ -537,12 +537,26 @@ export default function SettingsShell() {
                 {!settings.sidebarCollapsed ? (
                     <button
                         type="button"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-valuemin={SETTINGS_SIDEBAR_MIN_WIDTH}
+                        aria-valuemax={SETTINGS_SIDEBAR_MAX_WIDTH}
+                        aria-valuenow={sidebarWidth}
                         aria-label="Resize settings sidebar"
                         title="Drag to resize sidebar"
                         onPointerDown={handleResizePointerDown}
                         onPointerMove={handleResizePointerMove}
                         onPointerUp={handleResizePointerEnd}
                         onPointerCancel={handleResizePointerEnd}
+                        onKeyDown={event => {
+                            const step = event.shiftKey ? 32 : 8
+                            const delta = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+                            if (!delta && event.key !== 'Home' && event.key !== 'End') return
+                            event.preventDefault()
+                            const next = event.key === 'Home' ? SETTINGS_SIDEBAR_MIN_WIDTH : event.key === 'End' ? SETTINGS_SIDEBAR_MAX_WIDTH : clampSidebarWidth(sidebarWidth + delta)
+                            setSidebarWidth(next)
+                            localStorage.setItem(SETTINGS_SIDEBAR_WIDTH_KEY, String(next))
+                        }}
                         className="absolute inset-y-0 right-0 z-20 w-3 translate-x-1/2 cursor-col-resize touch-none bg-transparent"
                     />
                 ) : null}

@@ -95,6 +95,8 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         projectRoots = [],
         projectChoices = [],
         projectContextDisabled = false,
+        projectContextUnavailableReason,
+        onProjectContextUnavailable,
         onSelectProject,
         onCreateProject,
         acceptBrowserAnnotations = true,
@@ -470,6 +472,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         onSwitchBranch: handleBranchSwitch,
         selectedModel,
         setSelectedModel: chooseModel,
+        selectedModelInputModes: typeof selectedModelOption === 'string' ? undefined : selectedModelOption.inputModes,
         selectedRuntimeMode,
         setSelectedRuntimeMode: chooseRuntimeMode,
         selectedInteractionMode,
@@ -481,6 +484,11 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         textareaRef,
         onBlockedSend,
         onOptimisticSendClear: () => {
+            // The send may reject before React commits the cleared draft.
+            // Keep the restoration guard aligned with that synchronous clear.
+            latestTextRef.current = ''
+            latestInlineMentionTagsRef.current = []
+            latestContextFilesRef.current = []
             persistComposerSessionStateImmediately(buildAssistantComposerSessionState({
                 selectedModel,
                 selectedRuntimeMode,
@@ -506,6 +514,8 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
             }))
         }
     })
+    const latestHandlersRef = useRef(handlers)
+    latestHandlersRef.current = handlers
     const voiceInput = useAssistantSpeechInput({
         text,
         setText,
@@ -514,7 +524,8 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         disabled,
         isConnected,
         engine: settings.assistantTranscriptionEngine,
-        scopeKey: `${normalizedSessionId || 'new'}:${resetStateToken || ''}`
+        scopeKey: `${normalizedSessionId || 'new'}:${resetStateToken || ''}`,
+        onSubmitTranscript: draftText => latestHandlersRef.current.handleSendTranscript(draftText)
     })
     const capabilities = useAssistantComposerCapabilitiesState({
         disabled, disabledReason, isConnected, isConnecting, isSending, isThinking, allowEmptySubmit, text,
@@ -603,6 +614,8 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         projectRoots,
         projectChoices,
         projectContextDisabled,
+        projectContextUnavailableReason,
+        onProjectContextUnavailable,
         onSelectProject,
         onCreateProject,
         settingsAssistantBusyMessageMode: settings.assistantBusyMessageMode,
@@ -663,6 +676,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         selectedModel,
         setSelectedModel: chooseModel,
         selectedModelLabel,
+        selectedModelInputModes: typeof selectedModelOption === 'string' ? undefined : selectedModelOption.inputModes,
         selectedModelContextWindow: availableModelOptions.find((model) => model.id === selectedModel)?.contextWindow ?? null,
         latestModelId,
         filteredModelOptions,

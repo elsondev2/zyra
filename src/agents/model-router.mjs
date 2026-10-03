@@ -1,4 +1,5 @@
 import { FLEET_MODEL_ALIASES, FLEET_MODEL_PROVIDER, modelKey } from "./model-catalog.mjs";
+import { sortModelsLatestFirst } from "../model-order.mjs";
 
 const DEFAULT_ROUTES = Object.freeze({
   orchestration: ["sol", "openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
@@ -42,6 +43,7 @@ export class ModelRouter {
     const roleChoice = request.roleModels?.[provider]?.[request.role];
     const routedSelector = requested === "role-default" ? normalizeModelSelector(roleChoice || "inherit") : selector;
     const selectors = candidateSelectors(routedSelector, envelope, request.fallbackModels);
+    const previousAllowed = routedSelector.allowPreviousGenerations && envelope.allowPreviousGenerations;
     const considered = [];
     const candidates = [];
 
@@ -50,6 +52,7 @@ export class ModelRouter {
       if (!entries.length) considered.push({ selector: candidateSelector, accepted: false, reasons: ["not_registered"] });
       for (const entry of entries) {
         const reasons = rejectionReasons(entry, envelope, policy);
+        if (!previousAllowed && !isCurrentGeneration(entry, this.catalog)) reasons.push("previous_generation_disabled");
         const accepted = reasons.length === 0;
         const candidate = {
           selector: candidateSelector,
@@ -148,12 +151,11 @@ export function normalizeTaskEnvelope(input = {}) {
 function candidateSelectors(selector, envelope, fallbackModels = []) {
   const route = DEFAULT_ROUTES[envelope.task] ?? DEFAULT_ROUTES.implementation;
   const defaults = selector.prefer === "inherit" ? ["inherit", ...route] : [selector.prefer, ...route];
-  const previousAllowed = selector.allowPreviousGenerations && envelope.allowPreviousGenerations;
   return unique([
     ...defaults,
     ...selector.fallbacks,
     ...(fallbackModels ?? []).map(normalizeSelectorString),
-  ]).filter((value) => previousAllowed || aliasOrCurrent(value));
+  ]);
 }
 
 function resolveSelector(selector, catalog, inheritModel) {
@@ -162,7 +164,7 @@ function resolveSelector(selector, catalog, inheritModel) {
     return catalog.filter((entry) => entry.key === key);
   }
   if (FLEET_MODEL_ALIASES[selector]) {
-    return catalog.filter((entry) => entry.key === `${FLEET_MODEL_PROVIDER}/${FLEET_MODEL_ALIASES[selector]}`);
+    return sortModelsLatestFirst(catalog.filter((entry) => entry.provider === FLEET_MODEL_PROVIDER && entry.tier === selector));
   }
   const key = selector.includes("/") ? selector : `${FLEET_MODEL_PROVIDER}/${selector}`;
   return catalog.filter((entry) => entry.key === key);
@@ -204,7 +206,7 @@ function exactSelectorKey(selector) {
 }
 
 function selectorMatchesKey(selector, key) {
-  if (FLEET_MODEL_ALIASES[selector]) return key === `${FLEET_MODEL_PROVIDER}/${FLEET_MODEL_ALIASES[selector]}`;
+  if (FLEET_MODEL_ALIASES[selector]) return key.startsWith(`${FLEET_MODEL_PROVIDER}/`) && key.endsWith(`-${selector}`);
   return selector === key;
 }
 
@@ -221,8 +223,10 @@ function availabilityRank(value) {
   return 2;
 }
 
-function aliasOrCurrent(value) {
-  return ["inherit", "sol", "terra", "luna"].includes(value) || /gpt-5\.6/i.test(value);
+function isCurrentGeneration(entry, catalog) {
+  const version = id => /^gpt-(\d+(?:\.\d+)*)/i.exec(id ?? "")?.[1];
+  const latest = sortModelsLatestFirst(catalog.filter(item => item.provider === entry.provider && version(item.id)))[0];
+  return !version(entry.id) || !latest || version(entry.id) === version(latest.id);
 }
 
 function unique(value) {

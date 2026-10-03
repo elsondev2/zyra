@@ -95,6 +95,18 @@ export type AssistantThreadPhaseKey =
     | 'error'
     | 'stopped'
 
+function hasUnstartedAssistantPrompt(thread: AssistantThread): boolean {
+    if (thread.state !== 'starting') return false
+    for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+        const message = thread.messages[index]!
+        if (message.role !== 'user') continue
+        const previousTurnEndedAt = thread.latestTurn?.completedAt
+        if (!previousTurnEndedAt) return !thread.latestTurn
+        return Date.parse(message.createdAt) > Date.parse(previousTurnEndedAt)
+    }
+    return false
+}
+
 export function getAssistantThreadPhase(thread: AssistantThread | null): {
     key: AssistantThreadPhaseKey
     label: string
@@ -117,7 +129,7 @@ export function getAssistantThreadPhase(thread: AssistantThread | null): {
     if (
         canonicalPresence?.state === 'ready'
         && (
-            thread.state === 'starting'
+            (thread.state === 'starting' && !hasUnstartedAssistantPrompt(thread))
             || (thread.state === 'running' && thread.latestTurn?.state !== 'running')
             || thread.state === 'waiting'
         )
@@ -201,7 +213,8 @@ export function isAssistantSessionBackgroundActive(session: AssistantSession, ac
 
     if (
         session.id !== activeSessionId
-        && activeThread?.latestTurn?.state === 'completed'
+        && ['completed', 'interrupted'].includes(activeThread?.latestTurn?.state || '')
+        && activeThread?.latestTurn
         && activeThread.lastSeenCompletedTurnId !== activeThread.latestTurn.id
     ) {
         return true

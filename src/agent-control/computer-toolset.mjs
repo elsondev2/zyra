@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { computerToolError } from "./computer-tool-error.mjs";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineZyraTool } from "../agents/define-zyra-tool.mjs";
 import { Type } from "typebox";
 import { formatWindowMatches, formatComputerObservation as formatObservation } from "./computer-window-feedback.mjs";
 import { CONTROL_CAPABILITIES, unavailableControlResult } from "./contracts.mjs";
@@ -176,7 +176,7 @@ const releaseSchema = Type.Object(targetSchema, { additionalProperties: false })
 export function createComputerToolSet(options = {}) {
   const controller = createActivationController(options.sessionRef);
   return [
-    defineTool({
+    defineZyraTool({
       name: COMPUTER_TOOL_SEARCH_NAME,
       label: "Getting computer use tools",
       description: "Search and load deferred Zyra tools. Search for Windows computer control, desktop interaction, clicking, typing, or app automation when the task needs them.",
@@ -238,7 +238,7 @@ export function createComputerToolSet(options = {}) {
     bridgeTool({
       name: "computer_request_access",
       label: "Request computer access",
-      description: "After an ambiguous app search, select one candidate and request all capabilities needed for that app in one bounded Chat grant. For coordinate pointer work include focus and screenshot together with the needed move/click/drag capabilities. A selected-window screenshot can show a background app; it does not prove the app is in front. Focus authority lets Zyra bring only the exact selected target forward before pointer input. A successful grant returns the first current observation, so do not call computer_observe again before acting. Full access may authorize routine use automatically.",
+      description: "After an ambiguous app search, select one candidate and request all capabilities needed for that app in one bounded Chat grant. For coordinate pointer work include focus and screenshot together with the needed move/click/drag capabilities. A selected-window screenshot can show a background app; it does not prove the app is in front. Focus authority lets Zyra bring only the exact selected target forward before pointer input. A successful grant returns the first current observation, so do not call computer_observe again before acting. Full access authorizes use without approval prompts.",
       parameters: accessSchema,
       client: options.client,
       waitsForUser: true,
@@ -272,7 +272,7 @@ export function createComputerToolSet(options = {}) {
     bridgeTool({
       name: "computer_sequence",
       label: "Run computer steps",
-      description: "Run 1 to 16 already-clear routine steps in one bounded call: exact semantic clicks, selected-window coordinate clicks (click_point), drags, continuous multi-point strokes, exact-field typing, safe editing/navigation keys, and short waits. Coordinates must be grounded in the latest observed layout and remain inside the selected window. Pointer actions require their explicit capabilities; activating a background window requires focus access. A semantic role may be omitted only when the exact name identifies one unique actionable control. Zyra re-observes and revision-checks after every step, then returns the final observation and, when granted, its screenshot. Batch steps whose effects are understood and inspect the returned result; successful input delivery alone does not prove the intended outcome. Missing, ambiguous, sensitive, critical, stale, unauthorized, expired, or interrupted steps stop immediately. Use an individual tool for external or critical side effects.",
+      description: "Run 1 to 16 already-clear routine steps in one bounded call: exact semantic clicks, selected-window coordinate clicks (click_point), drags, continuous multi-point strokes, exact-field typing, safe editing/navigation keys, and short waits. Coordinates must be grounded in the latest observed layout and remain inside the selected window. Pointer actions require their explicit capabilities; activating a background window requires focus access. A semantic role may be omitted only when the exact name identifies one unique actionable control. Zyra re-observes and revision-checks after every step, then returns the final observation and, when granted, its screenshot. Batch steps whose effects are understood and inspect the returned result; successful input delivery alone does not prove the intended outcome. Missing, ambiguous, sensitive, stale, unauthorized, expired, or interrupted steps stop immediately. Outside Full access, use an individual tool for external or critical side effects. Full access sequences skip side-effect permission checks.",
       parameters: sequenceSchema,
       client: options.client,
       toOperation: (input) => ({
@@ -401,7 +401,7 @@ function actionTool(name, label, description, parameters, actionType, client, ex
 }
 
 function bridgeTool({ name, label, description, parameters, client, toOperation, format, summarize, waitsForUser = false, after }) {
-  return defineTool({
+  return defineZyraTool({
     name,
     label,
     description,

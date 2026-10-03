@@ -11,6 +11,7 @@ import {
 import { useSettings } from '@/lib/settings'
 import { getFileUrl } from './file-preview/utils'
 import { buildSimpleIconUrl, resolveReadableLogoColor, withAlpha } from './logoColors'
+import { ProjectArtworkFallback } from './ProjectArtworkFallback'
 
 // Inline data to avoid ESM import issues
 const PROJECT_TYPES_DATA: Record<string, { displayName: string; icon: string; themeColor: string }> = {
@@ -83,6 +84,7 @@ interface ProjectIconProps extends ComponentProps<'div'> {
     size?: number
     className?: string
     showFallback?: boolean   // Show fallback icon if type/framework not found
+    mode?: 'project' | 'technology'
 }
 
 // Fallback Lucide icons by project type
@@ -110,6 +112,7 @@ export default function ProjectIcon({
     size = 24,
     className,
     showFallback = true,
+    mode = 'project',
     ...props
 }: ProjectIconProps) {
     const { settings } = useSettings()
@@ -157,6 +160,12 @@ export default function ProjectIcon({
                 />
             </div>
         )
+    }
+
+    if (mode === 'project') {
+        return <div className={`flex items-center justify-center ${className || ''}`} style={{ width: size, height: size }} title="Project" {...props}>
+            <ProjectArtworkFallback size={size} />
+        </div>
     }
 
     if (iconSlug && !genericImgError) {
@@ -227,7 +236,7 @@ export function FrameworkBadge({ framework, size = 'sm', showLabel = true, class
                 border: `1px solid ${withAlpha(readableThemeColor, borderAlpha)}`
             }}
         >
-            <ProjectIcon framework={framework} size={iconSize} showFallback={false} />
+            <ProjectIcon framework={framework} size={iconSize} mode="technology" showFallback={false} />
             {showLabel && (
                 <span
                     className={`font-medium ${textSize}`}

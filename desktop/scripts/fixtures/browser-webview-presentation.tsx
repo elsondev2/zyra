@@ -49,10 +49,11 @@ document.head.append(layout)
 const root = createRoot(container)
 const handle = createRef<AssistantBrowserWebviewHandle>()
 const noop = () => {}
+const guestFocuses: string[] = []
 let tabId = 'native-tab:a'
 function render(active: boolean, visible = true, url = 'https://fixture.invalid/') {
     const tab = { id: tabId, url, sessionMode: 'normal', status: 'ready', title: 'Fixture' } as AssistantBrowserTabState
-    flushSync(() => root.render(<StrictMode><AssistantBrowserWebview key={tabId} ref={handle} tab={tab} threadId="fixture-thread" config={{} as any} active={active} visible={visible} placement="full" controlled={false} cursor={null} onStateChange={noop} onControlTargetChange={noop} onFullscreenChange={noop} onViewportRectChange={noop}/></StrictMode>))
+    flushSync(() => root.render(<StrictMode><AssistantBrowserWebview key={tabId} ref={handle} tab={tab} threadId="fixture-thread" config={{} as any} active={active} visible={visible} placement="full" controlled={false} cursor={null} onStateChange={noop} onControlTargetChange={noop} onFullscreenChange={noop} onViewportRectChange={noop} onGuestFocus={(id) => guestFocuses.push(id)}/></StrictMode>))
 }
 const lastSlot = () => slots.filter(slot => slot.tabId === tabId).at(-1)
 ;(window as any).browserWebviewPresentationCheck = (async () => {
@@ -60,6 +61,11 @@ const lastSlot = () => slots.filter(slot => slot.tabId === tabId).at(-1)
     await waitFor(() => Boolean(handle.current) && subscriptions.size === 1, 'real Webview mounts once under StrictMode')
     await pause(200)
     check(lastSlot()?.visible === true && lastSlot()?.active === true, 'loaded active native page is visible')
+    for (const listener of subscriptions) listener({ type: 'focus', tabId: 'other-tab', guestWebContentsId: 99 })
+    check(guestFocuses.length === 0, 'focus on another guest cannot dismiss this address field')
+    for (const listener of subscriptions) listener({ type: 'focus', tabId, guestWebContentsId: stateFor(tabId).guestWebContentsId })
+    check(guestFocuses.length === 1 && guestFocuses[0] === tabId, 'native page focus reaches the address blur callback')
+    results.push('native guest focus reaches only the active tab callback')
     const ensureCount = ensured.length
     const baseline = slots.length
     for (let cycle = 0; cycle < 8; cycle++) {
@@ -83,6 +89,8 @@ const lastSlot = () => slots.filter(slot => slot.tabId === tabId).at(-1)
     results.push('eight overlay cycles preserve the native page with zero capture, replacement elements or guest reacquisition')
 
     render(false, false)
+    for (const listener of subscriptions) listener({ type: 'focus', tabId, guestWebContentsId: stateFor(tabId).guestWebContentsId })
+    check(guestFocuses.length === 1, 'inactive guest focus cannot blur the active address field')
     check(lastSlot()?.active === false && lastSlot()?.visible === false, 'inactive workspace releases visible native slot ownership')
     render(true)
     check(lastSlot()?.active === true && lastSlot()?.visible === true, 'reactivating restores the selected native page')

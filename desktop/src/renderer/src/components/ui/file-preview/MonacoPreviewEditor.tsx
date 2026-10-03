@@ -373,21 +373,22 @@ export default function MonacoPreviewEditor({
         if (value === lastLocallyEmittedValue) lastLocallyEmittedValueRef.current = null
         if (!shouldApplyExternalValue) return
 
-        const selection = editor.getSelection()
+        const selections = editor.getSelections()
         const scrollTop = editor.getScrollTop()
         const scrollLeft = editor.getScrollLeft()
 
         externalSyncInFlightRef.current = true
-        editor.executeEdits('devscope-external-sync', [{
-            range: model.getFullModelRange(),
-            text: value
-        }])
-        if (selection) {
-            editor.setSelection(selection)
+        try {
+            editor.executeEdits('devscope-external-sync', [{
+                range: model.getFullModelRange(),
+                text: value
+            }])
+            if (selections?.length) editor.setSelections(selections)
+            editor.setScrollTop(scrollTop)
+            editor.setScrollLeft(scrollLeft)
+        } finally {
+            externalSyncInFlightRef.current = false
         }
-        editor.setScrollTop(scrollTop)
-        editor.setScrollLeft(scrollLeft)
-        externalSyncInFlightRef.current = false
         lastLocallyEmittedValueRef.current = null
     }, [modelPath, readOnly, value])
 
@@ -398,6 +399,7 @@ export default function MonacoPreviewEditor({
             readOnly,
             domReadOnly: readOnly,
             cursorStyle: readOnly ? 'line-thin' : 'line',
+            cursorBlinking: readOnly ? 'solid' : 'blink',
             renderLineHighlight: readOnly ? 'none' : 'gutter',
             selectionHighlight: !readOnly,
             quickSuggestions: !readOnly,
@@ -453,9 +455,15 @@ export default function MonacoPreviewEditor({
         focusPreviewEditorLine(editorRef.current, focusLine)
     }, [focusLine])
 
+    // Entering Edit mode transfers keyboard ownership from the toolbar to Monaco.
+    // Draft updates must not repeatedly refocus the editor or collapse selections.
+    useEffect(() => {
+        if (!readOnly) editorRef.current?.focus()
+    }, [readOnly])
+
     return (
         <Editor
-            loading={<CodePreviewPlaceholder onReadable={onReadable} content={value} fontSize={fontSize} wordWrap={wordWrap} />}
+            loading={<CodePreviewPlaceholder onReadable={onReadable} content={value} fontSize={compactLayout ? Math.max(10, fontSize - 1) : fontSize} wordWrap={wordWrap} lineNumberStart={lineNumberStart} lineHeight={compactLayout ? 18 : 20} paddingTop={compactLayout ? 10 : 14} paddingBottom={compactLayout ? 10 : 14} />}
             defaultValue={value}
             language={language}
             path={modelPath}
@@ -473,6 +481,7 @@ export default function MonacoPreviewEditor({
                 editorRef.current = editor
                 decorationIdsRef.current = editor.deltaDecorations([], [])
                 focusPreviewEditorLine(editor, focusLine)
+                if (!readOnly && !focusLine) editor.focus()
                 editorLifecycleCleanupRef.current = attachPreviewEditorLifecycle(
                     editor,
                     (nextEditor) => onEditorMountRef.current?.(nextEditor)

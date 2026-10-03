@@ -1,10 +1,11 @@
 import os from "node:os";
+import { getPricingSnapshot } from './model-pricing/index.mjs';
 import { formatAgentConnectionStatus } from "./agent-server/status-presentation.mjs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "./runtime/terminal/src/index.js";
 import { buildTerminalTheme } from "./terminal-theme.mjs";
-import { getRuntimeContextUsage, getZyraThinkingLevel } from "./zyra-sdk.mjs";
+import { calculateSessionUsage, getRuntimeContextUsage, getZyraThinkingLevel } from "./zyra-sdk.mjs";
 
 const sep = " \u00b7 ";
 const reset = "\x1b[0m";
@@ -152,29 +153,31 @@ function formatCost(session) {
   const cached = costCache.get(manager);
   const lastEntry = entries.at(-1);
   const lastCost = lastEntry?.message?.usage?.cost?.total;
-  const aggregateCost = manager.getSessionUsage?.()?.cost?.total;
+  const aggregate = manager.getSessionUsage?.()?.cost;
+  const aggregateCost = aggregate?.total;
+  const pricingRevision = getPricingSnapshot().fetchedAt;
   if (
     cached
     && cached.length === entries.length
     && cached.lastEntry === lastEntry
     && cached.lastCost === lastCost
     && cached.aggregateCost === aggregateCost
+    && cached.complete === aggregate?.complete
+    && cached.pricingRevision === pricingRevision
     && cached.modelKey === modelKey
   ) {
     return cached.value;
   }
 
-  let total = typeof aggregateCost === "number" && Number.isFinite(aggregateCost) ? aggregateCost : 0;
-  if (typeof aggregateCost !== "number" || !Number.isFinite(aggregateCost)) {
-    for (const entry of entries) {
-      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-      total += entry.message.usage?.cost?.total ?? 0;
-    }
-  }
-
+  const usage = typeof aggregateCost === "number" && Number.isFinite(aggregateCost)
+    ? { cost: aggregateCost, costComplete: aggregate.complete !== false }
+    : calculateSessionUsage(manager);
+  const total = usage.cost;
   const subscription = session.model ? session.modelRegistry.isUsingOAuth(session.model) : false;
-  const value = `$${total.toFixed(3)}${subscription ? " sub" : ""}`;
-  costCache.set(manager, { length: entries.length, lastEntry, lastCost, aggregateCost, modelKey, value });
+  const value = usage.costComplete ? `~$${total.toFixed(3)}${subscription ? " sub" : ""}`
+    : total > 0 ? `~$${total.toFixed(3)}+ ?` : "$?";
+
+  costCache.set(manager, { length: entries.length, lastEntry, lastCost, aggregateCost, complete: aggregate?.complete, pricingRevision, modelKey, value });
   return value;
 }
 

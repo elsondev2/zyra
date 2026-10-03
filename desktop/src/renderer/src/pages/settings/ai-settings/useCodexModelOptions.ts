@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ModelOption } from './aiSettingsConfig'
-import { loadSettingsModels, readCachedSettingsModels } from '../settings-model-catalog-cache'
+import { loadSettingsModels, readCachedSettingsModels, subscribeSettingsModels } from '../settings-model-catalog-cache'
 
 export function useCodexModelOptions(effectiveCodexModels: string[], enabled = true) {
     const [codexModelOptions, setCodexModelOptions] = useState<ModelOption[]>(readCachedSettingsModels)
@@ -8,6 +8,7 @@ export function useCodexModelOptions(effectiveCodexModels: string[], enabled = t
 
     useEffect(() => {
         if (!enabled) return
+        const unsubscribe = subscribeSettingsModels(setCodexModelOptions)
         let cancelled = false
 
         async function loadCodexModels() {
@@ -27,6 +28,7 @@ export function useCodexModelOptions(effectiveCodexModels: string[], enabled = t
         void loadCodexModels()
         return () => {
             cancelled = true
+            unsubscribe()
         }
     }, [enabled])
 

@@ -1,3 +1,5 @@
+import { useNativeAppShortcuts } from './keybindings'
+import { configureShortcutOverrides, sanitizeShortcutOverrides, type ShortcutOverrides } from '@shared/keybindings'
 import { normalizeSpeakingStyle } from '@shared/assistant/speaking-style'
 import { ACCENT_COLORS, type AccentColor } from '@shared/preferences/accent-presets'
 /**
@@ -45,6 +47,7 @@ import {
     type ThemeTokens
 } from './settings-theme-catalog'
 import { resolveAccentTokens, resolveStatusTokens, resolveThemeTokens, toRgbChannels } from './settings-theme-semantics'
+import { applyAppearanceMotionRate, resolveAppearanceMotionRate } from './settings-motion'
 import { getDevicePreferenceOwnership, type DevicePreferenceSurface, type DevicePreferencesSnapshot } from '@shared/preferences/contracts'
 import type { UpdateHostedAiSecretsInput } from '@shared/preferences/secrets-contracts'
 import { isElectronRendererRuntime } from './browser-file-url'
@@ -82,6 +85,8 @@ export type AssistantBrowserBackgroundRotation = 'every-tab' | 'fixed'
 export type GitBulkActionScope = 'project' | 'repo'
 export type FilePreviewDefaultMode = 'preview' | 'edit'
 export type FilePreviewPythonRunMode = 'terminal' | 'output'
+// Keep the legacy wire value 'wrap' for compatibility with running desktop processes.
+// It now means a single-line label with ellipsis, not multiline wrapping.
 export type FilePreviewExplorerNameLayout = 'wrap' | 'horizontal'
 export type FileEditorWordWrap = 'on' | 'off'
 export type FileDiffRenderMode = 'stacked' | 'split'
@@ -104,6 +109,7 @@ export type AppearanceManagedFont = `managed:${string}`
 export type AppearanceLocalFont = `local:${string}`
 export type AppearanceUiFont = 'hanken' | 'bricolage' | 'segoe' | 'system' | AppearanceManagedFont | AppearanceLocalFont
 export type AppearanceCodeFont = 'system-mono' | 'cascadia' | 'consolas' | 'jetbrains' | AppearanceManagedFont | AppearanceLocalFont
+export type AppearanceAnimationSpeed = 'calm' | 'normal' | 'brisk' | 'custom'
 // Kept dormant until Appearance settings exposes the classic/workspace inspector choice.
 
 export interface PullRequestGuideConfig {
@@ -131,6 +137,12 @@ export interface AppearanceCustomTheme {
 }
 
 export const DEFAULT_APPEARANCE_UI_FONT: AppearanceUiFont = 'bricolage'
+export const DEFAULT_APPEARANCE_CODE_FONT: AppearanceCodeFont = 'jetbrains'
+export const DEFAULT_APPEARANCE_INTERFACE_SCALE = 100
+export const DEFAULT_APPEARANCE_CODE_SCALE = 100
+export const DEFAULT_APPEARANCE_CONTRAST_SCALE = 100
+export const DEFAULT_APPEARANCE_ANIMATION_SPEED: AppearanceAnimationSpeed = 'normal'
+export const DEFAULT_APPEARANCE_ANIMATION_SCALE = 100
 
 export const APPEARANCE_UI_FONTS: ReadonlyArray<{ id: AppearanceUiFont; label: string; stack: string }> = [
     { id: 'bricolage', label: 'Bricolage Grotesque', stack: '"Bricolage Grotesque", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif' },
@@ -143,7 +155,7 @@ export const APPEARANCE_CODE_FONTS: ReadonlyArray<{ id: AppearanceCodeFont; labe
     { id: 'system-mono', label: 'System monospace', stack: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace' },
     { id: 'cascadia', label: 'Cascadia Code', stack: '"Cascadia Code", "Cascadia Mono", Consolas, monospace' },
     { id: 'consolas', label: 'Consolas', stack: 'Consolas, "Courier New", monospace' },
-    { id: 'jetbrains', label: 'JetBrains Mono', stack: '"JetBrains Mono", "Cascadia Code", Consolas, monospace' }
+    { id: 'jetbrains', label: 'JetBrains Mono', stack: '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Consolas, monospace' }
 ]
 
 export function createAppearanceManagedFont(fontId: string): AppearanceManagedFont {
@@ -208,8 +220,9 @@ export const DEFAULT_APPEARANCE_LIGHT_THEME: LightTheme = 'paper-light'
 export const DEFAULT_APPEARANCE_DARK_THEME: DarkTheme = 'vercel'
 
 export interface Settings {
-    settingsSchemaVersion: 4
+    settingsSchemaVersion: 5
     theme: Theme
+    keyboardShortcuts: ShortcutOverrides
     appearanceThemeMode: AppearanceThemeMode
     appearanceLightTheme: LightTheme
     appearanceDarkTheme: DarkTheme
@@ -218,6 +231,11 @@ export interface Settings {
     appearanceCustomThemeActive: boolean
     appearanceUiFont: AppearanceUiFont
     appearanceCodeFont: AppearanceCodeFont
+    appearanceInterfaceScale: number
+    appearanceCodeScale: number
+    appearanceContrastScale: number
+    appearanceAnimationSpeed: AppearanceAnimationSpeed
+    appearanceAnimationScale: number
     accentColor: AccentColor
     compactMode: boolean
     sidebarCollapsed: boolean
@@ -303,11 +321,13 @@ export interface Settings {
     accessibilityReduceMotion: boolean
     projectIconOverrides: Record<string, string>
     assistantTranscriptionEnabled: boolean
+    assistantMemoryEnabled: boolean
     assistantTranscriptionEngine: AssistantTranscriptionEngine
 }
 
 const DEFAULT_SETTINGS: Settings = {
-    settingsSchemaVersion: 4,
+    settingsSchemaVersion: 5,
+    keyboardShortcuts: {},
     theme: DEFAULT_APPEARANCE_DARK_THEME,
     appearanceThemeMode: 'system',
     appearanceLightTheme: DEFAULT_APPEARANCE_LIGHT_THEME,
@@ -316,7 +336,12 @@ const DEFAULT_SETTINGS: Settings = {
     appearanceCustomTheme: null,
     appearanceCustomThemeActive: false,
     appearanceUiFont: DEFAULT_APPEARANCE_UI_FONT,
-    appearanceCodeFont: 'system-mono',
+    appearanceCodeFont: DEFAULT_APPEARANCE_CODE_FONT,
+    appearanceInterfaceScale: DEFAULT_APPEARANCE_INTERFACE_SCALE,
+    appearanceCodeScale: DEFAULT_APPEARANCE_CODE_SCALE,
+    appearanceContrastScale: DEFAULT_APPEARANCE_CONTRAST_SCALE,
+    appearanceAnimationSpeed: DEFAULT_APPEARANCE_ANIMATION_SPEED,
+    appearanceAnimationScale: DEFAULT_APPEARANCE_ANIMATION_SCALE,
     accentColor: getThemePresetAccent(DEFAULT_APPEARANCE_DARK_THEME),
     compactMode: false,
     sidebarCollapsed: false,
@@ -406,6 +431,7 @@ const DEFAULT_SETTINGS: Settings = {
     accessibilityReduceMotion: false,
     projectIconOverrides: {},
     assistantTranscriptionEnabled: false,
+    assistantMemoryEnabled: false,
     assistantTranscriptionEngine: 'browser'
 }
 
@@ -458,7 +484,17 @@ function sanitizeAppearanceUiFont(value: unknown): AppearanceUiFont {
 function sanitizeAppearanceCodeFont(value: unknown): AppearanceCodeFont {
     const dynamicFont = sanitizeDynamicAppearanceFont(value)
     if (dynamicFont) return dynamicFont
-    return value === 'cascadia' || value === 'consolas' || value === 'jetbrains' ? value : 'system-mono'
+    return value === 'system-mono' || value === 'cascadia' || value === 'consolas' || value === 'jetbrains' ? value : DEFAULT_APPEARANCE_CODE_FONT
+}
+
+function sanitizeDisplayScale(value: unknown, min: number, max: number, fallback: number): number {
+    return Number.isFinite(Number(value))
+        ? Math.max(min, Math.min(max, Math.round(Number(value))))
+        : fallback
+}
+
+function sanitizeAppearanceAnimationSpeed(value: unknown): AppearanceAnimationSpeed {
+    return value === 'calm' || value === 'brisk' || value === 'custom' ? value : DEFAULT_APPEARANCE_ANIMATION_SPEED
 }
 
 function sanitizeHexColor(value: unknown): string | null {
@@ -641,7 +677,7 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 : null
 
             return {
-                settingsSchemaVersion: 4,
+                settingsSchemaVersion: 5,
                 theme,
                 appearanceThemeMode,
                 appearanceLightTheme,
@@ -651,6 +687,11 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 appearanceCustomThemeActive,
                 appearanceUiFont,
                 appearanceCodeFont,
+                appearanceInterfaceScale: sanitizeDisplayScale(candidate.appearanceInterfaceScale, 85, 130, DEFAULT_APPEARANCE_INTERFACE_SCALE),
+                appearanceCodeScale: sanitizeDisplayScale(candidate.appearanceCodeScale, 80, 150, DEFAULT_APPEARANCE_CODE_SCALE),
+                appearanceContrastScale: sanitizeDisplayScale(candidate.appearanceContrastScale, 70, 150, DEFAULT_APPEARANCE_CONTRAST_SCALE),
+                appearanceAnimationSpeed: sanitizeAppearanceAnimationSpeed(candidate.appearanceAnimationSpeed),
+                appearanceAnimationScale: sanitizeDisplayScale(candidate.appearanceAnimationScale, 50, 200, DEFAULT_APPEARANCE_ANIMATION_SCALE),
                 accentColor,
                 compactMode: candidate.compactMode === true,
                 sidebarCollapsed: candidate.sidebarCollapsed === true,
@@ -668,7 +709,10 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 filePreviewFullscreenShowRightPanel: !!candidate.filePreviewFullscreenShowRightPanel,
                 filePreviewDefaultMode: candidate.filePreviewDefaultMode === 'edit' ? 'edit' : 'preview',
                 filePreviewPythonRunMode: candidate.filePreviewPythonRunMode === 'output' ? 'output' : 'terminal',
-                filePreviewExplorerNameLayout: candidate.filePreviewExplorerNameLayout === 'horizontal' ? 'horizontal' : 'wrap',
+                // Legacy wrapping preferences become single-line, ellipsized names.
+                filePreviewExplorerNameLayout: candidate.filePreviewExplorerNameLayout === 'horizontal'
+                    ? 'horizontal'
+                    : 'wrap',
                 fileEditorWordWrap: candidate.fileEditorWordWrap === 'off' ? 'off' : 'on',
                 fileEditorMinimapEnabled: candidate.fileEditorMinimapEnabled !== false,
                 fileEditorFontSize: Number.isFinite(Number(candidate.fileEditorFontSize))
@@ -778,8 +822,12 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 assistantShowStatusDetails: candidate.assistantShowStatusDetails !== false,
                 assistantShowDiagnostics: candidate.assistantShowDiagnostics === true,
                 accessibilityReduceMotion: candidate.accessibilityReduceMotion === true,
+                keyboardShortcuts: sanitizeShortcutOverrides(candidate.keyboardShortcuts),
                 projectIconOverrides: sanitizeStringRecord(candidate.projectIconOverrides),
                 assistantTranscriptionEnabled: candidate.assistantTranscriptionEnabled === true,
+                assistantMemoryEnabled: typeof parsed.assistantMemoryEnabled === 'boolean'
+                    ? parsed.assistantMemoryEnabled
+                    : Object.keys(parsed).some((key) => key !== 'settingsSchemaVersion'),
                 assistantTranscriptionEngine: candidate.assistantTranscriptionEngine === 'codex'
                     || candidate.assistantTranscriptionEngine === 'vosk'
                     ? 'codex'
@@ -827,7 +875,7 @@ interface SettingsContextType {
     settings: Settings
     preferencesHydrated: boolean
     preferencesError: string | null
-    updateSettings: (partial: Partial<Settings>) => Promise<void>
+    updateSettings: (partial: Partial<Settings>, options?: { persist?: boolean }) => Promise<void>
     updateHostedAiSecrets: (partial: UpdateHostedAiSecretsInput) => Promise<void>
     clearCache: () => void
 }
@@ -835,6 +883,7 @@ interface SettingsContextType {
 const SettingsContext = createContext<SettingsContextType | null>(null)
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
+    useNativeAppShortcuts()
     const bootstrapRef = useRef<{
         surface: DevicePreferenceSurface
         legacy: Settings | null
@@ -846,7 +895,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         bootstrapRef.current = {
             surface,
             legacy,
-            initial: legacy || loadSettings({ settingsSchemaVersion: 4 })
+            initial: legacy || loadSettings({ settingsSchemaVersion: 5 })
         }
     }
     const bootstrap = bootstrapRef.current
@@ -854,6 +903,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const [preferencesHydrated, setPreferencesHydrated] = useState(false)
     const [preferencesError, setPreferencesError] = useState<string | null>(null)
     const settingsRef = useRef(settings)
+    configureShortcutOverrides(() => settingsRef.current.keyboardShortcuts)
     const revisionRef = useRef(0)
     const writeQueueRef = useRef<Promise<void>>(Promise.resolve())
 
@@ -868,9 +918,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const applyPreferenceSnapshot = useCallback((snapshot: DevicePreferencesSnapshot) => {
         revisionRef.current = snapshot.revision
         replaceSettings((current) => {
-            const loaded = loadSettings({ settingsSchemaVersion: 4, ...snapshot.settings })
+            const loaded = loadSettings({ settingsSchemaVersion: 5, ...snapshot.settings })
             const canonical = {
                 ...loaded,
+                assistantMemoryEnabled: typeof snapshot.settings.assistantMemoryEnabled === 'boolean'
+                    ? snapshot.settings.assistantMemoryEnabled
+                    : snapshot.desktopLegacyMigrationComplete || loaded.assistantMemoryEnabled,
                 // Startup is owned by Electron's OS integration; hosted keys are OS-encrypted.
                 startMinimized: current.startMinimized,
                 startWithWindows: current.startWithWindows,
@@ -980,8 +1033,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             && settings.appearanceCustomTheme?.baseTheme === settings.theme
             ? settings.appearanceCustomTheme.tokens
             : undefined
-        applyTheme(settings.theme, settings.accentColor, customTokens)
-    }, [settings.accentColor, settings.appearanceCustomTheme, settings.appearanceCustomThemeActive, settings.theme])
+        applyTheme(settings.theme, settings.accentColor, customTokens, settings.appearanceContrastScale)
+    }, [settings.accentColor, settings.appearanceContrastScale, settings.appearanceCustomTheme, settings.appearanceCustomThemeActive, settings.theme])
 
     useEffect(() => {
         const root = document.documentElement
@@ -1012,6 +1065,26 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         return () => document.body.classList.remove('zyra-reduce-motion')
     }, [settings.accessibilityReduceMotion])
 
+    useEffect(() => applyAppearanceMotionRate(resolveAppearanceMotionRate(settings.appearanceAnimationSpeed, settings.appearanceAnimationScale)), [settings.appearanceAnimationScale, settings.appearanceAnimationSpeed])
+
+    useEffect(() => {
+        // Main applies page zoom so Electron reduces the logical viewport and every app shell reflows.
+        // CSS zoom enlarges fixed 100vh surfaces without reflowing them, causing clipped content.
+        document.body.style.removeProperty('zoom')
+    }, [settings.appearanceInterfaceScale])
+
+    useEffect(() => {
+        const root = document.documentElement
+        const active = settings.appearanceCodeScale !== DEFAULT_APPEARANCE_CODE_SCALE
+        document.body.classList.toggle('zyra-code-zoom', active)
+        if (active) {
+            root.style.setProperty('--code-zoom', String(settings.appearanceCodeScale / 100))
+        } else {
+            root.style.removeProperty('--code-zoom')
+        }
+        return () => document.body.classList.remove('zyra-code-zoom')
+    }, [settings.appearanceCodeScale])
+
     useEffect(() => {
         setCanonicalAssistantAutoReconnectPreference(settings.assistantAutoReconnect)
     }, [settings.assistantAutoReconnect])
@@ -1028,7 +1101,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         }))
     }, [replaceSettings])
 
-    const updateSettings = useCallback((partial: Partial<Settings>) => {
+    const updateSettings = useCallback((partial: Partial<Settings>, options?: { persist?: boolean }) => {
         const capturePersistedAnalyticsChanges = () => {
             if (partial.appearanceThemeMode) {
                 captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'theme_mode', theme_mode: partial.appearanceThemeMode } })
@@ -1052,9 +1125,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         const next = loadSettings({
             ...settingsRef.current,
             ...rendererPartial,
-            settingsSchemaVersion: 4
+            settingsSchemaVersion: 5
         } as unknown as Record<string, unknown>)
         replaceSettings(next)
+
+        if (options?.persist === false) return Promise.resolve()
 
         const preferencePatch: Record<string, unknown> = {}
         const secretPatch: { groqApiKey?: string; geminiApiKey?: string } = {}
@@ -1073,6 +1148,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         }
 
         if (Object.keys(preferencePatch).length === 0) return Promise.resolve()
+        let persistenceError: unknown
         writeQueueRef.current = writeQueueRef.current.then(async () => {
             const save = () => window.devscope.preferences.update({
                 surface: bootstrap.surface,
@@ -1088,11 +1164,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             applyPreferenceSnapshot(result.snapshot)
             capturePersistedAnalyticsChanges()
         }).catch((error) => {
+            persistenceError = error
             console.error('Failed to save main-owned settings:', error)
             setPreferencesError(error instanceof Error ? error.message : 'Could not save device preferences.')
             return refreshPreferences().catch(() => undefined)
         })
-        return writeQueueRef.current
+        // Shortcut recording must not report success when persistence failed.
+        return partial.keyboardShortcuts ? writeQueueRef.current.then(() => { if (persistenceError) throw persistenceError }) : writeQueueRef.current
     }, [applyPreferenceSnapshot, bootstrap.surface, refreshPreferences, replaceSettings, updateHostedAiSecrets])
 
     const clearCache = useCallback(() => {
@@ -1117,10 +1195,10 @@ export function useSettings() {
     return context
 }
 
-function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeTokens) {
+function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeTokens, contrastScale = 100) {
     const themeDefinition = getThemeDefinition(theme)
     const appearance = getThemeAppearance(theme)
-    const tokens = resolveThemeTokens(customTokens || themeDefinition.tokens)
+    const tokens = resolveThemeTokens(customTokens || themeDefinition.tokens, contrastScale)
     const roots = [document.documentElement, document.body]
     for (const target of roots) {
         target.classList.remove(...THEME_CLASS_IDS)
@@ -1144,20 +1222,22 @@ function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeToken
     root.style.setProperty('--color-border', tokens.border)
     root.style.setProperty('--color-border-secondary', tokens.borderSecondary)
     root.style.setProperty('--color-primary', tokens.primary)
-    root.style.setProperty('--color-primary-on', resolveAccentTokens(tokens.primary, tokens.secondary, tokens.bg).onPrimary)
+    root.style.setProperty('--color-primary-on', resolveAccentTokens(tokens.primary, tokens.secondary, tokens.bg, contrastScale).onPrimary)
     root.style.setProperty('--color-secondary', tokens.secondary)
     root.style.setProperty('--color-accent', tokens.accent)
     root.style.setProperty('--color-theme-accent', tokens.textSecondary)
 
-    const resolvedAccent = resolveAccentTokens(accent.primary, accent.secondary, tokens.bg)
+    const resolvedAccent = resolveAccentTokens(accent.primary, accent.secondary, tokens.bg, contrastScale)
     root.style.setProperty('--accent-primary', resolvedAccent.primary)
     root.style.setProperty('--accent-secondary', resolvedAccent.secondary)
+    // Agent identity stays consistent across shells that override local accents.
+    root.style.setProperty('--agent-presence-accent', resolvedAccent.secondary)
     root.style.setProperty('--accent-primary-rgb', toRgbChannels(resolvedAccent.primary))
     root.style.setProperty('--accent-secondary-rgb', toRgbChannels(resolvedAccent.secondary))
     root.style.setProperty('--accent-on-primary', resolvedAccent.onPrimary)
     root.style.setProperty('--accent-contrast', resolvedAccent.onPrimary)
 
-    const status = resolveStatusTokens(tokens.bg, tokens.primary)
+    const status = resolveStatusTokens(tokens.bg, tokens.primary, contrastScale)
     root.style.setProperty('--status-danger', status.danger)
     root.style.setProperty('--status-warning', status.warning)
     root.style.setProperty('--status-success', status.success)

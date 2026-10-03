@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { handleAssistantRuntimeEvent } from '../src/main/assistant/service-runtime-events'
+import { mock } from 'bun:test'
+mock.module('electron', () => ({ webContents: { getAllWebContents: () => [] } }))
+const { markActiveThreadCompletionSeen } = await import('../src/main/assistant/service-helpers')
 import {
     readTerminalAssistantMessageOutcome,
     resolveZyraTerminalOutcome
@@ -24,7 +27,7 @@ const interruptedMessage = readTerminalAssistantMessageOutcome({
 assert.deepEqual(interruptedMessage, {
     outcome: 'interrupted',
     errorMessage: 'Request was aborted',
-    sourceMessageId: `pi-message:assistant:${abortedTimestamp}`
+    sourceMessageId: `zyra-message:assistant:${abortedTimestamp}`
 }, 'the canonical assistant terminal message and timestamp own interruption metadata')
 assert.equal(resolveZyraTerminalOutcome('agent_end', {}, interruptedMessage && { turnId: 'turn-interrupted', ...interruptedMessage }), 'interrupted')
 
@@ -41,6 +44,7 @@ const successfulResponse = readTerminalAssistantMessageOutcome({
     content: [{ type: 'text', text: 'Recovered response' }]
 }, 'successful-response')
 assert.equal(failedAttempt?.outcome, 'failed')
+assert.equal(resolveZyraTerminalOutcome('agent_end', { outcome: 'interrupted', interruption: { kind: 'stopped', source: 'agent' } }, { turnId: 'stopped-turn', ...failedAttempt! }), 'interrupted', 'Explicit agent cancellation overrides an aborted request reported as a provider error')
 assert.equal(successfulResponse, null)
 assert.equal(resolveZyraTerminalOutcome('agent_end', {}, null), 'completed', 'a later successful assistant response clears an earlier failed attempt')
 
@@ -172,6 +176,7 @@ handle(runtimeEvent('activity', 'turn-interrupted', 5_000, {
 }))
 handle(runtimeEvent('turn.completed', 'turn-interrupted', 6_000, {
     outcome: 'interrupted',
+    interruption: { kind: 'stopped', source: 'agent', threadId: 'source-agent-thread' },
     errorMessage: 'Request was aborted'
 }, { itemId: `pi-message:assistant:${abortedTimestamp}` }))
 const interruptedActivities = currentThread().activities.filter((activity) => activity.turnId === 'turn-interrupted')
@@ -179,7 +184,13 @@ assert.equal(interruptedActivities.find((activity) => activity.id === 'completed
 const liveTerminal = interruptedActivities.find((activity) => activity.turnTerminalOutcome === 'interrupted')
 assert.equal(liveTerminal?.id, `shared-error:pi-message:assistant:${abortedTimestamp}`)
 assert.equal(liveTerminal?.payload?.['status'], 'cancelled')
+assert.deepEqual(liveTerminal?.payload?.interruption, { kind: 'stopped', source: 'agent', threadId: 'source-agent-thread' }, 'Who stopped the work survives runtime projection into persisted terminal activity')
 assert.equal(currentThread().latestTurn?.state, 'interrupted')
+markActiveThreadCompletionSeen(snapshot.sessions[0]!, new Date(baseTime + 6100).toISOString(), deps.appendEvent)
+assert.equal(currentThread().lastSeenCompletedTurnId, 'turn-interrupted', 'Opening stopped work records the seen turn in the persisted domain event')
+const seenSequence = sequence
+markActiveThreadCompletionSeen(snapshot.sessions[0]!, new Date(baseTime + 6200).toISOString(), deps.appendEvent)
+assert.equal(sequence, seenSequence, 'Repeated opening is idempotent')
 
 handle(runtimeEvent('turn.started', 'turn-failed', 7_000, { interactionMode: 'default' }))
 handle(runtimeEvent('turn.completed', 'turn-failed', 8_000, {
@@ -189,5 +200,10 @@ handle(runtimeEvent('turn.completed', 'turn-failed', 8_000, {
 const failedTerminal = currentThread().activities.find((activity) => activity.turnId === 'turn-failed' && activity.turnTerminalOutcome === 'failed')
 assert.equal(failedTerminal?.tone, 'error', 'a true failed turn remains distinct from interruption')
 assert.equal(currentThread().latestTurn?.state, 'error')
+const terminalBoundary = { ...currentThread().latestTurn! }
+handle(runtimeEvent('turn.started', 'turn-failed', 9_000, { interactionMode: 'default' }))
+assert.equal(currentThread().latestTurn?.state, 'error', 'Reattached terminal turn cannot become running')
+handle(runtimeEvent('turn.completed', 'turn-failed', 10_000, { outcome: 'failed', errorMessage: 'Provider rejected the request' }))
+assert.equal(currentThread().latestTurn?.completedAt, terminalBoundary.completedAt, 'Duplicate completion keeps the historical timer boundary')
 
 console.log('Assistant terminal outcome contract: ok')

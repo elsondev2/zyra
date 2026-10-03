@@ -22,7 +22,7 @@ export function getReviewedCatalogPluginSelection(catalog: AssistantPluginCatalo
     const plugin = catalog.plugins.find(entry => entry.sourceId === `openai-catalog:${name}` && entry.name === inspection.manifest.name)
     if (!plugin || plugin.state !== 'active') return null
     const release = catalog.releases.find(entry => entry.pluginId === plugin.id && entry.id === plugin.activeReleaseId && entry.contentDigest === inspection.release.contentDigest)
-    if (!release?.skills.length) return null
+    if (!release || !(release.skills.length || release.manifest.contributions.mcp)) return null
     return { pluginId: plugin.id, releaseId: release.id, contentDigest: release.contentDigest }
 }
 
@@ -68,6 +68,9 @@ export function previewChatPluginScopeDiff(
                 version: release.version,
                 contentDigest: release.contentDigest,
                 skillsPath: release.manifest.contributions.skills,
+                mcpPath: release.manifest.contributions.mcp,
+                ...(release.appMcpPath !== undefined ? { appMcpPath: release.appMcpPath } : {}),
+                ...(release.mcpServerPins !== undefined ? { mcpServerPins: structuredClone(release.mcpServerPins) } : {}),
                 capabilityCeiling: release.manifest.declaredCapabilityCeiling
             }]
             : []
@@ -79,7 +82,7 @@ export function previewChatPluginScopeDiff(
         removed: scope.plugins.filter((plugin) => !after.has(plugin.pluginId)),
         changed: nextPlugins.flatMap((plugin) => {
             const previous = before.get(plugin.pluginId)
-            return previous && (previous.releaseId !== plugin.releaseId || previous.contentDigest !== plugin.contentDigest)
+            return previous && (previous.releaseId !== plugin.releaseId || previous.contentDigest !== plugin.contentDigest || previous.skillsPath !== plugin.skillsPath || previous.mcpPath !== plugin.mcpPath || previous.appMcpPath !== plugin.appMcpPath || JSON.stringify(previous.mcpServerPins) !== JSON.stringify(plugin.mcpServerPins))
                 ? [{ before: previous, after: plugin }]
                 : []
         })
@@ -118,7 +121,7 @@ export function getContributionSummary(release: AssistantPluginRelease | null): 
     if (!entries.length) return 'No contributions'
     return entries.map((entry) => {
         if (entry === 'mcp') return 'MCP servers'
-        if (entry === 'apps') return 'app views'
+        if (entry === 'apps') return 'registered connections'
         if (entry === 'browserExtensions') return 'browser extensions'
         if (entry === 'scheduledTasks') return 'scheduled tasks'
         return entry

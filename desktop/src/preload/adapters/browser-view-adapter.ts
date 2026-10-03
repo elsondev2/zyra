@@ -16,6 +16,7 @@ export function createBrowserViewAdapter(): { browserView: BrowserViewApi } {
             close: (tabId: string) => ipcRenderer.invoke(BROWSER_VIEW_IPC.close, tabId),
             release: (tabId: string) => ipcRenderer.send(BROWSER_VIEW_IPC.release, tabId),
             reportSlot: (input: BrowserViewSlotInput) => ipcRenderer.send(BROWSER_VIEW_IPC.reportSlot, input),
+            refreshTheme: () => ipcRenderer.send(BROWSER_VIEW_IPC.refreshTheme),
             onEvent: (callback: (event: BrowserViewEvent) => void) => {
                 const listener = (_event: Electron.IpcRendererEvent, browserEvent: BrowserViewEvent) => callback(browserEvent)
                 ipcRenderer.on(BROWSER_VIEW_IPC.event, listener)

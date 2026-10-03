@@ -131,29 +131,38 @@ function ensureSurfaceSeparation(surface: string, background: string, foreground
     return mixColors(foreground, surface, sufficientWeight)
 }
 
-export function resolveThemeTokens(tokens: ThemeTokens): ThemeTokens {
+function scaleContrast(color: string, background: string, contrastScale: number, minimum: number): string {
+    const baseline = Math.max(getContrastRatio(color, background), minimum)
+    const target = Math.max(1, baseline * contrastScale)
+    if (target === baseline) return ensureContrast(color, background, minimum)
+    return toneAtContrast(color, background, target)
+}
+
+export function resolveThemeTokens(tokens: ThemeTokens, contrastScale = 100): ThemeTokens {
     const background = tokens.bg
-    const text = ensureContrast(tokens.text, background, TEXT_CONTRAST)
-    const card = ensureSurfaceSeparation(tokens.card, background, text, 1.06)
+    const scale = Math.max(0.7, Math.min(1.5, contrastScale / 100))
+    const text = scaleContrast(tokens.text, background, scale, TEXT_CONTRAST)
+    const card = scaleContrast(ensureSurfaceSeparation(tokens.card, background, text, 1.06), background, scale, 1.06)
     return {
         bg: background,
         text,
-        textDark: toneAtContrast(text, background, SUPPORTING_TEXT_CONTRAST),
-        textDarker: toneAtContrast(text, background, SECONDARY_TEXT_CONTRAST),
-        textSecondary: toneAtContrast(text, background, SECONDARY_TEXT_CONTRAST),
-        textMuted: toneAtContrast(text, background, MUTED_TEXT_CONTRAST),
+        textDark: toneAtContrast(text, background, SUPPORTING_TEXT_CONTRAST * scale),
+        textDarker: toneAtContrast(text, background, SECONDARY_TEXT_CONTRAST * scale),
+        textSecondary: toneAtContrast(text, background, SECONDARY_TEXT_CONTRAST * scale),
+        textMuted: toneAtContrast(text, background, MUTED_TEXT_CONTRAST * scale),
         card,
-        border: ensureContrast(tokens.border, background, 1.35),
-        borderSecondary: ensureContrast(tokens.borderSecondary, background, 1.65),
-        primary: ensureContrast(tokens.primary, background, ACCENT_CONTRAST),
-        secondary: ensureContrast(tokens.secondary, background, ACCENT_CONTRAST),
-        accent: ensureSurfaceSeparation(tokens.accent, background, text, 1.08)
+        border: scaleContrast(tokens.border, background, scale, 1.35),
+        borderSecondary: scaleContrast(tokens.borderSecondary, background, scale, 1.65),
+        primary: scaleContrast(tokens.primary, background, scale, ACCENT_CONTRAST),
+        secondary: scaleContrast(tokens.secondary, background, scale, ACCENT_CONTRAST),
+        accent: scaleContrast(ensureSurfaceSeparation(tokens.accent, background, text, 1.08), background, scale, 1.08)
     }
 }
 
-export function resolveAccentTokens(primary: string, secondary: string, background: string): ResolvedAccentTokens {
-    const resolvedPrimary = ensureContrast(primary, background, ACCENT_CONTRAST)
-    const resolvedSecondary = ensureContrast(secondary, background, ACCENT_CONTRAST)
+export function resolveAccentTokens(primary: string, secondary: string, background: string, contrastScale = 100): ResolvedAccentTokens {
+    const scale = Math.max(0.7, Math.min(1.5, contrastScale / 100))
+    const resolvedPrimary = scaleContrast(primary, background, scale, ACCENT_CONTRAST)
+    const resolvedSecondary = scaleContrast(secondary, background, scale, ACCENT_CONTRAST)
     const onPrimary = getContrastRatio(WHITE, resolvedPrimary) >= getContrastRatio(BLACK, resolvedPrimary) ? WHITE : BLACK
     return {
         primary: resolvedPrimary,
@@ -162,13 +171,14 @@ export function resolveAccentTokens(primary: string, secondary: string, backgrou
     }
 }
 
-export function resolveStatusTokens(background: string, infoSource: string): ResolvedStatusTokens {
-    const danger = ensureContrast('#ef4444', background, SECONDARY_TEXT_CONTRAST)
+export function resolveStatusTokens(background: string, infoSource: string, contrastScale = 100): ResolvedStatusTokens {
+    const scale = Math.max(0.7, Math.min(1.5, contrastScale / 100))
+    const danger = scaleContrast('#ef4444', background, scale, SECONDARY_TEXT_CONTRAST)
     return {
         danger,
-        warning: ensureContrast('#d97706', background, SECONDARY_TEXT_CONTRAST),
-        success: ensureContrast('#16a34a', background, SECONDARY_TEXT_CONTRAST),
-        info: ensureContrast(infoSource, background, SECONDARY_TEXT_CONTRAST),
+        warning: scaleContrast('#d97706', background, scale, SECONDARY_TEXT_CONTRAST),
+        success: scaleContrast('#16a34a', background, scale, SECONDARY_TEXT_CONTRAST),
+        info: scaleContrast(infoSource, background, scale, SECONDARY_TEXT_CONTRAST),
         onDanger: getContrastRatio(WHITE, danger) >= getContrastRatio(BLACK, danger) ? WHITE : BLACK
     }
 }

@@ -45,10 +45,10 @@ window.open = ((_url:string, name:string) => {
 
 const context=createContext('')
 function Contents(){const value=useContext(context);const [count,setCount]=useState(0);return <div role="dialog" aria-label="Actual portal"><input data-native-overlay-autofocus data-value value={value} readOnly/><button data-increment onClick={()=>{buttons++;setCount(value=>value+1)}}>{count}</button></div>}
-type Options={a?:boolean;b?:boolean;passive?:boolean;value?:string;autoFocus?:boolean;bounds?:{x:number;y:number;width:number;height:number}}
+type Options={a?:boolean;b?:boolean;passive?:boolean;value?:string;autoFocus?:boolean;focusOnPresent?:boolean;bounds?:{x:number;y:number;width:number;height:number}}
 const root=createRoot(document.querySelector('#root')!)
-function App({a,b,passive,value='first',autoFocus=true,bounds}:Options){return <context.Provider value={value}>
- {a?<NativeOverlayPortal bounds={bounds} autoFocus={autoFocus} onReady={()=>{interactiveReady++}}><Contents/></NativeOverlayPortal>:null}
+function App({a,b,passive,value='first',autoFocus=true,focusOnPresent=false,bounds}:Options){return <context.Provider value={value}>
+ {a?<NativeOverlayPortal bounds={bounds} autoFocus={autoFocus} focusOnPresent={focusOnPresent} onReady={()=>{interactiveReady++}}><Contents/></NativeOverlayPortal>:null}
  {b?<NativeOverlayPortal onReady={()=>{interactiveReady++}}><div data-sibling>Sibling</div></NativeOverlayPortal>:null}
  {passive?<NativeOverlayPortal passive><div role="tooltip">Passive tooltip</div></NativeOverlayPortal>:null}
  </context.Provider>}
@@ -185,6 +185,13 @@ const fontMetrics=(owner:Document)=>{
  await until(()=>!shown('passive'),'last passive release')
  for(const kind of ['interactive','passive'] as Kind[]){const values=calls.filter(call=>call.kind===kind).map(call=>call.revision);assert(values.every((value,index)=>!index||value>values[index-1]),'visibility revisions increase')}
  checks.push('sibling release, independent kinds, final animation-frame hide and no focus theft')
+
+ render({a:true,focusOnPresent:true})
+ await until(()=>calls.some(call=>call.kind==='interactive'&&call.visible&&call.focus),'requested interactive focus')
+ assert(calls.at(-1)?.focus===true,'focus request reaches the native bridge')
+ render({})
+ await until(()=>!shown('interactive'),'focused surface release')
+ checks.push('opt-in interactive focus for searchable overlays')
 
  const scopedBounds={x:220,y:80,width:360,height:300}
  supportsBounds=false

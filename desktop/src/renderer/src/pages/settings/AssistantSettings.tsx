@@ -1,44 +1,29 @@
 import { SPEAKING_STYLES } from '@shared/assistant/speaking-style'
-import { useState } from 'react'
 import { useSettings } from '@/lib/settings'
+import { ChatDefaultsSettings } from './ChatDefaultsSettings'
 import { SettingsPageTabs } from './SettingsPageTabs'
 import { ChatAccessSettings } from './PermissionsSettings'
 import {
-    SettingsButton,
-    SettingsDialog,
     SettingsPageContainer,
     SettingsRow,
     SettingsSection,
     SettingsSegmented,
     SettingsSelect,
-    SettingsSwitch,
-    SettingsTextarea
+    SettingsSwitch
 } from './settings-layout'
 
-export type AssistantSettingsView = 'behavior' | 'display'
+export type AssistantSettingsView = 'behavior' | 'defaults' | 'display'
 
 export default function AssistantSettings({ view = 'behavior' }: { view?: AssistantSettingsView }) {
     return (
         <SettingsPageContainer title="Chats" navigation={<SettingsPageTabs family="chats" />}>
-            {view === 'behavior' ? <ChatBehaviorSettings /> : <ChatDisplaySettings />}
+            {view === 'behavior' ? <ChatBehaviorSettings /> : view === 'defaults' ? <ChatDefaultsSettings /> : <ChatDisplaySettings />}
         </SettingsPageContainer>
     )
 }
 
 function ChatBehaviorSettings() {
     const { settings, updateSettings } = useSettings()
-    const [promptTemplateOpen, setPromptTemplateOpen] = useState(false)
-    const [promptTemplateDraft, setPromptTemplateDraft] = useState(settings.assistantDefaultPromptTemplate)
-
-    const openPromptTemplate = () => {
-        setPromptTemplateDraft(settings.assistantDefaultPromptTemplate)
-        setPromptTemplateOpen(true)
-    }
-
-    const savePromptTemplate = () => {
-        updateSettings({ assistantDefaultPromptTemplate: promptTemplateDraft })
-        setPromptTemplateOpen(false)
-    }
 
     return (
         <>
@@ -48,42 +33,9 @@ function ChatBehaviorSettings() {
                     description="Set Zyra's tone without changing its tools or abilities."
                     control={<SettingsSegmented value={settings.assistantProductProfile} options={SPEAKING_STYLES.map((style) => ({ ...style }))} onChange={(assistantProductProfile) => updateSettings({ assistantProductProfile })} label="Speaking style" />}
                 />
-                <SettingsRow title="Busy send behavior" description="Choose what Send does while the current turn is still active." control={<SettingsSegmented value={settings.assistantBusyMessageMode} options={[{ value: 'queue', label: 'Queue next' }, { value: 'force', label: 'Interrupt' }]} onChange={(assistantBusyMessageMode) => updateSettings({ assistantBusyMessageMode })} label="Busy send behavior" />} />
-                <SettingsRow
-                    title="Default prompt"
-                    description="Prefill the composer when you start a new chat."
-                    info="The draft is not sent until you submit it."
-                    status={settings.assistantDefaultPromptTemplate.trim() ? 'Custom prompt saved' : 'No default prompt'}
-                    statusTone={settings.assistantDefaultPromptTemplate.trim() ? 'ready' : 'muted'}
-                    control={<SettingsButton onClick={openPromptTemplate}>Edit prompt</SettingsButton>}
-                />
             </SettingsSection>
 
             <ChatAccessSettings />
-
-            <SettingsDialog
-                open={promptTemplateOpen}
-                title="Edit default prompt"
-                description="This text is placed into the composer when a new chat starts."
-                onClose={() => setPromptTemplateOpen(false)}
-                footer={(
-                    <>
-                        <SettingsButton variant="ghost" onClick={() => setPromptTemplateOpen(false)}>Cancel</SettingsButton>
-                        <SettingsButton variant="accent" onClick={savePromptTemplate}>Save prompt</SettingsButton>
-                    </>
-                )}
-            >
-                <SettingsTextarea
-                    autoFocus
-                    value={promptTemplateDraft}
-                    maxLength={32_000}
-                    rows={10}
-                    onChange={(event) => setPromptTemplateDraft(event.target.value)}
-                    placeholder="Optional instructions for new chats"
-                    aria-label="Default assistant prompt template"
-                />
-                <div className="text-right text-[10px] tabular-nums text-[var(--settings-text-muted)]">{promptTemplateDraft.length.toLocaleString()} / 32,000</div>
-            </SettingsDialog>
         </>
     )
 }

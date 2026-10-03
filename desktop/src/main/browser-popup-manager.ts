@@ -1,3 +1,4 @@
+import { handleGuestAppShortcut, isRecordingShortcut } from './keybindings'
 import { randomUUID } from 'node:crypto'
 import { addNativeWindowView } from './native-view-layers'
 import {
@@ -21,7 +22,7 @@ import {
     registerBrowserPermissionTarget,
     scheduleGlobalBrowserProfileFlush
 } from './ipc/handlers/browser-preview-handlers'
-import { inheritBrowserPreviewPresentation } from './ipc/handlers/browser-preview-developer-handlers'
+import { inheritBrowserPreviewPresentation, openBrowserPreviewDevTools } from './ipc/handlers/browser-preview-developer-handlers'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { getBrowserThreatProtectionService } from './browser-threat-protection-service'
 import { isAuthenticationBrowserUrl } from '../shared/browser-url-sanitization'
@@ -644,15 +645,21 @@ export class BrowserPopupManager {
     }
 
     private handlePageShortcut(event: Electron.Event, input: Input, popup: ManagedBrowserPopup): void {
+        if (isRecordingShortcut(popup.ownerWindow.webContents)) return
+        if (handleGuestAppShortcut(input, popup.ownerWindow.webContents)) { event.preventDefault(); return }
         if (input.type === 'keyDown' && input.key === 'Escape' && popup.shellWindow.isFullScreen()) {
             event.preventDefault()
             popup.shellWindow.setFullScreen(false)
             return
         }
         const action = resolveBrowserShortcut(input, popupPlatform())
-        if (!action) return
+        if (!action) {
+            if (resolveBrowserShortcut(input, popupPlatform(), {})) event.preventDefault()
+            return
+        }
         event.preventDefault()
-        this.runPopupShortcut(popup, action)
+        try { this.runPopupShortcut(popup, action) }
+        catch (error) { log.warn('[BrowserPopup] Shortcut unavailable:', error) }
     }
 
     private runPopupShortcut(popup: ManagedBrowserPopup, action: BrowserShortcutAction): void {
@@ -670,6 +677,8 @@ export class BrowserPopupManager {
             } else {
                 focusAddress()
             }
+        } else if (action.type === 'devtools') {
+            openBrowserPreviewDevTools(popup.pageContents, 'popout')
         } else if (action.type === 'reload') {
             if (action.bypassCache) popup.pageContents.reloadIgnoringCache()
             else popup.pageContents.reload()

@@ -12,6 +12,7 @@ import type {
 } from '../../shared/assistant/contracts'
 import { getSharedProviderWorkerClient } from '../setup/provider-worker-client'
 import { resolveZyraRoot } from '../zyra/zyra-root'
+import { desktopTerminalEnvironment } from './agent-server-namespace'
 
 const CHATGPT_ACCOUNT_PROVIDER = providerForAppFeature('subscriptionUsage')
 const MAX_RESET_CREDIT_ID_LENGTH = 512
@@ -21,7 +22,7 @@ type JsonRecord = Record<string, unknown>
 type ChatGptAccountModule = {
     buildChatGptAccountStatus(provider?: string): Promise<unknown>
     fetchCodexResetCredits(): Promise<unknown>
-    redeemCodexResetCredit(creditId: string): Promise<unknown>
+    redeemCodexResetCredit(creditId: string, options?: { stateDirectory?: string }): Promise<unknown>
     isCodexResetCreditAvailable?(credit: unknown): boolean
 }
 
@@ -52,7 +53,9 @@ async function redeemResetOnMain(creditId: string): Promise<unknown> {
             throw error
         })
     }
-    return (await redemptionModulePromise).redeemCodexResetCredit(creditId)
+    const stateDirectory = desktopTerminalEnvironment().ZYRA_STATE_DIR
+    if (!stateDirectory) throw new Error('Desktop account credential namespace is not configured.')
+    return (await redemptionModulePromise).redeemCodexResetCredit(creditId, { stateDirectory })
 }
 
 async function loadChatGptAccountModule(): Promise<ChatGptAccountModule> {

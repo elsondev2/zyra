@@ -320,6 +320,9 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         listModels: remoteAssistantMethod('listModels'),
         listProjects: remoteAssistantMethod('listProjects'),
         getPluginCatalog: remoteAssistantMethod('getPluginCatalog'),
+        getPluginMcpConnections: async () => ({ success: false as const, error: 'Manage Plugin MCP connections in Zyra Desktop.' }),
+        connectPluginMcp: async () => ({ success: false as const, error: 'Connect Plugin MCP servers in Zyra Desktop.' }),
+        disconnectPluginMcp: async () => ({ success: false as const, error: 'Disconnect Plugin MCP servers in Zyra Desktop.' }),
         startPluginDownload: async () => ({ success: false as const, error: 'Install Plugins in Zyra Desktop.' }),
         getPluginDownload: async () => ({ success: false as const, error: 'Plugin downloads belong to Zyra Desktop.' }),
         cancelPluginDownload: async () => ({ success: false as const, error: 'Plugin downloads belong to Zyra Desktop.' }),
@@ -329,6 +332,9 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         setPluginSet: remoteAssistantMethod('setPluginSet'),
         refreshChatPluginScope: remoteAssistantMethod('refreshChatPluginScope'),
         setPluginState: remoteAssistantMethod('setPluginState'),
+        setPluginAppViewSettings: remoteAssistantMethod('setPluginAppViewSettings'),
+        readPluginAppView: async () => ({ success: false as const, error: 'App views are available in Zyra Desktop.' }),
+        callPluginAppViewTool: async () => ({ success: false as const, error: 'App views are available in Zyra Desktop.' }),
         rollbackPlugin: remoteAssistantMethod('rollbackPlugin'),
         createProject: remoteAssistantMethod('createProject'),
         associateProjectFolder: remoteAssistantMethod('associateProjectFolder'),
@@ -402,6 +408,10 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         },
         getVoiceTranscriptionState: remoteAssistantMethod('getVoiceTranscriptionState'),
         transcribeVoice: remoteAssistantMethod('transcribeVoice'),
+        saveVoiceHistory: remoteAssistantMethod('saveVoiceHistory'),
+        listVoiceHistory: remoteAssistantMethod('listVoiceHistory'),
+        getFailedVoiceRecording: remoteAssistantMethod('getFailedVoiceRecording'),
+        deleteVoiceHistory: remoteAssistantMethod('deleteVoiceHistory'),
         onEvent: (callback: (payload: AssistantEventStreamPayload) => void) => {
             const controller = new AbortController()
             void consumeAssistantEventStream(callback, controller.signal)

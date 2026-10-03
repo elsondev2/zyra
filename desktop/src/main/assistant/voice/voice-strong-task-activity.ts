@@ -24,6 +24,7 @@ export function buildVoiceStrongTaskActivity(input: {
             taskId: input.taskId,
             source: 'voice',
             sourceProviderItemId: input.sourceProviderItemId,
+            ...(input.status === 'completed' || input.status === 'failed' ? { resultText: input.detail } : {}),
             startedAt: input.startedAt,
             updatedAt: input.occurredAt,
             completedAt: input.status === 'running' ? null : input.occurredAt

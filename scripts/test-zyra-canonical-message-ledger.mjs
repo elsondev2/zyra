@@ -81,7 +81,7 @@ assert.throws(() => appendCanonicalMessage(reopened, {
 // A Voice-first new thread must persist the user turn before an assistant reply exists.
 const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "zyra-voice-ledger-"));
 try {
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const { SessionManager } = await import("../src/runtime/engine/src/index.js");
   const piManager = SessionManager.create(temporaryDirectory, temporaryDirectory, { id: "voice-ledger-new-thread" });
   const sessionFile = piManager.getSessionFile();
   assert.equal(existsSync(sessionFile), false);

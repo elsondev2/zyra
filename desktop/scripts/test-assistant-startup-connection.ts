@@ -25,6 +25,8 @@ import { getPausedAssistantRuntimeRecovery } from '../src/renderer/src/pages/ass
 import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/assistant/assistant-composer-capabilities'
 import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 import { mergeCanonicalPresenceLatestTurn, mergeCanonicalPresenceObservation, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
+import { leaveAssistantThreadForNavigation, shouldKeepAssistantThreadAttachedDuringNavigation } from '../src/main/assistant/service-navigation-runtime'
+import type { AssistantServiceActionDeps } from '../src/main/assistant/service-action-deps'
 import { resolveAssistantComposerLaunchConfiguration } from '../src/renderer/src/pages/assistant/assistant-new-chat-composer-config'
 import {
     resolveAssistantComposerFallbackState,
@@ -35,8 +37,8 @@ const storeSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assi
 const composerEffectsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantComposerControllerEffects.ts', import.meta.url), 'utf8')
 const composerControllerSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantComposerController.ts', import.meta.url), 'utf8')
 const conversationPaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url), 'utf8')
-assert.doesNotMatch(storeSource, /if \(!hasKnownModels\)[\s\S]*refreshModels/, 'an empty model cache must not launch provider discovery during startup')
-assert.doesNotMatch(composerEffectsSource, /didAutoRefreshModelsRef/, 'the composer refreshes models only after the user opens its model controls')
+assert.match(storeSource, /void this\.refreshModels\(false\)/, 'startup requests current provider models even when the saved catalog is empty')
+assert.doesNotMatch(composerEffectsSource, /didAutoRefreshModelsRef/, 'the composer does not duplicate the store-owned startup catalog refresh')
 assert.match(composerEffectsSource, /areAssistantComposerConfigurationsEqual[\s\S]{0,300}writeAssistantComposerSessionState\(sessionId, currentComposerState\)/u, 'thread configuration choices persist immediately instead of being lost to the draft debounce')
 assert.match(conversationPaneSource, /useSettingsDefaults=\{selectedSessionIsDraft \|\| newChatHandoffActive\}/u, 'only a New Chat inherits global composer defaults')
 assert.match(composerControllerSource, /resolveRetainedAssistantComposerModel/u, 'model catalog refreshes preserve an explicit thread model')
@@ -254,6 +256,63 @@ const snapshot: AssistantSnapshot = {
     knownModels: [{ id: 'openai-codex/gpt-5.5', label: 'gpt-5.5' }]
 }
 
+const startingNavigationThread: AssistantThread = {
+    ...thread,
+    state: 'starting',
+    messageCount: 2,
+    latestTurn: null,
+    canonicalPresence: { state: 'ready', activeTurnId: null, clients: [], backgroundWorkActive: false },
+    messages: [{ id: 'new-prompt', role: 'user', text: 'Keep working', turnId: null, createdAt: now, updatedAt: now }]
+}
+const navigationDisconnects: Array<{ threadId: string; preserveThreadState: boolean }> = []
+const navigationBackgroundStates: Array<{ threadId: string; backgrounded: boolean }> = []
+let runtimeContextPresent = true
+const navigationDeps = {
+    runtime: {
+        disconnect: (targetThreadId: string, options?: { preserveThreadState?: boolean }) => {
+            runtimeContextPresent = false
+            navigationDisconnects.push({ threadId: targetThreadId, preserveThreadState: options?.preserveThreadState === true })
+        },
+        setNavigationBackgrounded: (targetThreadId: string, backgrounded: boolean) => {
+            navigationBackgroundStates.push({ threadId: targetThreadId, backgrounded })
+        }
+    }
+} as unknown as AssistantServiceActionDeps
+leaveAssistantThreadForNavigation(navigationDeps, startingNavigationThread)
+assert.equal(runtimeContextPresent, true, 'leaving during prompt startup keeps the runtime context needed by sendPrompt')
+assert.deepEqual(navigationBackgroundStates[0], { threadId, backgrounded: true })
+assert.equal(resolveAssistantThreadStatusPill(startingNavigationThread, false)?.label, 'Connecting')
+assert.equal(isAssistantSessionBackgroundActive({ ...snapshot.sessions[0]!, threads: [startingNavigationThread] }, 'stale-empty-session'), true)
+
+const runningNavigationThread: AssistantThread = {
+    ...startingNavigationThread,
+    state: 'running',
+    latestTurn: { id: 'active-turn', state: 'running', requestedAt: now, startedAt: now, completedAt: null, assistantMessageId: null }
+}
+assert.equal(shouldKeepAssistantThreadAttachedDuringNavigation(runningNavigationThread), true)
+assert.equal(resolveAssistantThreadStatusPill(runningNavigationThread, false)?.label, 'Working')
+leaveAssistantThreadForNavigation(navigationDeps, runningNavigationThread)
+assert.equal(runtimeContextPresent, true, 'switching away from a running turn cannot dispose its event stream')
+
+const completedNavigationThread: AssistantThread = {
+    ...runningNavigationThread,
+    state: 'ready',
+    latestTurn: { ...runningNavigationThread.latestTurn!, state: 'completed', completedAt: now },
+    canonicalPresence: { state: 'ready', activeTurnId: null, clients: [], backgroundWorkActive: false }
+}
+assert.equal(shouldKeepAssistantThreadAttachedDuringNavigation(completedNavigationThread), false)
+assert.equal(resolveAssistantThreadStatusPill(completedNavigationThread, false)?.label, 'Done', 'an unseen finished turn remains visible in Active work')
+leaveAssistantThreadForNavigation(navigationDeps, completedNavigationThread)
+assert.deepEqual(navigationDisconnects, [{ threadId: thread.providerThreadId!, preserveThreadState: true }], 'idle navigation detaches without rewriting a completed chat as stopped')
+const backgroundWorkThread: AssistantThread = {
+    ...completedNavigationThread,
+    state: 'waiting',
+    canonicalPresence: { state: 'background', activeTurnId: null, clients: [], backgroundWorkActive: true }
+}
+assert.equal(shouldKeepAssistantThreadAttachedDuringNavigation(backgroundWorkThread), true)
+assert.equal(resolveAssistantThreadStatusPill(backgroundWorkThread, false)?.label, 'Background')
+assert.equal(isAssistantSessionBackgroundActive({ ...snapshot.sessions[0]!, threads: [backgroundWorkThread] }, 'stale-empty-session'), true, 'background agent work stays active after the root turn completes')
+
 const disconnectedStatus: AssistantRuntimeStatus = {
     available: true,
     connected: false,
@@ -432,6 +491,21 @@ assert.equal(
     resolveCanonicalPresenceThreadState({ currentState: 'starting', presence: readyPresence }),
     'ready',
     'canonical ready presence should clear a stale Desktop starting state even when the runtime object still exists'
+)
+assert.equal(
+    resolveCanonicalPresenceThreadState({ currentState: 'starting', localThread: startingNavigationThread, presence: readyPresence }),
+    'starting',
+    'a ready observation from before the submitted prompt cannot demote its local startup state'
+)
+assert.equal(
+    resolveCanonicalPresenceThreadState({ currentState: 'running', localThread: runningNavigationThread, presence: readyPresence }),
+    'running',
+    'a ready observation without the matching terminal turn cannot demote active work'
+)
+assert.equal(
+    resolveCanonicalPresenceThreadState({ currentState: 'running', localThread: runningNavigationThread, presence: { ...readyPresence, latestTurn: { ...runningNavigationThread.latestTurn!, state: 'completed', completedAt: now } } }),
+    'ready',
+    'the matching canonical terminal turn can settle active work'
 )
 assert.equal(
     getAssistantThreadPhase({ ...thread, state: 'starting', canonicalPresence: readyPresence }).key,

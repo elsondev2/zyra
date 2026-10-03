@@ -89,6 +89,7 @@ export function AssistantBrowserNewTab({
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1)
     const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false)
     const [serversExpanded, setServersExpanded] = useState(false)
+    const [loadedBackgroundUrl, setLoadedBackgroundUrl] = useState<string | null>(null)
     const backgroundImageRef = useRef<HTMLImageElement>(null)
     const surfaceRef = useRef<HTMLDivElement>(null)
     const background = useAssistantBrowserNewTabBackground()
@@ -185,7 +186,7 @@ export function AssistantBrowserNewTab({
     }
     return (
         <div ref={surfaceRef} className="no-drag pointer-events-auto absolute inset-0 z-10 overflow-y-auto bg-sparkle-bg">
-            {activeBackground ? <><img ref={backgroundImageRef} crossOrigin={activeBackground.provider === 'unsplash' ? 'anonymous' : undefined} src={activeBackground.imageUrl} alt="" className="pointer-events-none absolute inset-0 size-full object-cover" style={activeBackground.provider === 'built-in' ? { objectPosition: `${activeBackground.focalPoint.x * 100}% ${activeBackground.focalPoint.y * 100}%` } : undefined} /><div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(3,6,10,0.28)_0%,rgba(3,6,10,0.10)_44%,rgba(3,6,10,0.58)_100%)]" /></> : null}
+            {activeBackground ? <><img ref={backgroundImageRef} crossOrigin={activeBackground.provider === 'unsplash' ? 'anonymous' : undefined} src={activeBackground.imageUrl} alt="" onLoad={() => setLoadedBackgroundUrl(activeBackground.imageUrl)} className="pointer-events-none absolute inset-0 size-full object-cover transition-opacity duration-200 motion-reduce:transition-none" style={{ ...(activeBackground.provider === 'built-in' ? { objectPosition: `${activeBackground.focalPoint.x * 100}% ${activeBackground.focalPoint.y * 100}%` } : {}), opacity: loadedBackgroundUrl === activeBackground.imageUrl ? 1 : 0 }} /><div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(3,6,10,0.28)_0%,rgba(3,6,10,0.10)_44%,rgba(3,6,10,0.58)_100%)]" /></> : null}
             <h1 className="sr-only">New tab</h1>
 
             <div className="absolute z-20 flex items-center gap-1" style={{ right: 20, top: 28 }}>
@@ -222,7 +223,7 @@ export function AssistantBrowserNewTab({
                                     setSuggestionsLoading(false)
                                 }
                             }} className="min-w-0 flex-1 bg-transparent px-3 text-[12px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted" placeholder="Search Google or enter an address" spellCheck={false} aria-label="New tab search" role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen} aria-controls={suggestionsOpen ? NEW_TAB_SUGGESTIONS_ID : undefined} aria-activedescendant={activeSuggestionIndex >= 0 && suggestions[activeSuggestionIndex] ? `${NEW_TAB_SUGGESTIONS_ID}-option-${activeSuggestionIndex}` : undefined} />
-                            <button type="submit" className="inline-flex w-11 items-center justify-center text-[var(--accent-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent-primary)]" title="Open"><ArrowRight size={14} /></button>
+                            <button type="submit" className="inline-flex w-11 self-stretch items-center justify-center text-[var(--accent-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent-primary)]" title="Open"><ArrowRight size={14} /></button>
                         </label>
                         {suggestionsOpen ? (
                             <div id={NEW_TAB_SUGGESTIONS_ID} role="listbox" aria-label="Google suggestions" className="max-h-72 overflow-y-auto border-t border-[var(--surface-divider)] p-1.5 text-left">

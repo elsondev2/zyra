@@ -4,6 +4,7 @@ import type { DevScopeBrowserGuestTargetInput, DevScopeBrowserPreviewConfig } fr
 import type { ControlCursorState } from '@shared/agent-control/contracts'
 import type { BrowserViewEvent, BrowserViewState } from '@shared/browser-view'
 import { dismissTransientMenus } from '@/lib/transient-menu'
+import { browserViewStatePatch } from '@/lib/browser-view-state'
 import type { AssistantBrowserTabState } from './assistant-browser-workspace-state'
 import { shouldShowAssistantBrowserNativeView } from './assistant-browser-native-view-visibility'
 import { nextAssistantBrowserSlotRevision } from './assistant-browser-slot-revision'
@@ -26,21 +27,6 @@ type BrowserStatePatch = Partial<Omit<AssistantBrowserTabState, 'id'>>
 type BrowserViewCommandInput = Parameters<typeof window.devscope.browserView.command>[0]
 type BrowserStateChangeOptions = { suppressHistory?: boolean }
 
-function browserStatePatch(state: BrowserViewState): BrowserStatePatch {
-    return {
-        sessionMode: state.sessionMode,
-        url: state.url,
-        displayAddress: state.displayAddress,
-        title: state.title,
-        status: state.status,
-        error: state.error,
-        canGoBack: state.canGoBack,
-        canGoForward: state.canGoForward,
-        faviconUrl: state.faviconUrl,
-        audible: state.audible
-    }
-}
-
 export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHandle, {
     tab: AssistantBrowserTabState
     threadId: string
@@ -56,6 +42,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     onControlTargetChange: (tabId: string, targetId: string | null) => void
     onFullscreenChange: (tabId: string, fullscreen: boolean) => void
     onViewportRectChange: (tabId: string, rect: { x: number; y: number; width: number; height: number } | null) => void
+    onGuestFocus: (tabId: string) => void
 }>(function AssistantBrowserWebview({
     tab,
     threadId,
@@ -70,7 +57,8 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     onStateChange,
     onControlTargetChange,
     onFullscreenChange,
-    onViewportRectChange
+    onViewportRectChange,
+    onGuestFocus
 }, forwardedRef) {
     const cursor = useBrowserTargetCursor(controlled ? cursorTargetId : undefined, active, initialCursor)
     const slotRef = useRef<HTMLDivElement | null>(null)
@@ -85,14 +73,16 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     const controlOverlayRequestRef = useRef<BrowserViewCommandInput | null>(null)
     const controlOverlayInFlightRef = useRef(false)
     const controlOverlayPublishedRef = useRef(false)
-    const callbacksRef = useRef({ onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange })
+    const activeRef = useRef(active)
+    const callbacksRef = useRef({ onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange, onGuestFocus })
     // App UI is composited in its own native overlay host. A menu never
     // changes the guest's visibility, capture resolution, or page identity.
     const effectiveVisible = shouldShowAssistantBrowserNativeView({
         hasPage: Boolean(tab.url),
         requestedVisible: visible
     })
-    callbacksRef.current = { onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange }
+    activeRef.current = active
+    callbacksRef.current = { onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange, onGuestFocus }
 
     const bindControlTarget = useCallback(() => {
         const state = stateRef.current
@@ -131,7 +121,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         const previous = stateRef.current
         if (previous && previous.guestWebContentsId === state.guestWebContentsId && state.revision < previous.revision) return
         stateRef.current = state
-        callbacksRef.current.onStateChange(tab.id, browserStatePatch(state), { suppressHistory })
+        callbacksRef.current.onStateChange(tab.id, browserViewStatePatch(state), { suppressHistory })
         callbacksRef.current.onFullscreenChange(tab.id, state.fullscreen)
         bindControlTarget()
     }, [bindControlTarget, tab.id])
@@ -140,7 +130,10 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         disposedRef.current = false
         const unsubscribe = window.devscope.browserView.onEvent((event: BrowserViewEvent) => {
             if (event.type === 'focus') {
-                if (event.tabId === tab.id) dismissTransientMenus()
+                if (event.tabId === tab.id) {
+                    dismissTransientMenus()
+                    if (activeRef.current) callbacksRef.current.onGuestFocus(tab.id)
+                }
                 return
             }
             if (event.state.tabId !== tab.id) return

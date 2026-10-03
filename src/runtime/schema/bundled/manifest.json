@@ -1,0 +1,16 @@
+{
+  "package": "typebox",
+  "version": "1.3.7",
+  "contentHash": "daaac020dafc7dc4bef02e620ab270788ec24b456444fe87c5a7b9119e71276d",
+  "entries": {
+    "typebox/schema": "schema.js",
+    "typebox/system": "system.js",
+    "typebox/compile": "compile.js",
+    "typebox/value": "value.js",
+    "typebox/type": "type.js",
+    "typebox/error": "error.js",
+    "typebox/format": "format.js",
+    "typebox/guard": "guard.js",
+    "typebox": "root.js"
+  }
+}

@@ -58,4 +58,18 @@ class VoiceProtocolTest {
         queue.command(command("valid"))
         assertThrows(IllegalStateException::class.java) { queue.flush { false } }
     }
+    @Test fun `private results link the actual voice turn without comparing wording`() {
+        val queue = VoiceProtocol(); queue.binding = VoiceBinding("adapter", "realtime", 1)
+        queue.command(command("storage", channel = "speakable").put("voiceTaskId", "storage-task"))
+        queue.flush { text -> assertFalse(text.contains("voiceTaskId")); true }
+        queue.provider(event("turn.created").put("turn", JSONObject().put("id", "answer").put("role", "assistant")))
+        queue.provider(event("turn.done").put("turn", JSONObject().put("id", "answer").put("role", "assistant").put("transcript", "About twenty-five gigabytes.")))
+        val batch = queue.nextBatch()
+        assertEquals("storage-task", batch.getJSONObject(0).getString("zyraVoiceTaskId"))
+        assertEquals("storage-task", batch.getJSONObject(1).getString("zyraVoiceTaskId"))
+        queue.command(command("interrupted", channel = "speakable").put("voiceTaskId", "other-task")); queue.flush { true }
+        queue.provider(event("input_audio_buffer.speech_started"))
+        queue.provider(event("turn.created").put("turn", JSONObject().put("id", "unrelated").put("role", "assistant")))
+        assertFalse(queue.nextBatch().getJSONObject(0).has("zyraVoiceTaskId"))
+    }
 }

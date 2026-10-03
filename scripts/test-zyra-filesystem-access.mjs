@@ -18,7 +18,7 @@ try {
   const readonly = path.join(fixture, 'readonly');
   for (const folder of [project, repo, readonly]) await mkdir(folder);
   await writeFile(path.join(repo, 'AGENTS.md'), 'fixture rules');
-  function runtime({ mode = 'full-access', decide = async () => 'acceptForSession' } = {}) {
+  function runtime({ mode = 'approval-required', decide = async () => 'acceptForSession' } = {}) {
     const requests = [];
     const extension = createZyraPermissionGateExtension({ project,
       filesystemScope: { roots: [{ path: project, access: 'read-write' }, { path: readonly, access: 'read-only' }] },
@@ -43,7 +43,7 @@ try {
   assert.equal((await r.tool.execute('inspect', { operation: 'inspect' })).details.roots.length, 2);
   assert.equal(r.requests.length, 0, 'inspection cannot trigger approval');
   assert.equal((await r.grant()).details.granted, true);
-  assert.equal(r.requests.length, 1, 'Full access still needs explicit folder approval');
+  assert.equal(r.requests.length, 1, 'supervised mode needs explicit folder approval');
   assert.deepEqual(r.requests[0].paths, [repo]);
   assert.equal(r.requests[0].toolCallId, 'scope-fixture');
   assert.equal(await r.call(read), undefined, 'same running chat retries structured read');
@@ -54,18 +54,26 @@ try {
   assert.equal((await runtime().call(read)).block, true, 'reconnect does not inherit temporary grants');
   passed++;
 
-  for (const mode of ['full-access', 'auto-review', 'approval-required', 'edits-only']) {
+  for (const mode of ['auto-review', 'approval-required', 'edits-only']) {
     const denied = runtime({mode, decide: async () => 'decline'});
     assert.equal((await denied.grant()).details.granted, false);
     assert.equal((await denied.call(read)).block, true);
     assert.equal(denied.requests.length, 1);
     passed++;
   }
+  const full = runtime({ mode: 'full-access', decide: async () => { throw new Error('Full access must not request folder approval'); } });
+  assert.equal(await full.call(read), undefined);
+  assert.equal(await full.call(edit), undefined);
+  assert.equal(await full.call({ toolName: 'write', input: { path: path.join(readonly, 'new') } }), undefined);
+  assert.equal((await full.grant(repo, 'read-write')).details.granted, true);
+  assert.equal(full.requests.length, 0);
+  passed++;
   const writable = runtime();
   assert.equal((await writable.grant(repo, 'read-write')).details.granted, true);
   assert.equal(await writable.call(edit), undefined);
+  const requestsBeforeReadOnlyUpgrade = writable.requests.length;
   assert.equal((await writable.grant(readonly, 'read-write')).details.granted, false);
-  assert.equal(writable.requests.length, 1, 'saved read-only ceiling cannot be approved away');
+  assert.equal(writable.requests.length, requestsBeforeReadOnlyUpgrade, 'saved read-only ceiling cannot be approved away');
   await writable.grant(fixture, 'read-write');
   assert.equal((await writable.call({toolName:'write',input:{path:path.join(readonly,'new')}})).block,true,'parent grant preserves read-only child');
   passed++;
@@ -94,8 +102,9 @@ try {
   assert.equal((await swapped.grant(link, 'read-write')).details.granted, false, 'approval is bound to the reviewed canonical folder');
   passed++;
 
+  const requestsBeforeInvalidGrant = r.requests.length;
   await assert.rejects(r.grant(path.join(repo, 'AGENTS.md')), /folder/);
-  assert.equal(r.requests.length, 1, 'invalid request must not prompt');
+  assert.equal(r.requests.length, requestsBeforeInvalidGrant, 'invalid request must not prompt');
   passed++;
   console.log(`PASS: ${passed} filesystem recovery scenarios (installed-app scope, same-chat retry, policy modes, Bash/read, read-only, one-shot, cancellation, reconnect, link replacement)`);
 } finally {

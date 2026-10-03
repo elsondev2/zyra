@@ -21,6 +21,8 @@ import { CSS } from '@dnd-kit/utilities'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { LoaderCircle, Plus, X } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
+import { useShortcutLabel } from '@/lib/keybindings'
+import type { CommandId } from '@shared/keybindings'
 import { usePublishAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
 import { cn } from '@/lib/utils'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
@@ -59,10 +61,19 @@ type ResizeState = {
 }
 
 const MAX_WORKSPACE_TAB_WIDTH = 168
-const MIN_WORKSPACE_TAB_WIDTH = 74
+const MIN_WORKSPACE_TAB_WIDTH = 112
 const TITLE_BAR_RESERVED_WIDTH = 188
 const TEXT_TAB_PREVIEW_WIDTH = 184
 const BROWSER_TAB_PREVIEW_WIDTH = 256
+const ADD_TAB_SHORTCUTS: Partial<Record<string, CommandId>> = {
+    control: 'app.threadDetails',
+    browser: 'app.browser',
+    terminal: 'app.terminal',
+    explorer: 'app.files',
+    review: 'app.review',
+    resources: 'app.resources',
+    agents: 'app.agents'
+}
 export const ASSISTANT_INSPECTOR_TAB_KEYBOARD_CODES = {
     start: ['Space'],
     cancel: ['Escape'],
@@ -295,12 +306,14 @@ export function AssistantInspectorSidebar({
     const previousTabWidthsRef = useRef(new Map<string, number>())
     const [resizing, setResizing] = useState(false)
     const [reducedMotion, setReducedMotion] = useState(readPrefersReducedMotion)
+    const [tabRailOverflow, setTabRailOverflow] = useState(false)
     const [activeDragTabId, setActiveDragTabId] = useState<string | null>(null)
     const [nativeTearOffTabId, setNativeTearOffTabId] = useState<string | null>(null)
     const [closingTabIds, setClosingTabIds] = useState<Set<string>>(() => new Set())
     const [tabPreview, setTabPreview] = useState<AssistantInspectorTabPreview | null>(null)
     const [localPresented, setPresented] = useState(open)
     const presented = sharedFrame?.presented ?? localPresented
+    const shortcutLabel = useShortcutLabel()
     useLayoutEffect(() => {
         if (sharedFrame) return
         if (!open) { setPresented(false); return }
@@ -738,10 +751,22 @@ export function AssistantInspectorSidebar({
             const tabLeft = activeTab.offsetLeft
             const tabRight = tabLeft + activeTab.offsetWidth
             if (tabLeft < rail.scrollLeft) rail.scrollLeft = tabLeft
-            else if (tabRight > rail.scrollLeft + rail.clientWidth) rail.scrollLeft = tabRight - rail.clientWidth
+            else if (tabRight > rail.scrollLeft + rail.clientWidth - 32) rail.scrollLeft = tabRight - rail.clientWidth + 32
         }, 250)
         return () => window.clearTimeout(timeoutId)
     }, [activeTabId, dismissTabPreview, tabIdentity, targetWorkspaceTabWidth])
+
+    useLayoutEffect(() => {
+        const rail = tabRailRef.current
+        if (!rail) return
+        const measure = () => setTabRailOverflow(rail.scrollWidth > rail.clientWidth + 1)
+        const observer = new ResizeObserver(measure)
+        observer.observe(rail)
+        measure()
+        const frame = window.requestAnimationFrame(measure)
+        const settled = window.setTimeout(measure, 200)
+        return () => { observer.disconnect(); window.cancelAnimationFrame(frame); window.clearTimeout(settled) }
+    }, [tabIdentity, targetWorkspaceTabWidth, resolvedWidth])
 
     const handleTabRailWheel = useCallback((event: React.WheelEvent<HTMLElement>) => {
         const rail = event.currentTarget
@@ -789,10 +814,10 @@ export function AssistantInspectorSidebar({
         <div
             ref={titleBarSurfaceRef}
             className={cn(
-                'drag-region relative h-full shrink-0 overflow-visible transition-[width,opacity] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                'no-drag relative h-full shrink-0 overflow-visible transition-[width,opacity] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                 !open && 'pointer-events-none opacity-0'
             )}
-            style={{ width: open && presented ? `${resolvedWidth}px` : '0px' }}
+            style={{ width: open && presented ? `${resolvedWidth}px` : '0px', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             data-assistant-inspector-titlebar=""
             data-open={open ? 'true' : 'false'}
         >
@@ -872,7 +897,7 @@ export function AssistantInspectorSidebar({
                             presentation="portal"
                             preferredDirection="down"
                             density="compact"
-                            rootClassName="no-drag sticky right-0 z-20 shrink-0 bg-[var(--surface-inspector)]"
+                            rootClassName={cn('no-drag sticky right-0 z-20 shrink-0 bg-[var(--surface-inspector)]', tabRailOverflow && 'before:pointer-events-none before:absolute before:inset-y-0 before:-left-5 before:w-5 before:bg-gradient-to-r before:from-transparent before:to-[var(--surface-inspector)]')}
                             buttonClassName="no-drag size-7 shrink-0 rounded-md text-sparkle-text-muted/60 hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                             openButtonClassName="bg-[var(--surface-hover)] text-sparkle-text"
                         />
@@ -922,7 +947,8 @@ export function AssistantInspectorSidebar({
         tabs,
         tabDragModifier,
         tabTearOff,
-        targetWorkspaceTabWidth
+        targetWorkspaceTabWidth,
+        tabRailOverflow
     ])
     usePublishAssistantTitleBarEndRegion(titleBarRegion, open)
 
@@ -1000,7 +1026,43 @@ export function AssistantInspectorSidebar({
                     </AnchoredNativeOverlay>
                 ) : null}
 
-                {children}
+                {tabs.length === 0 ? (
+                    <section
+                        aria-label="Open a workspace"
+                        data-assistant-inspector-empty-state=""
+                        className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-6"
+                    >
+                        <h2 className="mb-5 text-[12px] font-medium text-sparkle-text-secondary">Open a workspace</h2>
+                        <div className="flex w-full max-w-md flex-wrap justify-center gap-x-3 gap-y-4">
+                            {addTabItems.map((item) => {
+                                const commandId = ADD_TAB_SHORTCUTS[item.id]
+                                const shortcut = commandId ? shortcutLabel(commandId).split(' / ')[0] : ''
+                                return (
+                                    <div
+                                        key={item.id}
+                                        className="min-w-0"
+                                        style={{ flexBasis: 'calc((100% - 1.5rem) / 3)' }}
+                                    >
+                                        <button
+                                            type="button"
+                                            onClick={() => { void item.onSelect() }}
+                                            disabled={item.disabled}
+                                            aria-label={`Open ${item.label}; keyboard shortcut ${shortcut || 'unassigned'}`}
+                                            title={shortcut ? `${item.label} · ${shortcut}` : `Open ${item.label}`}
+                                            className="flex min-h-[88px] w-full flex-col items-center justify-center gap-1.5 rounded-[4px] border border-[color-mix(in_srgb,var(--color-text)_12%,var(--surface-panel-divider))] bg-[var(--surface-inspector)] px-2 py-2 text-center text-sparkle-text-secondary transition-colors hover:border-[color-mix(in_srgb,var(--accent-primary)_45%,var(--surface-panel-divider))] hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                            <span className="inline-flex size-5 items-center justify-center text-[var(--accent-primary)]" aria-hidden="true">{item.icon}</span>
+                                            <span className="w-full truncate text-[10px] font-medium">{item.label}</span>
+                                            <kbd className="max-w-full truncate rounded-[3px] border border-[color-mix(in_srgb,var(--color-text)_15%,var(--surface-panel-divider))] bg-[color-mix(in_srgb,var(--color-text)_5%,var(--surface-inspector))] px-1.5 py-0.5 font-mono text-[9px] font-medium text-sparkle-text-muted">
+                                                {shortcut || 'No shortcut'}
+                                            </kbd>
+                                        </button>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </section>
+                ) : children}
             </aside>
             </div>
         </div>

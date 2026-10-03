@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { SettingsSidebarNavigation } from '../src/renderer/src/pages/settings/SettingsSidebarNavigation'
-import { SETTINGS_DESTINATIONS, SETTINGS_NAVIGATION_ITEMS, getSettingsCategoryDestinations, getSettingsCategoryEntry } from '../src/renderer/src/pages/settings/settings-navigation'
+import { SETTINGS_DESTINATIONS, SETTINGS_NAVIGATION_ITEMS, findSettingsDestinationById, findSettingsNavigationItem, getSettingsCategoryDestinations, getSettingsCategoryEntry } from '../src/renderer/src/pages/settings/settings-navigation'
 
 const render = (route: string, hidden = false) => renderToStaticMarkup(
     <MemoryRouter initialEntries={[route]}><SettingsSidebarNavigation hidden={hidden} preloadRoute={() => { throw Error('Rendering must not preload page modules') }} /></MemoryRouter>
@@ -11,10 +11,21 @@ const render = (route: string, hidden = false) => renderToStaticMarkup(
 const anchors = (html: string) => html.match(/<a\b[^>]*>/g) || []
 const appSource = readFileSync(new URL('../src/renderer/src/App.tsx', import.meta.url), 'utf8')
 assert.deepEqual(SETTINGS_NAVIGATION_ITEMS.map(item => item.id), ['app', 'assistant', 'workspace', 'account', 'data'])
-assert.deepEqual(getSettingsCategoryDestinations('assistant').map(item => item.id), ['assistant', 'skills', 'voice', 'memory'])
+assert.deepEqual(getSettingsCategoryDestinations('assistant').map(item => item.id), ['assistant', 'archived', 'providers', 'plugins', 'skills', 'voice', 'memory'])
+assert.notEqual(findSettingsDestinationById('plugins')?.icon, findSettingsDestinationById('skills')?.icon, 'Plugins and Skills need distinct navigation icons')
+assert.ok(render('/settings/assistant/plugins').includes('aria-current="page"'), 'Plugins is reachable as an Assistant settings page')
+assert.deepEqual(getSettingsCategoryDestinations('account').map(item => item.id), ['connections'])
 assert.deepEqual(getSettingsCategoryDestinations('workspace').map(item => item.id), ['projects', 'files-editor', 'terminal-runtime', 'source-control', 'browser-control'])
 assert.deepEqual(getSettingsCategoryDestinations('data').map(item => item.id), ['privacy', 'diagnostics', 'about'])
 assert.equal(getSettingsCategoryEntry('workspace').id, 'projects')
+assert.equal(getSettingsCategoryEntry('account').id, 'connections', 'the old account category opens Devices')
+for (const path of ['/settings/providers', '/settings/providers/models', '/settings/providers/limits', '/settings/providers/usage', '/settings/providers/writing', '/settings/account/providers']) {
+    assert.equal(findSettingsNavigationItem(path).id, 'assistant', `${path} belongs to Assistant`)
+    const html = render(path)
+    const assistantSection = html.slice(html.indexOf('<section aria-label="Assistant settings">'), html.indexOf('<section aria-label="Workspace settings">'))
+    const providerAnchor = anchors(assistantSection).find(tag => tag.includes('href="/settings/providers"'))
+    assert.ok(providerAnchor?.includes('aria-current="page"'), `${path} selects Providers under Assistant`)
+}
 const groupedIds = SETTINGS_NAVIGATION_ITEMS.flatMap(item => getSettingsCategoryDestinations(item.id).map(page => page.id))
 const primary = SETTINGS_DESTINATIONS.filter(destination => !destination.parentId)
 assert.equal(new Set(groupedIds).size, primary.length)
@@ -38,4 +49,4 @@ for (const category of SETTINGS_NAVIGATION_ITEMS) {
 assert.ok(render('/settings/app/general', true).startsWith('<div hidden=""'), 'search can hide and restore the same navigation component')
 const styles = readFileSync(new URL('../src/renderer/src/index.css', import.meta.url), 'utf8')
 assert.match(styles, /\.settings-sidebar-scrollbar,\s*\.settings-content-scrollbar\s*\{\s*scrollbar-gutter: stable;/)
-console.log('Settings sidebar: 16 one-click destinations with nested-view ownership, five purposeful groups, current/legacy routes, category redirects and stable scroll space: ok')
+console.log('Settings sidebar: one-click destinations with nested-view ownership, five groups, current/legacy routes, category redirects and stable scroll space: ok')

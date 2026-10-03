@@ -11,6 +11,7 @@ const catalog: Record<string, ProviderFeatures> = {
     'openai-codex': { id: 'openai-codex', label: 'ChatGPT', authentication: ['subscription'], voice: 'chatgpt', subscriptionUsage: true, modelDiscovery: 'catalog' },
     openai: { id: 'openai', label: 'OpenAI API', authentication: ['api-key'], voice: null, subscriptionUsage: false, modelDiscovery: 'catalog' },
     opencode: { id: 'opencode', label: 'OpenCode Zen', authentication: ['api-key'], voice: null, subscriptionUsage: false, modelDiscovery: 'endpoint' },
+    'opencode-harness': { id: 'opencode-harness', label: 'OpenCode harness', authentication: [], voice: null, subscriptionUsage: false, modelDiscovery: 'endpoint' },
     anthropic: { id: 'anthropic', label: 'Claude API', authentication: ['api-key'], voice: null, subscriptionUsage: false, modelDiscovery: 'endpoint' }
 }
 export const RECOMMENDED_PROVIDER = 'openai-codex'

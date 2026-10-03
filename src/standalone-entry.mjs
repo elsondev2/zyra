@@ -24,6 +24,8 @@ export async function runZyraStandalone(distribution) {
   process.env.ZYRA_STANDALONE = "1";
   process.env.ZYRA_VERSION = version;
   process.env.ZYRA_ROOT = runtimeRoot;
+ process.env.ZYRA_RUNTIME_PACKAGE_DIR = path.join(runtimeRoot, "runtime-engine");
+ process.env.ZYRA_TERMINAL_NATIVE_DIR = path.join(runtimeRoot, "runtime-terminal");
   process.env.ZYRA_DATA_ROOT ??= home;
   process.env.ZYRA_CALLER_CWD ??= process.cwd();
 

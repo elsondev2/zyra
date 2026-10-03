@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DevScopeManagedFont } from '@shared/contracts/font-contracts'
 import { listAppearanceManagedFonts } from '@/lib/appearance-font-runtime'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
@@ -16,16 +16,19 @@ import {
     getThemePresetAccent,
     resolveAppearanceTheme,
     useSettings,
+    type AppearanceAnimationSpeed,
     type AppearanceCodeFont,
     type AppearanceThemeMode,
     type AppearanceUiFont,
     type DarkTheme,
-    type LightTheme
+    type LightTheme,
+    type Theme
 } from '@/lib/settings'
 import type { AccentColor } from '@shared/preferences/accent-presets'
 import type { ThemeTokens } from '@/lib/settings-theme-catalog'
 import {
     createResetAppearancePatch,
+    createActiveThemePresetPatch,
     createSaveCustomThemePatch,
     createThemeModePatch,
     createThemePresetPatch,
@@ -72,6 +75,7 @@ const appearanceModelDependencies: AppearanceModelDependencies = {
 
 export function useAppearanceSettingsController(loadFonts = true) {
     const { settings, updateSettings } = useSettings()
+    const displayPreferenceTimers = useRef<Partial<Record<'appearanceInterfaceScale' | 'appearanceCodeScale' | 'appearanceContrastScale' | 'appearanceAnimationScale', ReturnType<typeof setTimeout>>>>({})
     const [fontManagerTarget, setFontManagerTarget] = useState<'ui' | 'code' | null>(null)
     const [managedFonts, setManagedFonts] = useState<DevScopeManagedFont[]>(() => cachedManagedFonts || [])
     const [managedFontsError, setManagedFontsError] = useState<string | null>(null)
@@ -152,6 +156,11 @@ export function useAppearanceSettingsController(loadFonts = true) {
         ))
     }
 
+    const selectThemePreset = (theme: Theme) => {
+        const appearance = appearanceModelDependencies.getThemeAppearance(theme)
+        void updateSettings(createActiveThemePresetPatch(settings, appearance, theme, appearanceModelDependencies))
+    }
+
     const useSavedCustomTheme = () => {
         if (!settings.appearanceCustomTheme) return
         void updateSettings(createUseSavedCustomThemePatch(settings.appearanceCustomTheme, appearanceModelDependencies))
@@ -173,6 +182,16 @@ export function useAppearanceSettingsController(loadFonts = true) {
         setManagedFontsError(null)
     }
 
+    const setDisplayScale = (key: 'appearanceInterfaceScale' | 'appearanceCodeScale' | 'appearanceContrastScale' | 'appearanceAnimationScale', value: number) => {
+        void updateSettings({ [key]: value }, { persist: false })
+        const activeTimer = displayPreferenceTimers.current[key]
+        if (activeTimer) clearTimeout(activeTimer)
+        displayPreferenceTimers.current[key] = setTimeout(() => {
+            delete displayPreferenceTimers.current[key]
+            void updateSettings({ [key]: value })
+        }, 200)
+    }
+
     return {
         settings,
         selectedTheme,
@@ -187,6 +206,7 @@ export function useAppearanceSettingsController(loadFonts = true) {
         selectThemeMode,
         selectLightTheme,
         selectDarkTheme,
+        selectThemePreset,
         useSavedCustomTheme,
         resetAppearance,
         saveTokens: (tokens: ThemeTokens) => saveCustomTheme(tokens),
@@ -195,6 +215,11 @@ export function useAppearanceSettingsController(loadFonts = true) {
         selectCodeFont: (codeFont: AppearanceCodeFont) => saveCustomTheme(selectedTheme.tokens, settings.accentColor, settings.appearanceUiFont, codeFont),
         setCompactMode: (compactMode: boolean) => { void updateSettings({ compactMode }) },
         setReduceMotion: (accessibilityReduceMotion: boolean) => { void updateSettings({ accessibilityReduceMotion }) },
+        setInterfaceScale: (appearanceInterfaceScale: number) => setDisplayScale('appearanceInterfaceScale', appearanceInterfaceScale),
+        setCodeScale: (appearanceCodeScale: number) => setDisplayScale('appearanceCodeScale', appearanceCodeScale),
+        setContrastScale: (appearanceContrastScale: number) => setDisplayScale('appearanceContrastScale', appearanceContrastScale),
+        setAnimationSpeed: (appearanceAnimationSpeed: AppearanceAnimationSpeed) => { void updateSettings({ appearanceAnimationSpeed }) },
+        setAnimationScale: (appearanceAnimationScale: number) => setDisplayScale('appearanceAnimationScale', appearanceAnimationScale),
         setSidebarCollapsed: (sidebarCollapsed: boolean) => { void updateSettings({ sidebarCollapsed }) },
         setSidebarHoverPreviewEnabled: (sidebarHoverPreviewEnabled: boolean) => { void updateSettings({ sidebarHoverPreviewEnabled }) },
         setAgentInboxSidebarEnabled: (assistantAgentInboxSidebarEnabled: boolean) => { void updateSettings({ assistantAgentInboxSidebarEnabled }) }

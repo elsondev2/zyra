@@ -1,5 +1,6 @@
+import { DEFAULT_APPEARANCE_ANIMATION_SCALE, type AppearanceAnimationSpeed } from '@/lib/settings'
 import type { AppearanceSettingsController } from './useAppearanceSettingsController'
-import { SettingsRow, SettingsSection, SettingsSegmented, SettingsSwitch } from '../settings-layout'
+import { SettingResetButton, SettingsRow, SettingsSection, SettingsSegmented, SettingsSlider, SettingsSwitch } from '../settings-layout'
 
 export function AppearanceLayoutPage({ controller }: { controller: AppearanceSettingsController }) {
     const { settings } = controller
@@ -27,6 +28,33 @@ export function AppearanceLayoutPage({ controller }: { controller: AppearanceSet
                     description="Minimize transitions, animation and smooth scrolling."
                     control={<SettingsSwitch checked={settings.accessibilityReduceMotion} onCheckedChange={controller.setReduceMotion} label="Reduce motion" />}
                 />
+                <SettingsRow
+                    title="Motion feel"
+                    description="Choose a default feel for every transition and animation. Reduce motion still overrides it."
+                    control={(
+                        <SettingsSegmented
+                            value={settings.appearanceAnimationSpeed}
+                            options={[
+                                { value: 'calm' as AppearanceAnimationSpeed, label: 'Calm', hint: '0.65x' },
+                                { value: 'normal' as AppearanceAnimationSpeed, label: 'Normal' },
+                                { value: 'brisk' as AppearanceAnimationSpeed, label: 'Brisk', hint: '1.5x' },
+                                { value: 'custom' as AppearanceAnimationSpeed, label: 'Custom' }
+                            ]}
+                            onChange={(value) => controller.setAnimationSpeed(value)}
+                            label="Motion feel"
+                        />
+                    )}
+                />
+                {settings.appearanceAnimationSpeed === 'custom' ? (
+                    <SettingsRow
+                        title="Custom motion rate"
+                        description="Set how quickly the interface moves, from half to double the default rate."
+                        resetAction={settings.appearanceAnimationScale !== DEFAULT_APPEARANCE_ANIMATION_SCALE ? (
+                            <SettingResetButton label="Custom motion rate" onClick={() => controller.setAnimationScale(DEFAULT_APPEARANCE_ANIMATION_SCALE)} />
+                        ) : null}
+                        control={<SettingsSlider value={settings.appearanceAnimationScale} min={50} max={200} step={5} unit="%" label="Custom motion rate" onChange={controller.setAnimationScale} />}
+                    />
+                ) : null}
             </SettingsSection>
 
             <SettingsSection title="Interface">

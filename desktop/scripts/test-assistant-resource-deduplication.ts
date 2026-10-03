@@ -63,7 +63,7 @@ const index = buildAssistantResourceIndex({ turns: [duplicateTurn] })
 assert.equal(index.resources.length, 1, 'clipboard and canonical-cache forms of one pasted image collapse into one Resource')
 assert.equal(index.totalOccurrences, 1, 'the materialized canonical copy is not counted as a second occurrence')
 assert.equal(index.resources[0]?.path?.replace(/\\/g, '/'), canonicalPath.replace(/\\/g, '/'), 'the retained Resource uses the durable canonical path')
-assert.equal(index.resources[0]?.title, 'Pasted image', 'the retained Resource keeps the human attachment label')
+assert.equal(index.resources[0]?.title, 'Turn 1 · Attachment 1', 'the retained Resource identifies the original turn and attachment')
 assert.equal(index.resources[0]?.attachment?.content, 'data:image/png;base64,AAAA', 'inline preview data survives reconciliation')
 
 const messages: AssistantMessage[] = [

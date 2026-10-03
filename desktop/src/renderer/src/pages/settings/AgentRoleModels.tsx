@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AgentRoleModels as RoleModels } from '@shared/onboarding/contracts'
 import type { AssistantModelInfo } from '@shared/assistant/contracts'
 import { providerFeatures } from '@shared/assistant/provider-features'
-import { loadSettingsModels } from './settings-model-catalog-cache'
+import { loadSettingsModels, subscribeSettingsModels } from './settings-model-catalog-cache'
 import { SettingsButton, SettingsNotice, SettingsRow, SettingsSection, SettingsSelect } from './settings-layout'
 
 const roles = { planner: 'Planning', implementer: 'Implementation', reviewer: 'Review', debugger: 'Debugging', verifier: 'Verification', researcher: 'Research', specialist: 'Other agents' } as const
@@ -15,6 +15,7 @@ export function AgentRoleModels() {
     const [loading, setLoading] = useState(true)
     const [revision, setRevision] = useState(0)
     const [error, setError] = useState('')
+    useEffect(() => subscribeSettingsModels(setModels), [])
     useEffect(() => {
         let live = true
         setLoading(true); setError('')

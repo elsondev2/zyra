@@ -19,7 +19,7 @@ export function SettingsInfoTooltip({ label, children }: { label: string; childr
         cancelClose()
         timerRef.current = setTimeout(() => {
             timerRef.current = null
-            if (document.activeElement !== buttonRef.current) setOpen(false)
+            if (buttonRef.current?.ownerDocument.activeElement !== buttonRef.current) setOpen(false)
         }, 120)
     }
 
@@ -29,16 +29,18 @@ export function SettingsInfoTooltip({ label, children }: { label: string; childr
             const anchor = buttonRef.current?.getBoundingClientRect()
             const tooltip = tooltipRef.current?.getBoundingClientRect()
             if (!anchor || !tooltip) return
+            const view = buttonRef.current?.ownerDocument.defaultView || window
             const below = anchor.bottom + 6
-            const top = below + tooltip.height <= window.innerHeight - 12 ? below : anchor.top - tooltip.height - 6
-            setPosition({ left: Math.max(12, Math.min(anchor.left, window.innerWidth - tooltip.width - 12)), top: Math.max(12, top) })
+            const top = below + tooltip.height <= view.innerHeight - 12 ? below : anchor.top - tooltip.height - 6
+            setPosition({ left: Math.max(12, Math.min(anchor.left, view.innerWidth - tooltip.width - 12)), top: Math.max(12, top) })
         }
         positionTooltip()
-        window.addEventListener('resize', positionTooltip)
-        window.addEventListener('scroll', positionTooltip, true)
+        const view = buttonRef.current?.ownerDocument.defaultView || window
+        view.addEventListener('resize', positionTooltip)
+        view.addEventListener('scroll', positionTooltip, true)
         return () => {
-            window.removeEventListener('resize', positionTooltip)
-            window.removeEventListener('scroll', positionTooltip, true)
+            view.removeEventListener('resize', positionTooltip)
+            view.removeEventListener('scroll', positionTooltip, true)
         }
     }, [open, children])
 
@@ -48,9 +50,10 @@ export function SettingsInfoTooltip({ label, children }: { label: string; childr
         const outside = (event: PointerEvent) => {
             if (event.target instanceof Node && !buttonRef.current?.contains(event.target) && !tooltipRef.current?.contains(event.target)) close()
         }
-        window.addEventListener('keydown', keydown)
-        window.addEventListener('pointerdown', outside)
-        return () => { window.removeEventListener('keydown', keydown); window.removeEventListener('pointerdown', outside) }
+        const ownerDocument = buttonRef.current?.ownerDocument || document
+        ownerDocument.addEventListener('keydown', keydown)
+        ownerDocument.addEventListener('pointerdown', outside)
+        return () => { ownerDocument.removeEventListener('keydown', keydown); ownerDocument.removeEventListener('pointerdown', outside) }
     }, [open])
     useEffect(() => () => cancelClose(), [])
 
@@ -71,7 +74,7 @@ export function SettingsInfoTooltip({ label, children }: { label: string; childr
             <div ref={tooltipRef} id={id} role="tooltip" style={position} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
                 className="fixed z-[3000] max-h-[calc(100vh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-md border border-[var(--settings-border-strong)] bg-[var(--settings-popover)] p-3 text-[12px] font-normal leading-5 text-[var(--settings-text-secondary)] shadow-xl">
                 {children}
-            </div>, document.body
+            </div>, buttonRef.current?.ownerDocument.body || document.body
         ) : null}
     </>
 }

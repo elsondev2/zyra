@@ -79,13 +79,15 @@ assert.deepEqual(
     restoreAssistantInspectorWorkspaceState(null, ['browser:migrated']),
     {
         version: 1,
-        activeTabId: 'review',
+        activeTabId: 'browser:migrated',
         tabs: [
-            { id: 'review', kind: 'review' },
             { id: 'browser:migrated', kind: 'browser', browserTabId: 'browser:migrated' }
         ]
     }
 )
+assert.deepEqual(restoreAssistantInspectorWorkspaceState(null, []), { version: 1, activeTabId: '', tabs: [] }, 'the first Inspector opening shows the existing shortcut page')
+assert.deepEqual(restoreAssistantInspectorWorkspaceState({ version: 1, activeTabId: '', tabs: [] }, []), { version: 1, activeTabId: '', tabs: [] }, 'closing every tab keeps the shortcut page after reload')
+assert.deepEqual(restoreAssistantInspectorWorkspaceState({ version: 1, activeTabId: 'review', tabs: [{ id: 'review', kind: 'review' }] }, []), { version: 1, activeTabId: 'review', tabs: [{ id: 'review', kind: 'review' }] }, 'an explicitly saved Diff tab is restored')
 
 const values = new Map<string, string>()
 const localStorage = {
@@ -103,6 +105,8 @@ assert.equal(loadAssistantInspectorWorkspaceState('chat-b'), null, 'unrelated ch
 
 const panelSource = await readFile(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
 assert.match(panelSource, /restoreAssistantInspectorWorkspaceState/)
+assert.match(panelSource, /useState<WorkspaceTab\[\]>\(\[\]\)/, 'the first render cannot flash the Diff page')
+assert.doesNotMatch(panelSource, /supportedWorkspaceTabs.*\[REVIEW_TAB\]/, 'unsupported or absent tabs leave the shortcut page available')
 assert.match(panelSource, /persistAssistantInspectorWorkspaceState/)
 assert.match(panelSource, /if \(!reviewIndexReady\) return/)
 assert.doesNotMatch(panelSource, /setWorkspaceTabs\(\[REVIEW_TAB, \.\.\.restoredBrowserTabs\]\)/)

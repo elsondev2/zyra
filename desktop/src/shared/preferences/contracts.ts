@@ -3,6 +3,7 @@ export const DEVICE_PREFERENCES_SCHEMA_VERSION = 1 as const
 export type DevicePreferenceSurface = 'desktop' | 'browser'
 
 export const SHARED_DEVICE_PREFERENCE_KEYS = [
+    'assistantMemoryEnabled',
     'appearanceThemeMode',
     'appearanceLightTheme',
     'appearanceDarkTheme',
@@ -10,6 +11,11 @@ export const SHARED_DEVICE_PREFERENCE_KEYS = [
     'appearanceCustomThemeActive',
     'appearanceUiFont',
     'appearanceCodeFont',
+    'appearanceInterfaceScale',
+    'appearanceCodeScale',
+    'appearanceContrastScale',
+    'appearanceAnimationSpeed',
+    'appearanceAnimationScale',
     'accentColor',
     'compactMode',
     'accessibilityReduceMotion',
@@ -65,6 +71,7 @@ export const SHARED_DEVICE_PREFERENCE_KEYS = [
 ] as const
 
 export const SURFACE_DEVICE_PREFERENCE_KEYS = [
+    'keyboardShortcuts',
     'sidebarCollapsed',
     'sidebarHoverPreviewEnabled',
     'assistantAgentInboxSidebarEnabled',

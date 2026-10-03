@@ -10,11 +10,14 @@ Planning starts from v0.6.1. See [published releases](https://github.com/justels
 
 | Target | Focus | Planning state |
 | --- | --- | --- |
+| v0.7.0 | Owned runtime, parallel-work and plugin workflows, and the accumulated post-0.6.2 Desktop/TUI changes. | Draft candidate on `release/0.7.0`; see [candidate scope and remaining gates](releases/0.7.0.md). |
 | v0.6.2 | A stabilization batch across Desktop and TUI, including file opening, responsiveness and other confirmed issues added during triage. | Candidate under review. Publication requires native build gates. |
 | v0.6.3 | Compatible fixes to update preparation, process ownership, installer preflight and update feedback. | Proposed; scope and compatibility review required. |
-| Later, potentially v0.7.0 | Versioned runtime activation and rollback design that changes installation or compatibility contracts. | Design required; no release commitment. |
+| Later line, unassigned | Versioned runtime activation and rollback design that changes installation or compatibility contracts. | Design required; no release commitment. |
 
 CLI/runtime and Desktop versions remain in lockstep. Roadmap targets do not change package versions. Follow the [release version rule](../RELEASE.md#version-rule): new installation workflows or meaningful compatibility boundaries require a new pre-1.0 line. Do not silently expand a patch release to include those changes.
+
+The previously proposed v0.7.0 updater activation/rollback design remains a separate design item; this candidate does not claim to complete it. Earlier candidate entries below retain their recorded evidence and limits.
 
 ## v0.6.2: stabilization
 
@@ -46,7 +49,18 @@ The entries below retain their individual verification limits. Unresolved candid
 | QA-002 | Planned regression coverage | Recheck Project creation and naming, folderless Projects, cancellation, Chat scope, Plugin availability and revocation after stabilization fixes. | Focused tests preserve the existing [domain model](../CONTEXT.md), saved state and permission boundaries. Run installed-path checks where packaging affects behavior. |
 | FIX-024 | Local fix; focused tests pending runner execution | Child turn limits now count completed turns and reject only when a subsequent turn starts, allowing a final assistant answer on the limit boundary. Fleet Stop cancellation remains isolated from next-turn delegation. | `test:agent-fleet:cancellation` and the subagent contract test cover actual turn event ordering, retained assistant text, cancellation, scoped writer aliasing and shell denial. Runner evidence remains pending. |
 
+| FIX-025 | Local fix and isolated playback verified; not released | Saved voice recordings could not play because the renderer blocked data audio URLs and a React source update interrupted first playback. The compact player now uses managed Blob URLs with one source assignment. | `test:voice-history-playback` exercises the actual settings page under the app CSP in isolated Electron: play, pause, seeking, replay, 10 ms recordings, deletion and late-load/unmount cleanup pass. Saved-recording verification in the user's restarted app remains pending. |
+| FIX-026 | Local fix and focused regression verified; not released | Force send attempted to abort a canonical chat missing from the Desktop runtime and repeatedly retried failures. It now reattaches first, preserves interrupt failures, permits one in-flight abort per chat, and pauses the queued prompt for explicit retry. | `test:assistant-force-interrupt` verifies reattachment, connection failure, turn ownership, real React rerenders, preserved prompts, explicit retry and single dispatch. Full Desktop typechecking passes. User app restart and live provider verification remain pending; server crash causation is unconfirmed. |
+
 QA entries describe coverage to retain; they do not claim that each listed flow is broken. Promote additional reports into separate FIX entries after triage, even if they were not part of the original file-viewer investigation.
+
+### Plugin connection repair
+
+Local implementation and focused checks are verified; not released or added to the published candidate. Release placement needs compatibility review.
+
+Catalog Install & connect now continues into normal account consent. Mixed native/app connections retain reviewed descriptor limits, old Chats keep exact contribution pins, invalid OAuth tokens clear readiness, and idle connection reuse permits more than eight integrations sequentially. All three Google services use regular API adapters with actual-scope enforcement and safe-read verification. A bounded live Calendar read succeeded using an existing grant without account mutations.
+
+The entire pinned catalog has a public-metadata coverage audit. This is not live verification of every provider. Closed-client registrations, administrator policies and nonportable hosted app references remain explicit limitations. Drive account verification and running-app activation remain pending. See [Plugin architecture](architecture/plugins.md) and the `test:google-api`, `test:plugin-connections`, Desktop `test:google-plugin-api` and `test:plugin-install-connect` targets.
 
 ### Release readiness
 
@@ -107,6 +121,22 @@ Implemented locally, not released. A compatible busy service remains attached wh
 
 Connection, compatibility, idle-replacement, Desktop-worker replay, browser relay/shutdown, extension identity and mobile projection tests pass. Shared Desktop and extension TypeScript checks pass. Android parser/device verification and the live multi-instance matrix remain pending. No production service was stopped to apply this work. This pass does not merge dev/prod authority or introduce a cross-installation active-work directory. See [ADR 0018](adr/0018-separate-runtime-identity-compatibility-and-liveness.md).
 
+### FIX-024: first response delay and submitted model-change marker
+
+Implemented locally, not released. Canonical chat workers now claim one prepared spare instead of reloading the execution graph for every chat. Harness chats share one server-owned local transport, with separate sessions and permission callbacks. New-chat creation prepares the saved composer model in the background without a model request or blocking creation; unused harness services remain cold. Concurrent initialization, failed preparation, exited-transport recovery and shutdown have focused regressions.
+
+Submitting a message records its turn ID and selected model before connection. The same ID reaches the runtime and canonical request, so the model-change divider renders immediately with the submitted prompt. SQLite history preserves earlier models; connection failures and cancellation settle the pending turn. Actual timeline and virtual-list rendering pass in an isolated hidden Electron fixture.
+
+Further local work compiles the exact root schema dependency, loads the extension compiler on demand, overlaps native and worker setup, and delays spare replacement until attachment. A serial alternating offline comparison measured median cold attachment at 7.33 s before schema compilation and 5.93 s after it (19% reduction, six workers per mode; filesystem cache uncontrolled). Runtime schema generation retains its license, version isolation and revision hash. Model discovery now borrows the canonical native transport through private real bridge IPC.
+
+Each chat retains a separate native conversation across matching turns, with history/model/effort/transport invalidation, bounded idle lifetime and failure/Stop cleanup. Authenticated native push events reduce polling; snapshots retain recovery. Managed native sessions skip redundant title generation. A process-local native config plugin prevents startup of unsupported duplicate MCP connections while preserving the user's native config and Zyra-owned tool connections. Actual native read denial reaches execution and returns no denied contents. Desktop staging and standalone resource collection include the plugin; a new packaged binary remains unverified.
+
+Matched short live tasks with low-thinking Sol, high-thinking Luna and fast off measured prepared fresh chats at 6.7–11.0 s for Sol and 6.4–8.1 s for Luna, including attachment; follow-up turns took 3.7–3.9 s and 3.7–5.1 s respectively. Completely cold Sol fell from a repeated 56.3 s sample to 24.4 s after duplicate MCP startup was prevented; cold Luna took 26.0 s. Cold startup remains too slow, and prepared Sol still varies. These small samples establish improvements and remaining gaps, not a latency guarantee, billing reduction or Codex parity. `test:harness-performance`, actual bridge/server integration, runtime/main typechecks and the real marker fixture pass. Installed-app verification is pending; no running user app or service was restarted.
+
+### Permission-mode separation, 2026-10-01
+
+Full access now bypasses local tool review and approval, as well as single-action and staged control side-effect approvals. Auto review sends deterministic local critical candidates to a separate tool-free reviewer session using the current chat model and connection at low effort; false positives proceed and uncertain or consequential decisions reach chat with their reason. The reviewer follows chat-model changes and is not warmed in Full access. Supervised, Edits only, target identity, observation freshness, cancellation and revocation remain unchanged. Focused permission and synthetic control regression targets cover these changes. Live-session refresh and packaged-release verification remain pending.
+
 ### GitHub issue verification, 2026-09-16
 
 - [#14](https://github.com/justelson/zyra/issues/14): `filesystem_access` exposes the effective scope and requests a specific folder through the existing approval UI, including in Full access mode. Grants apply to the same running chat; Allow once covers one matching tool call and longer grants expire at reconnect. Saved read-only limits remain enforced. Recognizes `git -C <folder> status` as a read-only command without treating lowercase `-c` configuration as equivalent. Focused recovery, path-policy, SDK-startup and canonical reconnect checks pass; included in [PR #13](https://github.com/justelson/zyra/pull/13).
@@ -163,6 +193,22 @@ Retain the existing one-commit, native-build, asset-checksum, remote-readback an
 Investigate extending the standalone TUI's versioned installation pattern to immutable shared runtime packages. Keep a stable launcher and verified active-version pointer, and retain the previous runtime until the new version passes health checks.
 
 Decide runtime protocol compatibility, package verification, launcher ownership, old-version cleanup and data-migration behavior before implementation. Retaining old binaries does not guarantee that data can be rolled back. This work must not silently replace the current packaged-runtime contract or become a promised v0.6.3 feature without review.
+
+**DESIGN-002. In progress on dev; not released. Local OpenCode harness as a model provider.**
+
+Instead of shipping another key, Zyra drives the user's already-installed, already-authenticated OpenCode CLI as its intelligence layer: detect the binary on PATH, run a Zyra-owned `opencode serve` on loopback with a per-spawn password, and pipe model turns through its session API. Credentials stay in OpenCode's store; direct Zen HTTP from Zyra remains unsupported (OpenCode-client restriction, see [provider flows](development/provider-and-memory-flows.md)).
+
+Phase 1 (implemented, unreleased): `src/opencode-harness.mjs` owns detection, per-project serve lifecycle (loopback-only, idle stop, no orphans), connected-provider catalog mapping with inner-qualified ids, and a text-only turn pipe (history replayed via noReply messages, final message sent with tools disabled, private session deleted, non-text reply parts rejected loudly). `opencode-harness` provider kind is wired through `src/provider-connections.mjs` with credential-free metadata, Pi extension registration via `streamSimple`, and fleet-catalog `toolUse: false` until delegation is designed. Verification sends no model request (no spend).
+
+Verified live (2026-09-21): one `opencode/big-pickle` turn through a Zyra-owned loopback server replied "OK" at zero cost, with framing parts tolerated, session deleted, and server stopped. See `scripts/test-opencode-harness-live.mjs` (manual gate, never in CI).
+
+Settings UI (implemented, unreleased): Settings > Connections lists an "OpenCode harness" choice with a dedicated opt-in panel. Detection runs on mount and never connects; the harness stays dormant until the user confirms. Startup and registry restore only ever reconnect saved connections. Disconnect removes the saved connection and stops the owned server without touching the OpenCode login.
+
+Turn hardening (implemented, unreleased): a picked harness model could miss the stored catalog when the free lineup rotates between connect and turn, failing with a bare miss. `setModel` now retries harness selectors once against a live re-list (no model request, no spend), converges stored metadata on a hit, and otherwise throws a diagnostic naming the requested key and the available providers. Picker rows show the friendly upstream name with the OpenCode mark and never the slash-qualified address; the full address stays in the option id.
+
+Still pending: setup-wizard entry point (ChatGPT-first stays); fleet routing beyond explicit selection; install-if-missing offer (new install workflow, needs explicit approval UX); full agentic delegation inside Zyra permission scopes (separate approval story). Releasing any of the install/delegation behavior requires a new pre-1.0 line per the [version rule](../RELEASE.md#version-rule).
+
+Completion evidence: `node scripts/test-opencode-harness.mjs` (stub-serve contracts: detection, lifecycle, catalog, pipe, fleet flags, credential-free persistence). Live turn, onboarding UI, and delegation each need their own evidence before they are claimed.
 
 ## Development verification requirement
 

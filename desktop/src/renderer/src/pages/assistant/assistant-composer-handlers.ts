@@ -1,4 +1,5 @@
 import type { ClipboardEvent, KeyboardEvent } from 'react'
+import { supportsAssistantFastMode } from './assistant-model-groups'
 import {
     InlineMentionTag,
     reconcileInlineMentionTags,
@@ -65,6 +66,7 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
         setActiveBranchIndex,
         onSwitchBranch,
         selectedModel,
+        selectedModelInputModes,
         setSelectedModel,
         selectedRuntimeMode,
         setSelectedRuntimeMode,
@@ -175,6 +177,11 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
         const metaPath = electronPath || buildAttachmentPath(source, name)
         const mimeType = declaredMimeType || 'application/octet-stream'
         const looksLikeImageByName = /\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?|avif|apng|heic|heif|jfif|jxl)$/i.test(name)
+        if ((mimeType.startsWith('image/') || looksLikeImageByName)
+            && selectedModelInputModes && !selectedModelInputModes.includes('image')) {
+            onBlockedSend?.('This model does not accept images. Choose an image-capable model first.')
+            return
+        }
         const needsInlineImageContent = source === 'paste' || !electronPath || metaPath.startsWith('clipboard://')
 
         const addImageAttachment = async (dataUrl: string, resolvedMimeType: string) => {
@@ -268,8 +275,8 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
         }
     }
 
-    const submitPrompt = async (dispatchMode: 'immediate' | 'queue' | 'force') => {
-        let prompt = replaceInlineMentionTokensWithLabels(text, inlineMentionTags).trim()
+    const submitPrompt = async (dispatchMode: 'immediate' | 'queue' | 'force', draftText = text) => {
+        let prompt = replaceInlineMentionTokensWithLabels(draftText, inlineMentionTags).trim()
         let runtimeModeForSend = selectedRuntimeMode
         const desktopCommand = parseAssistantDesktopSlashCommand(prompt)
         if (desktopCommand) {
@@ -318,12 +325,17 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
             const fileKey = `${String(file.path || '').toLowerCase()}::${String(file.name || '').toLowerCase()}`
             return collection.findIndex((candidate) => `${String(candidate.path || '').toLowerCase()}::${String(candidate.name || '').toLowerCase()}` === fileKey) === index
         })
+        if (selectedModelInputModes && !selectedModelInputModes.includes('image')
+            && contextFilesForSend.some((file) => file.kind === 'image')) {
+            onBlockedSend?.('This model does not accept images. Choose an image-capable model first.')
+            return
+        }
         const hasContent = Boolean(prompt || contextFilesForSend.length > 0)
         if ((!allowEmptySubmit && !hasContent) || disabled || isSending || !isConnected) {
             onBlockedSend?.(resolveBlockedSendReason(hasContent))
             return
         }
-        const prevText = text
+        const prevText = draftText
         const prevTags = inlineMentionTags
         const prevFiles = contextFiles
         setText('')
@@ -338,7 +350,7 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
             runtimeMode: runtimeModeForSend,
             interactionMode: selectedInteractionMode,
             effort: selectedEffort,
-            serviceTier: fastModeEnabled ? 'fast' : undefined,
+            serviceTier: fastModeEnabled && supportsAssistantFastMode(selectedModel) ? 'fast' : undefined,
             dispatchMode
         })
         if (!success) {
@@ -358,6 +370,10 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
 
     const handleSend = async () => {
         await submitPrompt(isThinking ? busyMessageMode : 'immediate')
+    }
+
+    const handleSendTranscript = async (draftText: string) => {
+        await submitPrompt(isThinking ? busyMessageMode : 'immediate', draftText)
     }
 
     const handleQueueSend = async () => {
@@ -540,6 +556,7 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
         applyMentionCandidate,
         attachFile,
         handleSend,
+        handleSendTranscript,
         handleQueueSend,
         handleForceSend,
         handleRecallPrevious,

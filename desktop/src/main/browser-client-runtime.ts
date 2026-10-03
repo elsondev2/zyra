@@ -29,6 +29,10 @@ export type BrowserClientRuntimeDependencies = {
     resolveClipboardAttachment: (reference: string) => Promise<string | null>
     getVoiceTranscriptionState: () => Promise<AssistantVoiceTranscriptionState>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<string>
+    saveVoiceHistory: (input: import('../shared/assistant/contracts').AssistantSaveVoiceHistoryInput) => Promise<void>
+    listVoiceHistory: () => Promise<import('../shared/assistant/contracts').AssistantVoiceHistoryEntry[]>
+    getFailedVoiceRecording: (id: string) => Promise<string | null>
+    deleteVoiceHistory: (id: string) => Promise<void>
     isOnboardingComplete: () => boolean
     clientPort?: number
 }
@@ -94,6 +98,10 @@ export class BrowserClientRuntime {
             resolveClipboardAttachment: this.dependencies.resolveClipboardAttachment,
             getVoiceTranscriptionState: this.dependencies.getVoiceTranscriptionState,
             transcribeVoice: this.dependencies.transcribeVoice,
+            saveVoiceHistory: this.dependencies.saveVoiceHistory,
+            listVoiceHistory: this.dependencies.listVoiceHistory,
+            getFailedVoiceRecording: this.dependencies.getFailedVoiceRecording,
+            deleteVoiceHistory: this.dependencies.deleteVoiceHistory,
             isOnboardingComplete: this.dependencies.isOnboardingComplete
         })
         this.devscopeRelay = devscopeRelay

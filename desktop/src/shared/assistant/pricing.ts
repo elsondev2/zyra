@@ -1,122 +1,19 @@
-import type {
-    AssistantAuthMode,
-    AssistantSessionTurnUsageEntry,
-    AssistantTurnUsage
-} from './contracts'
-
-type AssistantModelPricing = {
-    inputUsdPerMillion: number
-    cachedInputUsdPerMillion: number
-    outputUsdPerMillion: number
-    fastUsdMultiplier?: number
-}
-
+import type { AssistantAuthMode, AssistantSessionTurnUsageEntry, AssistantTurnUsage } from './contracts'
+import { estimateModelCost, getModelPricing } from '../../../../src/model-pricing/index.mjs'
+export { installModelCatalogPricing } from '../../../../src/model-pricing/index.mjs'
 type AssistantPricingServiceTier = AssistantSessionTurnUsageEntry['serviceTier'] | null | undefined
-
-export type AssistantSessionCostEstimate = {
-    totalUsd: number | null
-    meteredTurnCount: number
-    pricedTurnCount: number
-    unpricedTurnCount: number
+export type AssistantSessionCostEstimate = { totalUsd: number | null; meteredTurnCount: number; pricedTurnCount: number; unpricedTurnCount: number }
+const getUsageNumber = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+export function getAssistantModelPricing(model: string) {
+    const rates = getModelPricing(model)?.tiers.standard?.short
+    return rates ? { inputUsdPerMillion: rates.input, cachedInputUsdPerMillion: rates.cacheRead, cacheWriteUsdPerMillion: rates.cacheWrite, outputUsdPerMillion: rates.output } : null
 }
-
-const MODEL_PRICING: Record<string, AssistantModelPricing> = {
-    'gpt-5.5': {
-        inputUsdPerMillion: 5,
-        cachedInputUsdPerMillion: 0.5,
-        outputUsdPerMillion: 30,
-        fastUsdMultiplier: 2.5
-    },
-    'gpt-5.4': {
-        inputUsdPerMillion: 2.5,
-        cachedInputUsdPerMillion: 0.25,
-        outputUsdPerMillion: 15
-    },
-    'gpt-5.4-mini': {
-        inputUsdPerMillion: 0.75,
-        cachedInputUsdPerMillion: 0.075,
-        outputUsdPerMillion: 4.5
-    },
-    'gpt-5.3-codex': {
-        inputUsdPerMillion: 1.75,
-        cachedInputUsdPerMillion: 0.175,
-        outputUsdPerMillion: 14
-    },
-    'gpt-5.2-codex': {
-        inputUsdPerMillion: 1.75,
-        cachedInputUsdPerMillion: 0.175,
-        outputUsdPerMillion: 14
-    },
-    'gpt-5.2': {
-        inputUsdPerMillion: 1.75,
-        cachedInputUsdPerMillion: 0.175,
-        outputUsdPerMillion: 14
-    },
-    'gpt-5.1': {
-        inputUsdPerMillion: 1.25,
-        cachedInputUsdPerMillion: 0.125,
-        outputUsdPerMillion: 10
-    },
-    'gpt-5.1-codex': {
-        inputUsdPerMillion: 1.25,
-        cachedInputUsdPerMillion: 0.125,
-        outputUsdPerMillion: 10
-    },
-    'gpt-5.1-codex-max': {
-        inputUsdPerMillion: 1.25,
-        cachedInputUsdPerMillion: 0.125,
-        outputUsdPerMillion: 10
-    },
-    'gpt-5.1-codex-mini': {
-        inputUsdPerMillion: 0.25,
-        cachedInputUsdPerMillion: 0.025,
-        outputUsdPerMillion: 2
-    }
-}
-
-function normalizePricingModel(model: string): string {
-    const trimmed = String(model || '').trim().toLowerCase()
-    if (!trimmed) return ''
-    const withoutProvider = trimmed.includes('/') ? trimmed.split('/').pop() || trimmed : trimmed
-    const withoutMetadata = withoutProvider.split(/[:@]/)[0] || withoutProvider
-    return withoutMetadata
-}
-
-function getUsageNumber(value: number | null | undefined): number {
-    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
-}
-
-function getServiceTierMultiplier(pricing: AssistantModelPricing, serviceTier: AssistantPricingServiceTier): number {
-    if (serviceTier === 'flex') return 0.5
-    if (serviceTier === 'fast') return pricing.fastUsdMultiplier ?? 2
-    return 1
-}
-
-export function getAssistantModelPricing(model: string): AssistantModelPricing | null {
-    return MODEL_PRICING[normalizePricingModel(model)] || null
-}
-
-export function estimateAssistantTurnCostUsd(
-    model: string,
-    usage: AssistantTurnUsage | null | undefined,
-    serviceTier: AssistantPricingServiceTier = null
-): number | null {
-    if (!usage) return null
-    const pricing = getAssistantModelPricing(model)
-    if (!pricing) return null
-
-    const inputTokens = getUsageNumber(usage.inputTokens)
-    const cachedInputTokens = Math.min(getUsageNumber(usage.cachedInputTokens), inputTokens)
-    const uncachedInputTokens = Math.max(inputTokens - cachedInputTokens, 0)
-    const outputTokens = getUsageNumber(usage.outputTokens)
-
-    if (inputTokens === 0 && outputTokens === 0) return null
-
-    const subtotal = (uncachedInputTokens / 1_000_000) * pricing.inputUsdPerMillion
-        + (cachedInputTokens / 1_000_000) * pricing.cachedInputUsdPerMillion
-        + (outputTokens / 1_000_000) * pricing.outputUsdPerMillion
-
-    return subtotal * getServiceTierMultiplier(pricing, serviceTier)
+export function estimateAssistantTurnCostUsd(model: string, usage: AssistantTurnUsage | null | undefined, serviceTier: AssistantPricingServiceTier = null): number | null {
+    if (!usage || ![usage.inputTokens, usage.cachedInputTokens, usage.cacheWriteTokens, usage.outputTokens].some(value => getUsageNumber(value) > 0)) return null
+    // A turn may contain several provider requests. Adding their input first
+    // can invent a long-context charge that none of those requests incurred.
+    if ((usage.responseCount ?? 1) > 1) return usage.costSource === 'api-equivalent' && typeof usage.costUsd === 'number' ? usage.costUsd : null
+    return estimateModelCost(model, usage, usage.pricingServiceTier ?? serviceTier)?.total ?? null
 }
 
 export function estimateAssistantSessionCostUsd(turns: AssistantSessionTurnUsageEntry[]): AssistantSessionCostEstimate {

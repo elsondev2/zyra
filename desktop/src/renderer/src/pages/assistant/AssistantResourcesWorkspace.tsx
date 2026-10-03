@@ -1,4 +1,4 @@
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ArrowUpRight, Copy, ExternalLink, FileClock, Globe2, Image as ImageIcon, Library, LoaderCircle, Search, X } from 'lucide-react'
 import type { AssistantUtilityResourcesStateCapsule } from '@shared/assistant/utility-window'
 import { getFileUrl } from '@/components/ui/file-preview/utils'
@@ -48,7 +48,7 @@ function buildInlineImagePreview(resource: AssistantResource): ComposerContextFi
     return {
         id: `${resource.id}:preview`,
         path: dataUrl,
-        name: attachment.displayName || attachment.name || resource.title,
+        name: resource.title,
         mimeType: attachment.mime || dataUrl.slice(5, dataUrl.indexOf(';')) || 'image/*',
         kind: 'image',
         previewDataUrl: dataUrl,
@@ -97,6 +97,7 @@ const ResourceImagePreview = memo(function ResourceImagePreview({ resource }: { 
 })
 
 export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorkspace({
+    active = true,
     turns,
     projectPath,
     onOpenPreview,
@@ -107,6 +108,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
     stateCapsule,
     onStateCapsuleChange
 }: {
+    active?: boolean
     turns: AssistantDiffTurn[]
     projectPath: string | null
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
@@ -165,7 +167,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
         && (!deferredQuery || resource.searchText.includes(deferredQuery))
     )), [deferredQuery, filter, resourceIndex.resources, sourceFilter, turnFilter])
     const wideLayout = workspaceWidth >= 1050
-    const { range, scrollElementRef } = usePreviewVirtualWindow({ rowCount: visibleResources.length, rowHeight: RESOURCE_TABLE_ROW_HEIGHT, restoreKey: 'assistant-resources-table' })
+    const { range, scrollElementRef } = usePreviewVirtualWindow({ active, rowCount: visibleResources.length, rowHeight: RESOURCE_TABLE_ROW_HEIGHT, restoreKey: 'assistant-resources-table' })
     const renderedResources = visibleResources.slice(range.start, range.end)
     const previewMeta = useMemo(() => previewFile ? getContextFileMeta(previewFile) : null, [previewFile])
 
@@ -202,7 +204,8 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
             scrollAnchor
         })
     }, [filter, onStateCapsuleChange, query, scrollAnchor, selectedResourceId, sourceFilter, turnFilter])
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (!active) return
         const root = rootRef.current
         if (!root || typeof ResizeObserver === 'undefined') return
         const updateWidth = () => setWorkspaceWidth(root.clientWidth)
@@ -210,7 +213,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
         const observer = new ResizeObserver(updateWidth)
         observer.observe(root)
         return () => observer.disconnect()
-    }, [])
+    }, [active])
     useEffect(() => {
         if (filter !== 'all' && (!kindCounts[filter] || !showResourceFilters)) setFilter('all')
     }, [filter, kindCounts, showResourceFilters])
@@ -219,11 +222,11 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
         if (turnFilter !== 'all' && !turnOptions.some((turn) => turn.id === turnFilter)) setTurnFilter('all')
     }, [sourceCounts, sourceFilter, turnFilter, turnOptions])
     useEffect(() => {
-        if (wideLayout) return
+        if (!active || workspaceWidth === 0 || wideLayout) return
         setSourceFilter('all')
         setTurnFilter('all')
         setSelectedResourceId(null)
-    }, [wideLayout])
+    }, [active, wideLayout, workspaceWidth])
     useEffect(() => {
         if (scrollElementRef.current) scrollElementRef.current.scrollTop = 0
     }, [deferredQuery, filter, scrollElementRef, sourceFilter, turnFilter])
@@ -234,13 +237,14 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
             return true
         }
         const openPreview = inNewTab ? onOpenPreviewInNewTab : onOpenPreview
-        if (resource.path) return openAssistantFileTarget({ target: resource.path, projectPath, openPreview })
+        const previewOptions = { displayName: resource.title, openNavigator: true, revealNavigatorTarget: false }
+        if (resource.path) return openAssistantFileTarget({ target: resource.path, projectPath, openPreview, previewOptions })
         const attachmentPath = String(resource.attachment?.path || '').trim()
         if (isClipboardAttachmentReference(attachmentPath)) {
             const result = await window.devscope.assistant.resolveClipboardAttachment({ reference: attachmentPath })
-            if (result.success && result.path) return openAssistantFileTarget({ target: result.path, projectPath, openPreview })
+            if (result.success && result.path) return openAssistantFileTarget({ target: result.path, projectPath, openPreview, previewOptions })
         } else if (attachmentPath) {
-            const opened = await openAssistantFileTarget({ target: attachmentPath, projectPath, openPreview })
+            const opened = await openAssistantFileTarget({ target: attachmentPath, projectPath, openPreview, previewOptions })
             if (opened) return true
         }
         const inlinePreview = buildInlineImagePreview(resource)
@@ -313,6 +317,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
 
             {wideLayout ? (
                 <AssistantResourcesLibrary
+                    active={active}
                     resources={visibleResources}
                     allResources={resourceIndex.resources}
                     selectedResourceId={selectedResourceId}

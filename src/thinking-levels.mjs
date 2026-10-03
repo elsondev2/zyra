@@ -11,11 +11,13 @@ function modelIdentity(model) {
 }
 
 export function isGpt56Model(model) {
-  return GPT_56_MODEL_RE.test(String(modelIdentity(model)));
+  const identity = String(modelIdentity(model));
+  return (!identity.includes("/") || /^(?:openai-codex|openai)\//i.test(identity)) && GPT_56_MODEL_RE.test(identity);
 }
 
 export function isChatGptReasoningModel(model) {
-  return CHATGPT_MODEL_RE.test(String(modelIdentity(model)));
+  const identity = String(modelIdentity(model));
+  return (!identity.includes("/") || /^(?:openai-codex|openai)\//i.test(identity)) && CHATGPT_MODEL_RE.test(identity);
 }
 
 export function normalizeZyraThinkingLevel(value) {
@@ -24,6 +26,12 @@ export function normalizeZyraThinkingLevel(value) {
 }
 
 export function getModelThinkingLevels(model, piLevels = PI_THINKING_LEVELS) {
+  if (Array.isArray(model?.zyraSupportedEfforts)) return [...model.zyraSupportedEfforts];
+  if (model?.provider === "opencode-harness") {
+    if (model.reasoning !== true) return [];
+    return (model.harness?.variants ?? []).filter((variant) => KNOWN_THINKING_LEVELS.has(variant));
+  }
+  if (typeof model === "object" && model?.reasoning === false) return [];
   if (isGpt56Model(model)) return [...GPT_56_THINKING_LEVELS];
   const levels = Array.isArray(piLevels) ? piLevels.filter((level) => KNOWN_THINKING_LEVELS.has(level)) : [];
   if (isChatGptReasoningModel(model)) {
@@ -36,6 +44,8 @@ export function getModelThinkingLevels(model, piLevels = PI_THINKING_LEVELS) {
 export function coerceThinkingLevelForModel(value, model, piLevels = PI_THINKING_LEVELS) {
   const requested = normalizeZyraThinkingLevel(value) ?? "medium";
   const levels = getModelThinkingLevels(model, piLevels);
+  if (Array.isArray(model?.zyraSupportedEfforts)) return levels.includes(requested) ? requested : levels.includes('medium') ? 'medium' : levels[0] ?? 'off';
+  if (model?.provider === "opencode-harness" && levels.includes(requested)) return requested;
 
   if (isGpt56Model(model)) {
     if (["off", "none", "minimal"].includes(requested)) return "low";
@@ -53,7 +63,7 @@ export function coerceThinkingLevelForModel(value, model, piLevels = PI_THINKING
   return clampToAvailablePiLevel(compatible, levels);
 }
 
-export function toPiThinkingLevel(value) {
+export function toRuntimeThinkingLevel(value) {
   const level = normalizeZyraThinkingLevel(value) ?? "medium";
   if (level === "none") return "off";
   if (level === "max") return "xhigh";

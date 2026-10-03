@@ -27,12 +27,25 @@ class VoiceProtocol {
     private val sent = LinkedHashSet<String>()
     private val events = ArrayDeque<String>()
     private var bytes = 0
+    private var pendingVoiceTaskId: String? = null
+    private val voiceTaskByTurn = LinkedHashMap<String, String>()
+    private val seenAssistantTurns = LinkedHashSet<String>()
     val hasEvents get() = events.isNotEmpty()
 
     fun provider(event: JSONObject) {
         val type = event.optString("type")
         val role = event.optJSONObject("turn")?.optString("role")?.takeIf(String::isNotEmpty)
             ?: event.optJSONObject("item")?.optString("role")?.takeIf(String::isNotEmpty) ?: event.optString("role")
+        if (type == "input_audio_buffer.speech_started") pendingVoiceTaskId = null
+        val turnId = event.optJSONObject("turn")?.optString("id")?.takeIf(String::isNotBlank)
+            ?: event.optString("turn_id").takeIf(String::isNotBlank)
+        if (type == "turn.created" && role == "assistant" && turnId != null && seenAssistantTurns.add(turnId)) {
+            pendingVoiceTaskId?.let { voiceTaskByTurn[turnId] = it; pendingVoiceTaskId = null }
+            while (voiceTaskByTurn.size > 128) voiceTaskByTurn.remove(voiceTaskByTurn.keys.first())
+            while (seenAssistantTurns.size > 128) seenAssistantTurns.remove(seenAssistantTurns.first())
+        }
+        // This is local bridge metadata; never send it to the provider.
+        if (turnId != null) voiceTaskByTurn[turnId]?.let { event.put("zyraVoiceTaskId", it) }
         if (type in setOf("input_audio_buffer.speech_started", "response.created", "output_transcript.added") || type == "turn.created" && role == "assistant") responseActive = true
         if (type in setOf("response.done", "output_audio.done") || type == "turn.done" && role == "assistant") responseActive = false
         if (!isTranscript(type)) return
@@ -74,7 +87,10 @@ class VoiceProtocol {
             // Partial delivery is terminal. Never replay a partially sent command.
             for (message in values) check(send(message.toString())) { "The Voice event channel could not send an instruction." }
             sent.add(command.getString("commandId")); iterator.remove()
-            if (values.any { it.optString("channel") == "speakable" }) responseActive = true
+            if (values.any { it.optString("channel") == "speakable" }) {
+                responseActive = true
+                pendingVoiceTaskId = command.optString("voiceTaskId").takeIf(String::isNotBlank)
+            }
             while (sent.size > 256) sent.remove(sent.first())
         }
     }
@@ -86,6 +102,7 @@ class VoiceProtocol {
         fun validateCommand(event: JSONObject) {
             require(identifier.matches(event.optString("commandId"))) { "Invalid Voice instruction identity." }
             require(!event.has("canonicalMessageId") || identifier.matches(event.optString("canonicalMessageId")))
+            require(!event.has("voiceTaskId") || identifier.matches(event.optString("voiceTaskId")) && !event.has("canonicalMessageId"))
             require(event.optLong("realtimeSessionGeneration") > 0)
             val messages = event.getJSONArray("messages")
             require(messages.length() in 1..32)

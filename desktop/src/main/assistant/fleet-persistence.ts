@@ -39,3 +39,21 @@ export function readFleetSnapshot(db: SqlDatabase, threadId: string): FleetSnaps
     if (typeof value !== 'string') return null
     try { return JSON.parse(value) as FleetSnapshot } catch { return null }
 }
+
+/** Bounded parameter batches work with both native SQLite and the SQL.js fallback. */
+export function readFleetSnapshots(db: SqlDatabase, threadIds: readonly string[]): Record<string, FleetSnapshot> {
+    const snapshots: Record<string, FleetSnapshot> = Object.create(null)
+    const ids = [...new Set(threadIds)]
+    for (let offset = 0; offset < ids.length; offset += 900) {
+        const batch = ids.slice(offset, offset + 900)
+        const rows = db.exec(`SELECT root_thread_id, payload_json FROM assistant_fleet_snapshots WHERE root_thread_id IN (${batch.map(() => '?').join(',')})`, batch)[0]?.values || []
+        for (const [threadId, value] of rows) {
+            if (typeof threadId !== 'string' || typeof value !== 'string') continue
+            try {
+                const snapshot = JSON.parse(value) as FleetSnapshot | null
+                if (snapshot) snapshots[threadId] = snapshot
+            } catch {}
+        }
+    }
+    return snapshots
+}

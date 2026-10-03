@@ -5,7 +5,7 @@ const DEFINITE_CRITICAL_COMMAND_PATTERNS = [
   /\bgit\s+(?:push|reset\s+--hard|clean\s+-[^\r\n]*f|rebase|filter-(?:repo|branch)|branch\s+-D)\b/i,
   /\b(?:npm|pnpm|yarn|bun)\s+publish\b/i,
   /\b(?:gh\s+release|docker\s+push|terraform\s+(?:apply|destroy)|kubectl\s+(?:apply|delete)|vercel\s+(?:deploy|--prod)|railway\s+up)\b/i,
-  /\b(?:rm\s+-[^\r\n]*r[^\r\n]*f|remove-item\b[^\r\n]*(?:-recurse[^\r\n]*-force|-force[^\r\n]*-recurse)|rmdir\s+\/s|del\s+\/s|format\b(?!-(?:list|table|wide|custom|hex)(?![\w.-]))|diskpart\b)/i,
+  /\b(?:rm\s+-[^\r\n]*r[^\r\n]*f|remove-item\b[^\r\n]*(?:-recurse[^\r\n]*-force|-force[^\r\n]*-recurse)|rmdir\s+\/s|del\s+\/s|format\b(?![=])(?!-(?:list|table|wide|custom|hex)(?![\w.-]))|diskpart\b)/i,
   /\b(?:drop\s+(?:database|schema|table)|truncate\s+table)\b/i,
   /\b(?:winget|choco|scoop|apt(?:-get)?|brew)\s+(?:install|upgrade|uninstall|remove)\b/i,
   /\b(?:set-executionpolicy|reg(?:\.exe)?\s+(?:add|delete)|sc(?:\.exe)?\s+(?:create|delete|config)|net\s+user)\b/i,
@@ -15,6 +15,7 @@ const text = value => typeof value === 'string' ? value.trim() : '';
 
 export function isDefinitelyCriticalZyraToolPermission(request = {}) {
   const toolName = String(request.toolName || '').trim().toLowerCase();
+  if (toolName === 'plugin_mcp') return true;
   if (CRITICAL_TOOL_NAME_PATTERN.test(toolName)) return true;
   const command = [request.command, request.detail].map(text).filter(Boolean).join('\n');
   return Boolean(command && DEFINITE_CRITICAL_COMMAND_PATTERNS.some(pattern => pattern.test(command)));

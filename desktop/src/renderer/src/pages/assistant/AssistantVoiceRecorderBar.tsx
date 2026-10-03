@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState } from 'react'
-import { Loader2, Square, X } from 'lucide-react'
+import { memo, useEffect, useRef, useState, type RefObject } from 'react'
+import { Loader2, SendHorizontal, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const BAR_WIDTH_PX = 2
@@ -43,7 +43,9 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
     isTranscribing,
     waveformLevels,
     onCancel,
-    onSubmit
+    onSubmit,
+    onSend,
+    inputRef
 }: {
     disabled?: boolean
     durationLabel: string
@@ -51,9 +53,17 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
     waveformLevels: readonly number[]
     onCancel: () => void
     onSubmit: () => void
+    onSend: () => void
+    inputRef?: RefObject<HTMLDivElement | null>
 }) {
+    const localInputRef = useRef<HTMLDivElement | null>(null)
+    const recorderInputRef = inputRef || localInputRef
     const trackRef = useRef<HTMLDivElement | null>(null)
     const [visibleBarCount, setVisibleBarCount] = useState(96)
+
+    useEffect(() => {
+        if (!disabled && !isTranscribing) recorderInputRef.current?.focus({ preventScroll: true })
+    }, [disabled, isTranscribing, recorderInputRef])
 
     useEffect(() => {
         const node = trackRef.current
@@ -78,7 +88,17 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
 
     return (
         <div
+            ref={recorderInputRef}
             className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-white/[0.025] px-1"
+            role="group"
+            tabIndex={disabled || isTranscribing ? -1 : 0}
+            style={{ outline: 'none' }}
+            onPointerDown={event => { if (!(event.target as HTMLElement).closest('button')) recorderInputRef.current?.focus({ preventScroll: true }) }}
+            onKeyDown={event => {
+                if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.target !== event.currentTarget) return
+                event.preventDefault()
+                if (!disabled && !isTranscribing && !event.repeat) onSend()
+            }}
             aria-label={isTranscribing ? 'Voice note transcription' : 'Voice note recorder'}
             data-state={isTranscribing ? 'transcribing' : 'recording'}
         >
@@ -126,8 +146,8 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
             </span>
 
             <div className={cn(
-                'shrink-0 transition-[width,margin,opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transform-none motion-reduce:transition-none',
-                isTranscribing ? '-ml-2 w-0 scale-75 opacity-0' : 'ml-0 w-8 scale-100 opacity-100'
+                'flex shrink-0 items-center gap-1 transition-[width,margin,opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transform-none motion-reduce:transition-none',
+                isTranscribing ? '-ml-2 w-0 scale-75 opacity-0' : 'ml-0 w-[4.25rem] scale-100 opacity-100'
             )}>
                 <button
                     type="button"
@@ -136,13 +156,25 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
                     tabIndex={isTranscribing ? -1 : 0}
                     aria-hidden={isTranscribing}
                     className={cn(
-                        'inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] transition-colors duration-200',
-                        'hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))] active:bg-[color-mix(in_srgb,var(--accent-primary)_80%,var(--color-text))] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none'
+                        'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/[0.10] bg-white/[0.05] text-sparkle-text-secondary transition-colors duration-200',
+                        'hover:bg-white/[0.10] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none'
                     )}
                     title="Stop and transcribe voice note"
                     aria-label="Stop and transcribe voice note"
                 >
                     <Square size={10} fill="currentColor" strokeWidth={1.8} />
+                </button>
+                <button
+                    type="button"
+                    onClick={onSend}
+                    disabled={disabled || isTranscribing}
+                    tabIndex={isTranscribing ? -1 : 0}
+                    aria-hidden={isTranscribing}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent-primary)] text-[var(--accent-contrast)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none"
+                    title="Transcribe and send voice note"
+                    aria-label="Transcribe and send voice note"
+                >
+                    <SendHorizontal size={15} />
                 </button>
             </div>
         </div>

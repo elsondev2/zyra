@@ -60,6 +60,19 @@ try {
     assert.equal(modelRequests, 5, 'the post-invalidation generation performs its own model request')
     assert.equal(currentModels[0]?.id, 'model:current-account', 'stale model results cannot repopulate the current account cache')
 
+    let onCatalogEvent: any
+    let unsubscribed = false
+    ;(globalThis as any).window.devscope.assistant.onEvent = (listener: any) => { onCatalogEvent = listener; return () => { unsubscribed = true } }
+    let liveModels: any[] = []
+    const unsubscribeCatalog = catalog.subscribeSettingsModels(models => { liveModels = models })
+    onCatalogEvent({ event: { type: 'models.updated', payload: { models: [{ id: 'openai-codex/new-release', label: 'New' }] } } })
+    assert.equal(liveModels[0].id, 'openai-codex/new-release', 'mounted settings receive provider releases without remounting')
+    assert.equal(catalog.readCachedSettingsModels()[0]?.id, 'openai-codex/new-release')
+    onCatalogEvent({ event: { type: 'models.updated', payload: { models: [] } } })
+    assert.deepEqual(liveModels, [], 'mounted settings remove withdrawn models, including the final entry')
+    unsubscribeCatalog()
+    assert.equal(unsubscribed, true, 'catalog events unsubscribe when settings closes')
+
     const accountSource = readFileSync(new URL('../src/renderer/src/pages/settings/providers/useOpenAIAccountSettings.ts', import.meta.url), 'utf8')
     const connectionLoadSource = accountSource.split('const loadConnectionState')[1]?.split('const applyAccountOverview')[0] || ''
     assert.doesNotMatch(connectionLoadSource, /listModels/, 'opening Account cannot discover models as an unrelated side effect')
@@ -72,7 +85,7 @@ try {
     const settingsStoreSource = readFileSync(new URL('../src/renderer/src/lib/settings.tsx', import.meta.url), 'utf8')
     assert.match(settingsStoreSource, /clearProjectViewCaches\(\)[\s\S]{0,160}clearSettingsRuntimeCaches\(\)/, 'Clear cache includes loaded Settings runtime caches')
 
-    const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+    const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
     assert.match(runtimeSource, /private availabilityCache: \{ root: string; checkedAt: number; result:/, 'runtime availability retains a root-scoped cache')
     assert.match(runtimeSource, /async checkAvailability\(forceRefresh = false\)[\s\S]{0,500}Date\.now\(\) - this\.availabilityCache\.checkedAt < 30_000[\s\S]{0,180}return this\.availabilityCache\.result/, 'runtime availability is cached instead of spawning Node for every Settings mount')
     const listModelsSource = runtimeSource.split('async listModels(forceRefresh = false)')[1]?.split('async prewarm')[0] || ''

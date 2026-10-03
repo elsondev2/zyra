@@ -1,6 +1,8 @@
-import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
-import { Copy, ExternalLink, FolderOpen, MousePointer2, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { NativeOverlayPortal, addOverlayEventListener } from '@/components/ui/native-overlay-portal'
+import { supportsNativeOverlay } from '@/components/ui/native-overlay-host'
+import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
+import { CircleAlert, Copy, ExternalLink, FolderOpen, Info, MousePointer2, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type {
     DevScopeBrowserAnnotationPayload,
     DevScopeBrowserCaptureArtifact
@@ -51,6 +53,45 @@ export function useAssistantInspectorDeveloperToast() {
 
 const ACTION_CLASS = 'inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-2 text-[9px] text-sparkle-text-secondary shadow-sm transition-[background-color,border-color,color] duration-150 hover:border-[color-mix(in_srgb,var(--accent-primary)_38%,var(--surface-divider))] hover:bg-[color-mix(in_srgb,var(--color-card)_82%,var(--accent-primary)_18%)] hover:text-sparkle-text motion-reduce:transition-none'
 
+function ToastNativeSurface({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }) {
+    const mirrorRef = useRef<HTMLDivElement | null>(null)
+    const contentRef = useRef<HTMLDivElement | null>(null)
+    const [bounds, setBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+
+    useLayoutEffect(() => {
+        const mirror = mirrorRef.current
+        if (!mirror) return
+        const measure = () => {
+            const rect = mirror.getBoundingClientRect()
+            if (!rect.width || !rect.height) return
+            const next = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+            setBounds((current) => current && current.x === next.x && current.y === next.y && current.width === next.width && current.height === next.height ? current : next)
+        }
+        const observer = new ResizeObserver(measure)
+        observer.observe(mirror)
+        window.addEventListener('resize', measure)
+        measure()
+        return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+    }, [])
+
+    useEffect(() => {
+        const dismissOutside = (event: PointerEvent) => {
+            if (contentRef.current?.contains(event.target as Node)) return
+            onDismiss()
+        }
+        const unsubscribe = addOverlayEventListener('pointerdown', dismissOutside, true)
+        window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, onDismiss)
+        return () => { unsubscribe(); window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, onDismiss) }
+    }, [onDismiss])
+
+    return <>
+        <div ref={mirrorRef} aria-hidden="true" className="pointer-events-none invisible fixed bottom-3 right-3 w-max max-w-[calc(100vw-24px)]">{children}</div>
+        {bounds ? <NativeOverlayPortal bounds={bounds} autoFocus={false}>
+            <div ref={contentRef} style={{ position: 'fixed', left: supportsNativeOverlay() ? 0 : bounds.x, top: supportsNativeOverlay() ? 0 : bounds.y, width: bounds.width, height: bounds.height }}>{children}</div>
+        </NativeOverlayPortal> : null}
+    </>
+}
+
 export function AssistantInspectorDeveloperToast({
     toast,
     onDismiss
@@ -73,7 +114,7 @@ export function AssistantInspectorDeveloperToast({
     const finishDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
         const startX = dragStartXRef.current
         if (startX === null) return
-        const distance = Math.max(0, event.clientX - startX)
+        const distance = Math.abs(event.clientX - startX)
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
         dragStartXRef.current = null
         setDragging(false)
@@ -86,11 +127,11 @@ export function AssistantInspectorDeveloperToast({
 
     if (hasImage && artifact?.thumbnailDataUrl) {
         return (
-            <AnchoredNativeOverlay><div
-                className="absolute bottom-3 right-3 z-[390] w-[min(320px,calc(100%-24px))]"
+            <ToastNativeSurface onDismiss={onDismiss}><div
+                className="w-[min(320px,calc(100vw-24px))]"
                 style={{
                     transform: toast.closing ? 'translate3d(calc(100% + 24px),0,0)' : `translate3d(${dragX}px,0,0)`,
-                    opacity: toast.closing ? 0 : Math.max(0.22, 1 - dragX / 260),
+                    opacity: toast.closing ? 0 : Math.max(0.22, 1 - Math.abs(dragX) / 260),
                     transition: dragging ? 'none' : 'transform 190ms cubic-bezier(.4,0,.2,1), opacity 160ms ease',
                     touchAction: 'pan-y'
                 }}
@@ -106,7 +147,7 @@ export function AssistantInspectorDeveloperToast({
                 }}
                 onPointerMove={(event) => {
                     if (dragStartXRef.current === null) return
-                    setDragX(Math.max(0, event.clientX - dragStartXRef.current))
+                    setDragX(event.clientX - dragStartXRef.current)
                 }}
                 onPointerUp={finishDrag}
                 onPointerCancel={finishDrag}
@@ -129,23 +170,40 @@ export function AssistantInspectorDeveloperToast({
                         <button type="button" onClick={onDismiss} className={cn(ACTION_CLASS, 'w-7 justify-center px-0')} aria-label="Close preview"><X size={11} /></button>
                     </div>
                 </div>
-            </div></AnchoredNativeOverlay>
+            </div></ToastNativeSurface>
         )
     }
 
     return (
-        <AnchoredNativeOverlay><div
+        <ToastNativeSurface onDismiss={onDismiss}><div
             className={cn(
-                'absolute bottom-3 right-3 z-[390] flex max-w-[min(320px,calc(100%-24px))] items-center gap-2 rounded-lg border bg-[var(--color-card)] px-2.5 py-2 text-[10px] shadow-lg transition-[transform,opacity] duration-200',
-                toast.closing && 'translate-x-[calc(100%_+_24px)] opacity-0',
+                'flex max-w-[min(320px,calc(100vw-24px))] items-center gap-2 rounded-lg border bg-[var(--color-card)] px-2.5 py-2 text-[10px] shadow-lg',
                 toast.tone === 'error' ? 'border-red-400/30 text-red-300' : 'border-[var(--surface-divider)] text-sparkle-text-secondary'
             )}
+            style={{
+                transform: toast.closing ? 'translate3d(calc(100% + 24px),0,0)' : `translate3d(${dragX}px,0,0)`,
+                opacity: toast.closing ? 0 : Math.max(0.22, 1 - Math.abs(dragX) / 260),
+                transition: dragging ? 'none' : 'transform 190ms cubic-bezier(.4,0,.2,1), opacity 160ms ease',
+                touchAction: 'pan-y'
+            }}
             role="status"
             aria-live="polite"
+            onPointerDown={(event) => {
+                if (event.button !== 0 || (event.target as Element | null)?.closest?.('button')) return
+                dragStartXRef.current = event.clientX
+                setDragging(true)
+                event.currentTarget.setPointerCapture(event.pointerId)
+            }}
+            onPointerMove={(event) => {
+                if (dragStartXRef.current !== null) setDragX(event.clientX - dragStartXRef.current)
+            }}
+            onPointerUp={finishDrag}
+            onPointerCancel={finishDrag}
         >
+            {toast.tone === 'error' ? <CircleAlert size={14} className="shrink-0 text-red-300" aria-hidden="true" /> : <Info size={14} className="shrink-0 text-[var(--accent-primary)]" aria-hidden="true" />}
             <span className="min-w-0 flex-1">{toast.message || (artifact ? 'Capture ready' : 'Done')}</span>
             {artifact ? <button type="button" onClick={() => void window.devscope.openBrowserPreviewArtifact(artifact.artifactId)} className={ACTION_CLASS}>Open</button> : null}
             <button type="button" onClick={onDismiss} className="inline-flex size-6 items-center justify-center rounded bg-[var(--surface-floating)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-card)_82%,var(--accent-primary)_18%)]" aria-label="Dismiss"><X size={11} /></button>
-        </div></AnchoredNativeOverlay>
+        </div></ToastNativeSurface>
     )
 }

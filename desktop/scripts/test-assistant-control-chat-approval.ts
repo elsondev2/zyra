@@ -33,7 +33,8 @@ const actionMarkup = renderToStaticMarkup(createElement(AssistantPendingControlA
     targets: [target]
 }))
 assert.match(actionMarkup, /Approve complete a purchase\?/)
-assert.match(actionMarkup, /needs your attention even in Full access/)
+assert.match(actionMarkup, /needs your attention in the current permission mode/)
+assert.doesNotMatch(actionMarkup, /even in Full access/)
 assert.match(actionMarkup, /Allow this action/)
 assert.match(actionMarkup, /https:\/\/example\.com/)
 assert.doesNotMatch(actionMarkup, /aria-modal/)

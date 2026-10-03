@@ -12,7 +12,7 @@ export async function writeProviderJson(file, value) {
   finally { await rm(temporary, { force: true }).catch(() => {}); }
 }
 
-/** Metadata lock supplements Pi's credential lock; it never contains a credential. */
+/** Shared file lock for provider metadata and credential transactions. */
 export async function withProviderStoreLock(file, action, { waitMs = 5000 } = {}) {
   await mkdir(path.dirname(file), { recursive: true });
   const release = await lockfile.lock(file, {
@@ -26,19 +26,20 @@ export async function withProviderStoreLock(file, action, { waitMs = 5000 } = {}
 }
 
 async function recoverLocked(file, runtime, readConfig) {
+  const authStorage = runtime?.authStorage ?? runtime;
   const journalFile = `${file}.pending`;
   if (!existsSync(journalFile)) return;
   const journal = JSON.parse(await readFile(journalFile, "utf8"));
-  if (journal.version !== 1 || !/^(opencode|anthropic|custom-[a-z0-9-]+)$/.test(journal.provider) || !["connect", "disconnect"].includes(journal.operation)) throw new Error("Provider recovery metadata is invalid.");
+  if (journal.version !== 1 || !/^(opencode|anthropic|opencode-harness|custom-[a-z0-9-]+)$/.test(journal.provider) || !["connect", "disconnect"].includes(journal.operation)) throw new Error("Provider recovery metadata is invalid.");
   if (journal.operation === "connect" && (!journal.target || typeof journal.target.label !== "string"
     || typeof journal.target.model !== "string" || !journal.target.model.startsWith(`${journal.provider}/`)
     || !Array.isArray(journal.target.config?.models) || !/^[a-f0-9]{64}$/.test(journal.keyDigest))) throw new Error("Provider recovery metadata is invalid.");
   const connections = readConfig(file);
   if (journal.operation === "disconnect") {
-    await runtime.authStorage.logout(journal.provider);
+    await authStorage.logout(journal.provider);
     delete connections[journal.provider];
   } else {
-    const credential = runtime.authStorage.get(journal.provider);
+    const credential = authStorage.get(journal.provider);
     if (credential?.type !== "api_key" || digest(String(credential.key)) !== journal.keyDigest) {
       await rm(journalFile, { force: true });
       if (journal.phase === "credential-written") throw new Error("The provider key changed during recovery. Reconnect this provider.");
@@ -54,6 +55,7 @@ export async function recoverProviderTransaction(file, runtime, readConfig) {
   if (existsSync(`${file}.pending`)) await withProviderStoreLock(file, () => recoverLocked(file, runtime, readConfig));
 }
 export async function commitProviderConnection(file, runtime, transaction, { readConfig, afterAuth, writeMetadata = writeProviderJson } = {}) {
+  const authStorage = runtime?.authStorage ?? runtime;
   return withProviderStoreLock(file, async () => {
     await recoverLocked(file, runtime, readConfig);
     const connections = readConfig(file);
@@ -62,8 +64,8 @@ export async function commitProviderConnection(file, runtime, transaction, { rea
     const journalFile = `${file}.pending`;
     const journal = { version: 1, operation, provider, target, keyDigest: apiKey ? digest(apiKey) : undefined, phase: "intent" };
     await writeProviderJson(journalFile, journal);
-    if (operation === "connect") await runtime.authStorage.loginApiKey(provider, apiKey);
-    else await runtime.authStorage.logout(provider);
+    if (operation === "connect") await authStorage.loginApiKey(provider, apiKey);
+    else await authStorage.logout(provider);
     await afterAuth?.();
     await writeProviderJson(journalFile, { ...journal, phase: "credential-written" });
     if (operation === "connect") connections[provider] = target;

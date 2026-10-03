@@ -1,0 +1,18 @@
+// Generated from the maintained TypeScript in ../source by scripts/build-owned-runtime.mjs.
+import { mistralConversationsApi } from "../api/mistral-conversations.lazy.js";
+import { envApiKeyAuth } from "../auth/helpers.js";
+import { createProvider } from "../models.js";
+import { MISTRAL_MODELS } from "./mistral.models.js";
+function mistralProvider() {
+  return createProvider({
+    id: "mistral",
+    name: "Mistral",
+    baseUrl: "https://api.mistral.ai",
+    auth: { apiKey: envApiKeyAuth("Mistral API key", ["MISTRAL_API_KEY"]) },
+    models: Object.values(MISTRAL_MODELS),
+    api: mistralConversationsApi()
+  });
+}
+export {
+  mistralProvider
+};

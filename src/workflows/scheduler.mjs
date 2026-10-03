@@ -54,8 +54,12 @@ export class WorkflowScheduler {
     const options = request.options ?? {};
     const phase = request.phase ? String(request.phase) : null;
     const stableKey = String(options.key ?? options.label ?? `${phase ?? "root"}:${request.ordinal ?? this.callCount}`);
+    await this.controller.refreshModelCatalog?.();
     const route = this.controller.previewRoute({
-      model: options.model ?? "inherit",
+      agent: options.agent,
+      role: options.role,
+      model: options.model,
+      policy: options.modelPolicy,
       fallbackModels: options.fallbackModels,
       envelope: { task: options.task ?? inferTask(prompt), tools: options.tools ?? [] },
     });
@@ -66,12 +70,19 @@ export class WorkflowScheduler {
       stableKey,
       prompt,
       definitionRevision: options.agent ? this.controller.listDefinitions().active.find((entry) => entry.name === options.agent)?.definition?.version : "dynamic",
+      agentDefinition: options.agent ? this.controller.listDefinitions().active.find(entry => entry.name === options.agent)?.definition : null,
       selectedModelPolicy: { requested: route.requested, selected: route.selectedKey, fallbacks: options.fallbackModels },
       tools: options.tools,
       capabilities: options.capabilities,
       isolation: options.isolation,
       writeScope: options.writeScope,
       schema: options.schema,
+      effort: options.effort,
+      permissionMode: options.permissionMode,
+      readScope: options.readScope,
+      task: options.task,
+      role: options.role,
+      modelPolicy: options.modelPolicy,
     });
     const callId = `call-${fingerprint.slice(0, 16)}`;
     const cached = await this.cache.get(fingerprint);
@@ -121,9 +132,12 @@ export class WorkflowScheduler {
     this.activeAgentRunIds.add(agentRunId);
     try {
       const spawned = await this.controller.spawn({
-        prompt,
-        goal: prompt,
+        prompt: options.schema ? `${prompt}\n\nReturn JSON matching this schema:\n${JSON.stringify(options.schema)}` : prompt,
+        goal: options.schema ? `${prompt}\n\nReturn JSON matching this schema:\n${JSON.stringify(options.schema)}` : prompt,
         agent: options.agent,
+        role: options.role,
+        task: options.task ?? inferTask(prompt),
+        modelPolicy: options.modelPolicy,
         label: options.label,
         model: route.selectedKey,
         fallbackModels: options.fallbackModels,

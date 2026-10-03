@@ -13,6 +13,7 @@ import { shouldPlayInstructorAudio } from './instructor-voice-preferences'
 import { calculateInstructorVoiceActivity, smoothInstructorVoiceActivity } from './instructor-voice-activity'
 import { applyRealtimeTranscriptEvent, type InstructorTranscriptEntry } from './instructor-voice-transcript'
 import { createAssistantVoicePayload } from './assistant-voice-recorder'
+import { VoiceTaskSpeechBinding } from '@shared/assistant/voice-task-speech-binding'
 import {
     buildRecoveredRealtimeUserTranscript,
     readCompletedRealtimeUserTranscriptId,
@@ -183,6 +184,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const sentClientCommandIdsRef = useRef(new Set<string>())
     const realtimeResponseActiveRef = useRef(false)
     const pendingCanonicalSpeechReplaysRef = useRef<Array<{ canonicalMessageId: string; normalizedText: string }>>([])
+    const voiceTaskSpeechBindingRef = useRef(new VoiceTaskSpeechBinding())
     const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve())
     const [status, setStatus] = useState<InstructorVoiceStatus>('idle')
     const [startedAt, setStartedAt] = useState<string | null>(null)
@@ -212,6 +214,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                 sentClientCommandIdsRef.current.add(command.commandId)
                 if (startsResponse) {
                     realtimeResponseActiveRef.current = true
+                    if (command.voiceTaskId) voiceTaskSpeechBindingRef.current.dispatched(command.voiceTaskId)
                     if (command.canonicalMessageId) {
                         const speechText = command.messages
                             .filter((message) => message.type === 'session.context.append' && message.channel === 'speakable')
@@ -307,6 +310,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         sentClientCommandIdsRef.current.clear()
         realtimeResponseActiveRef.current = false
         pendingCanonicalSpeechReplaysRef.current = []
+        voiceTaskSpeechBindingRef.current.clear()
         const dataChannel = dataChannelRef.current
         dataChannelRef.current = null
         if (dataChannel) {
@@ -675,6 +679,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                         markActiveIfReady()
                     }
                     const assistantCompletion = readRealtimeVoiceAssistantCompletion(payload)
+                    const voiceTaskId = voiceTaskSpeechBindingRef.current.bind(payload)
                     const speechReplay = assistantCompletion
                         ? consumeCanonicalVoiceSpeechReplay(
                             pendingCanonicalSpeechReplaysRef.current,
@@ -750,7 +755,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                     // Invoke IPC immediately so any later navigation request is
                     // ordered after this provider event in Electron. The aggregate
                     // promise remains only as the local Stop/unmount drain barrier.
-                    queueCanonicalPayload(payload)
+                    queueCanonicalPayload(voiceTaskId ? { ...payload, zyraVoiceTaskId: voiceTaskId } : payload)
                 } catch {
                     // Ignore unrelated non-JSON realtime payloads.
                 }

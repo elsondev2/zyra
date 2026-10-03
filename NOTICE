@@ -1,6 +1,11 @@
 Zyra
 Copyright 2026 justelson
 
+Zyra's maintained agent runtime under src/runtime derives from Pi,
+Copyright (c) 2025 Mario Zechner, licensed under the MIT License.
+The original license is retained in each runtime module's LICENSE.
+Imported component versions are recorded in src/runtime/provenance.json.
+
 Licensed under the Apache License, Version 2.0. See LICENSE for the full terms.
 
 This product includes third-party software and assets. Their notices and

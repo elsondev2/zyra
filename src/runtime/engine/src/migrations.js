@@ -1,0 +1,217 @@
+// Generated from the maintained TypeScript in ../source by scripts/build-owned-runtime.mjs.
+import chalk from "chalk";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
+import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.js";
+import { migrateKeybindingsConfig } from "./core/keybindings.js";
+import { stripBom } from "./utils/text.js";
+const MIGRATION_GUIDE_URL = "https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md#extensions-migration";
+const EXTENSIONS_DOC_URL = "https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/extensions.md";
+function migrateAuthToAuthJson() {
+  const agentDir = getAgentDir();
+  const authPath = join(agentDir, "auth.json");
+  const oauthPath = join(agentDir, "oauth.json");
+  const settingsPath = join(agentDir, "settings.json");
+  if (existsSync(authPath)) return [];
+  const migrated = {};
+  const providers = [];
+  if (existsSync(oauthPath)) {
+    try {
+      const oauth = JSON.parse(stripBom(readFileSync(oauthPath, "utf-8")));
+      for (const [provider, cred] of Object.entries(oauth)) {
+        migrated[provider] = { type: "oauth", ...cred };
+        providers.push(provider);
+      }
+      renameSync(oauthPath, `${oauthPath}.migrated`);
+    } catch {
+    }
+  }
+  if (existsSync(settingsPath)) {
+    try {
+      const content = readFileSync(settingsPath, "utf-8");
+      const settings = JSON.parse(stripBom(content));
+      if (settings.apiKeys && typeof settings.apiKeys === "object") {
+        for (const [provider, key] of Object.entries(settings.apiKeys)) {
+          if (!migrated[provider] && typeof key === "string") {
+            migrated[provider] = { type: "api_key", key };
+            providers.push(provider);
+          }
+        }
+        delete settings.apiKeys;
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      }
+    } catch {
+    }
+  }
+  if (Object.keys(migrated).length > 0) {
+    mkdirSync(dirname(authPath), { recursive: true });
+    writeFileSync(authPath, JSON.stringify(migrated, null, 2), { mode: 384 });
+  }
+  return providers;
+}
+function migrateSessionsFromAgentRoot() {
+  const agentDir = getAgentDir();
+  let files;
+  try {
+    files = readdirSync(agentDir).filter((f) => f.endsWith(".jsonl")).map((f) => join(agentDir, f));
+  } catch {
+    return;
+  }
+  if (files.length === 0) return;
+  for (const file of files) {
+    try {
+      const content = readFileSync(file, "utf8");
+      const firstLine = content.split("\n")[0];
+      if (!firstLine?.trim()) continue;
+      const header = JSON.parse(firstLine);
+      if (header.type !== "session" || !header.cwd) continue;
+      const cwd = header.cwd;
+      const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+      const correctDir = join(agentDir, "sessions", safePath);
+      if (!existsSync(correctDir)) {
+        mkdirSync(correctDir, { recursive: true });
+      }
+      const fileName = file.split("/").pop() || file.split("\\").pop();
+      const newPath = join(correctDir, fileName);
+      if (existsSync(newPath)) continue;
+      renameSync(file, newPath);
+    } catch {
+    }
+  }
+}
+function migrateCommandsToPrompts(baseDir, label) {
+  const commandsDir = join(baseDir, "commands");
+  const promptsDir = join(baseDir, "prompts");
+  if (existsSync(commandsDir) && !existsSync(promptsDir)) {
+    try {
+      renameSync(commandsDir, promptsDir);
+      console.log(chalk.green(`Migrated ${label} commands/ \u2192 prompts/`));
+      return true;
+    } catch (err) {
+      console.log(
+        chalk.yellow(
+          `Warning: Could not migrate ${label} commands/ to prompts/: ${err instanceof Error ? err.message : err}`
+        )
+      );
+    }
+  }
+  return false;
+}
+function migrateKeybindingsConfigFile() {
+  const configPath = join(getAgentDir(), "keybindings.json");
+  if (!existsSync(configPath)) return;
+  try {
+    const parsed = JSON.parse(stripBom(readFileSync(configPath, "utf-8")));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return;
+    }
+    const { config, migrated } = migrateKeybindingsConfig(parsed);
+    if (!migrated) return;
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+`, "utf-8");
+  } catch {
+  }
+}
+function migrateToolsToBin() {
+  const agentDir = getAgentDir();
+  const toolsDir = join(agentDir, "tools");
+  const binDir = getBinDir();
+  if (!existsSync(toolsDir)) return;
+  const binaries = ["fd", "rg", "fd.exe", "rg.exe"];
+  let movedAny = false;
+  for (const bin of binaries) {
+    const oldPath = join(toolsDir, bin);
+    const newPath = join(binDir, bin);
+    if (existsSync(oldPath)) {
+      if (!existsSync(binDir)) {
+        mkdirSync(binDir, { recursive: true });
+      }
+      if (!existsSync(newPath)) {
+        try {
+          renameSync(oldPath, newPath);
+          movedAny = true;
+        } catch {
+        }
+      } else {
+        try {
+          rmSync?.(oldPath, { force: true });
+        } catch {
+        }
+      }
+    }
+  }
+  if (movedAny) {
+    console.log(chalk.green(`Migrated managed binaries tools/ \u2192 bin/`));
+  }
+}
+function checkDeprecatedExtensionDirs(baseDir, label) {
+  const hooksDir = join(baseDir, "hooks");
+  const toolsDir = join(baseDir, "tools");
+  const warnings = [];
+  if (existsSync(hooksDir)) {
+    warnings.push(`${label} hooks/ directory found. Hooks have been renamed to extensions.`);
+  }
+  if (existsSync(toolsDir)) {
+    try {
+      const entries = readdirSync(toolsDir);
+      const customTools = entries.filter((e) => {
+        const lower = e.toLowerCase();
+        return lower !== "fd" && lower !== "rg" && lower !== "fd.exe" && lower !== "rg.exe" && !e.startsWith(".");
+      });
+      if (customTools.length > 0) {
+        warnings.push(
+          `${label} tools/ directory contains custom tools. Custom tools have been merged into extensions.`
+        );
+      }
+    } catch {
+    }
+  }
+  return warnings;
+}
+function migrateExtensionSystem(cwd) {
+  const agentDir = getAgentDir();
+  const projectDir = join(cwd, CONFIG_DIR_NAME);
+  migrateCommandsToPrompts(agentDir, "Global");
+  migrateCommandsToPrompts(projectDir, "Project");
+  const warnings = [
+    ...checkDeprecatedExtensionDirs(agentDir, "Global"),
+    ...checkDeprecatedExtensionDirs(projectDir, "Project")
+  ];
+  return warnings;
+}
+async function showDeprecationWarnings(warnings) {
+  if (warnings.length === 0) return;
+  for (const warning of warnings) {
+    console.log(chalk.yellow(`Warning: ${warning}`));
+  }
+  console.log(chalk.yellow(`
+Move your extensions to the extensions/ directory.`));
+  console.log(chalk.yellow(`Migration guide: ${MIGRATION_GUIDE_URL}`));
+  console.log(chalk.yellow(`Documentation: ${EXTENSIONS_DOC_URL}`));
+  console.log(chalk.dim(`
+Press any key to continue...`));
+  await new Promise((resolve) => {
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.once("data", () => {
+      process.stdin.setRawMode?.(false);
+      process.stdin.pause();
+      resolve();
+    });
+  });
+  console.log();
+}
+function runMigrations(cwd) {
+  const migratedAuthProviders = migrateAuthToAuthJson();
+  migrateSessionsFromAgentRoot();
+  migrateToolsToBin();
+  migrateKeybindingsConfigFile();
+  const deprecationWarnings = migrateExtensionSystem(cwd);
+  return { migratedAuthProviders, deprecationWarnings };
+}
+export {
+  migrateAuthToAuthJson,
+  migrateSessionsFromAgentRoot,
+  runMigrations,
+  showDeprecationWarnings
+};

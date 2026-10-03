@@ -10,6 +10,7 @@ import { resolveFileActionsMenuWidth } from './file-actions-menu-layout'
 export interface FileActionsMenuChoice {
     id: string
     label: string
+    hint?: string
     icon?: React.ReactNode
     onSelect: () => void | Promise<void>
     disabled?: boolean
@@ -332,6 +333,7 @@ export function FileActionsMenu({
                         >
                             {!radioSelection || item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center" style={accentColor && !item.danger ? { color: `color-mix(in srgb, ${accentColor} 76%, var(--color-text))` } : undefined}>{item.icon}</span> : null}
                             <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                            {item.hint ? <span aria-hidden="true" className="shrink-0 rounded-full bg-[var(--settings-control-hover)] px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-[var(--settings-text-muted)] opacity-70">{item.hint}</span> : null}
                             {item.checked ? <Check className="size-3.5 shrink-0 text-[var(--accent-primary)]" strokeWidth={2.2} /> : null}
                         </button>
                         {item.secondaryAction ? <FileActionsMenuSecondaryAction action={item.secondaryAction} onClose={() => setOpen(false)} /> : null}

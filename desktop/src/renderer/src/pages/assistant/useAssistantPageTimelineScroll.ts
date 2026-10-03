@@ -1,4 +1,5 @@
 import { useCallback, useRef } from 'react'
+import { ASSISTANT_TIMELINE_FOLLOW_END_EVENT } from './assistant-timeline-scroll-events'
 
 interface UseAssistantPageTimelineScrollArgs {
     sessionId: string | null
@@ -30,8 +31,7 @@ export function useAssistantPageTimelineScroll(_args: UseAssistantPageTimelineSc
     const onScrollToBottom = useCallback(() => {
         const element = timelineScrollRef.current
         if (!element) return
-        element.dispatchEvent(new CustomEvent('assistant:timeline-user-jump'))
-        element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+        element.dispatchEvent(new CustomEvent(ASSISTANT_TIMELINE_FOLLOW_END_EVENT, { detail: { animated: true } }))
     }, [])
 
     return {

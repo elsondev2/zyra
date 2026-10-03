@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 const root = await mkdtemp(join(tmpdir(),'zyra-usage-worker-'))
 const project = join(root,'project'), timestamp = new Date().toISOString()
-const env = {...process.env,CODEX_HOME:join(root,'.codex'),CLAUDE_CONFIG_DIR:join(root,'.claude'),PI_CODING_AGENT_DIR:join(root,'.pi','agent'),XDG_DATA_HOME:join(root,'.local','share')}
+const env = {...process.env,CODEX_HOME:join(root,'.codex'),CLAUDE_CONFIG_DIR:join(root,'.claude'),ZYRA_CODING_AGENT_DIR:join(root,'.pi','agent'),XDG_DATA_HOME:join(root,'.local','share')}
 let worker: Worker | undefined, sequence = 0
 async function request(harness='all') {
     const id = ++sequence

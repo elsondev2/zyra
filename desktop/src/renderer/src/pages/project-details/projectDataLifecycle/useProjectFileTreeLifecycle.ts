@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { getCachedFileTree, setCachedFileTree } from '@/lib/projectViewCache'
+import { preserveLoadedDirectoryChildren } from '@/lib/filesystem/fileTreeMutations'
 import { mergeDirectoryChildren } from '../fileTreeUtils'
 import type { FileTreeNode } from '../types'
 import type { UseProjectDataLifecycleParams } from './types'
@@ -25,39 +26,45 @@ export function useProjectFileTreeLifecycle({
     const refreshFileTree = useCallback(async (options?: { deep?: boolean; targetPath?: string }) => {
         if (!decodedPath) return undefined
 
-        const requestId = ++refreshFilesRequestRef.current
-        const isStaleRefresh = () => requestId !== refreshFilesRequestRef.current
         const targetPath = typeof options?.targetPath === 'string' && options.targetPath.trim().length > 0
             ? options.targetPath.trim()
             : undefined
-        const currentTree = fileTreeRef.current
+        const requestId = targetPath ? refreshFilesRequestRef.current : ++refreshFilesRequestRef.current
+        const isStaleRefresh = () => requestId !== refreshFilesRequestRef.current
         const deep = options?.deep ?? !targetPath
-        setLoadingFiles(true)
+        if (!targetPath) setLoadingFiles(true)
 
         try {
             const treeResult = await window.devscope.getFileTree(decodedPath, {
                 showHidden: true,
                 maxDepth: deep ? -1 : 1,
-                rootPath: targetPath
+                rootPath: targetPath,
+                // Git status is refreshed independently; fetching it for every folder expansion
+                // makes a filesystem navigation wait on a repository-wide scan.
+                includeGitStatus: false
             })
             if (isStaleRefresh() || !treeResult?.success || !treeResult.tree) {
                 return undefined
             }
 
             if (targetPath) {
-                const mergedTree = mergeDirectoryChildren(currentTree, targetPath, treeResult.tree as FileTreeNode[])
+                // Merge into the latest tree so simultaneous sibling expansions retain both results.
+                const mergedTree = mergeDirectoryChildren(fileTreeRef.current, targetPath, treeResult.tree as FileTreeNode[])
                 fileTreeRef.current = mergedTree
                 setFileTree(mergedTree)
                 setCachedFileTree(decodedPath, mergedTree)
                 return mergedTree
             }
 
-            fileTreeRef.current = treeResult.tree as FileTreeNode[]
-            setFileTree(treeResult.tree)
-            setCachedFileTree(decodedPath, treeResult.tree)
-            return treeResult.tree as FileTreeNode[]
+            const nextTree = deep
+                ? treeResult.tree as FileTreeNode[]
+                : preserveLoadedDirectoryChildren(treeResult.tree as FileTreeNode[], fileTreeRef.current)
+            fileTreeRef.current = nextTree
+            setFileTree(nextTree)
+            setCachedFileTree(decodedPath, nextTree)
+            return nextTree
         } finally {
-            if (!isStaleRefresh()) {
+            if (!targetPath && !isStaleRefresh()) {
                 setLoadingFiles(false)
             }
         }

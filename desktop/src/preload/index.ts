@@ -3,6 +3,7 @@
  */
 
 import { contextBridge } from 'electron'
+import { installKeybindingBridge } from './keybindings'
 import { createDevScopeElectronAdapter } from './devscope-electron-adapter'
 import { installBrowserDevscopeRelay } from './browser-devscope-relay'
 import { installRendererDiagnostics } from './renderer-diagnostics'
@@ -21,5 +22,6 @@ if (process.argv.includes(BROWSER_RECORDING_OVERLAY_PRELOAD_ARGUMENT)) {
     const devscope = createDevScopeElectronAdapter()
     installBrowserDevscopeRelay(devscope)
 
+    installKeybindingBridge()
     contextBridge.exposeInMainWorld('devscope', devscope)
 }

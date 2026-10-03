@@ -1,8 +1,28 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { NativeOverlayBounds } from '@shared/contracts/native-overlay'
 import { getNativeOverlayHost, supportsNativeOverlay, type NativeOverlayLease } from './native-overlay-host'
 export { addOverlayEventListener, addOverlayWindowBlurListener, getOverlayActiveElement, getOverlayEventDocuments, isOverlayEventInside, isOverlayWindowFocused, registerOverlayAnchor } from './native-overlay-events'
+
+function waitForOverlayPaint(ownerWindow: Window | null): Promise<void> {
+    if (!ownerWindow) return Promise.resolve()
+    return new Promise(resolve => {
+        let completed = false
+        let timeout = 0
+        const finish = () => {
+            if (completed) return
+            completed = true
+            ownerWindow.clearTimeout(timeout)
+            resolve()
+        }
+        timeout = ownerWindow.setTimeout(finish, 60)
+        try {
+            ownerWindow.requestAnimationFrame(() => ownerWindow.setTimeout(finish, 0))
+        } catch {
+            finish()
+        }
+    })
+}
 
 interface NativeOverlayPortalProps {
     children: ReactNode
@@ -10,10 +30,24 @@ interface NativeOverlayPortalProps {
     passive?: boolean
     bounds?: NativeOverlayBounds | null
     autoFocus?: boolean
+    focusOnPresent?: boolean
     onReady?: (container: HTMLElement) => void
 }
 
-export function NativeOverlayPortal({ children, container = document.body, passive = false, autoFocus = true, onReady, bounds = null }: NativeOverlayPortalProps) {
+const NativeOverlayVisibility = createContext(true)
+
+/** Portals in another document must follow their owning workspace's visibility. */
+export function NativeOverlayVisibilityScope({ visible, children }: { visible: boolean; children: ReactNode }) {
+    const parentVisible = useContext(NativeOverlayVisibility)
+    return <NativeOverlayVisibility.Provider value={parentVisible && visible}>{children}</NativeOverlayVisibility.Provider>
+}
+
+export function NativeOverlayPortal({ children, container = document.body, passive = false, autoFocus = true, focusOnPresent = false, onReady, bounds = null }: NativeOverlayPortalProps) {
+    const visible = useContext(NativeOverlayVisibility)
+    return visible ? <PresentedNativeOverlayPortal {...{ children, container, passive, autoFocus, focusOnPresent, onReady, bounds }} /> : null
+}
+
+function PresentedNativeOverlayPortal({ children, container = document.body, passive = false, autoFocus = true, focusOnPresent = false, onReady, bounds = null }: NativeOverlayPortalProps) {
     const native = container === document.body && supportsNativeOverlay()
     const host = getNativeOverlayHost(passive)
     const generation = useSyncExternalStore(host.subscribe, host.snapshot, host.snapshot)
@@ -29,7 +63,7 @@ export function NativeOverlayPortal({ children, container = document.body, passi
         if (!native) { setTarget(container); return }
         setTarget(null)
         let current = true
-        const acquired = host.acquire(currentBounds.current)
+        const acquired = host.acquire(currentBounds.current, focusOnPresent)
         lease.current = acquired
         void acquired.ready.then(destination => { if (current) setTarget(destination) }).catch(error => { if (current) setFailure(error) })
         return () => {
@@ -37,14 +71,16 @@ export function NativeOverlayPortal({ children, container = document.body, passi
             acquired.release()
             if (lease.current === acquired) lease.current = null
         }
-    }, [container, native, host, generation])
+    }, [container, native, host, generation, focusOnPresent])
     useLayoutEffect(() => {
         lease.current?.setBounds(bounds)
     }, [bounds?.x, bounds?.y, bounds?.width, bounds?.height])
     useLayoutEffect(() => {
         if (!target) return
         let current = true
-        const presented = target !== container ? lease.current?.present() : Promise.resolve(true)
+        const presented = target !== container
+            ? waitForOverlayPaint(content.current?.ownerDocument.defaultView ?? null).then(() => current ? lease.current?.present() ?? false : false)
+            : Promise.resolve(true)
         void presented?.then(shown => {
             const root = content.current
             if (!shown || !current || !root) return

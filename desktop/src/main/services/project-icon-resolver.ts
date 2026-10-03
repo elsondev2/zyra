@@ -30,6 +30,46 @@ const COMMON_ICON_FILES = [
     'build/icon.png'
 ]
 
+const ICON_ASSET_DIRECTORIES = [
+    '', 'assets', 'public/assets', 'public/images', 'src/assets', 'src/icons',
+    'app/assets', 'resources', 'static', 'static/assets'
+]
+
+function scoreIconAsset(name: string, projectNames: ReadonlySet<string>): number {
+    const lower = name.toLowerCase()
+    if (!/\.(?:svg|png|ico|webp|jpe?g)$/.test(lower)) return -1
+    if (/(?:sprite|placeholder|template|example|test|screenshot|banner|wordmark)/.test(lower)) return -1
+    if (/^favicon(?:[._-]|$)/.test(lower)) return 120
+    if (/^(?:app[._-])?icon(?:[._-]|$)/.test(lower)) return 110
+    if (/^(?:brand[._-])?logo(?:[._-]|$)/.test(lower)) return 100
+    if (/(?:^|[._-])(?:app[._-])?(?:icon|logo|brandmark)(?:[._-]|$)/.test(lower)) return 80
+    const stem = lower.replace(/\.[^.]+$/, '').replace(/[^a-z0-9]/g, '')
+    if (projectNames.has(stem)) return 75
+    return -1
+}
+
+async function resolveNamedIconAsset(projectPath: string, entries: string[], packageJson?: any): Promise<string | null> {
+    const projectNames = new Set([basename(projectPath), String(packageJson?.name || '').split('/').pop() || '', String(packageJson?.productName || '')]
+        .map(name => name.toLowerCase().replace(/[^a-z0-9]/g, '')).filter(name => name.length >= 3))
+    const candidateLists = await Promise.all(ICON_ASSET_DIRECTORIES.map(async directory => {
+        if (!directory) return { directory, names: entries }
+        if (!entries.includes(directory.split('/')[0])) return { directory, names: [] as string[] }
+        const names = await readdir(join(projectPath, directory)).catch(() => [])
+        return { directory, names: names.slice(0, 200) }
+    }))
+    const candidates = candidateLists.flatMap(({ directory, names }) => names.map(name => {
+        const assetScore = scoreIconAsset(name, projectNames)
+        return { path: directory ? `${directory}/${name}` : name, score: assetScore < 0 ? -1 : assetScore + (directory ? 0 : 10) }
+    })).filter(candidate => candidate.score >= 0)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 12)
+    for (const candidate of candidates) {
+        const resolved = await resolveExistingAssetPath(projectPath, projectPath, candidate.path)
+        if (resolved) return resolved
+    }
+    return null
+}
+
 const ROOT_PROJECT_EVIDENCE_FILES = new Set([
     '.git',
     'package.json',
@@ -288,11 +328,12 @@ async function resolveRootDeclaredIcon(
     }
 
     for (const candidate of COMMON_ICON_FILES) {
+        if (!entries.includes(candidate.split('/')[0])) continue
         const resolved = await resolveExistingAssetPath(projectPath, projectPath, candidate)
         if (resolved) return resolved
     }
 
-    return null
+    return resolveNamedIconAsset(projectPath, entries, packageJson)
 }
 
 function getWorkspacePatterns(packageJson: any): string[] {
@@ -369,6 +410,7 @@ async function collectNestedAppRoots(projectPath: string, entries: string[], pac
         'packages/web',
         'packages/console/app'
     ]) {
+        if (!entries.includes(relative.split('/')[0])) continue
         const candidate = join(projectPath, relative)
         await addConfinedAppRoot(candidateRoots, projectPath, candidate)
     }

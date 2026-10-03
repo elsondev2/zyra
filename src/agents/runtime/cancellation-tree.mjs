@@ -44,7 +44,10 @@ export class CancellationTree {
     this.nodes.get(node.parentId)?.children.delete(id);
     for (const childId of node.children) {
       const child = this.nodes.get(childId);
-      if (child) child.parentId = null;
+      if (child) {
+        child.parentId = node.parentId;
+        this.nodes.get(node.parentId)?.children.add(childId);
+      }
     }
     this.nodes.delete(id);
   }

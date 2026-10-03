@@ -32,12 +32,13 @@ import type {
 } from '../../shared/assistant/contracts'
 import { is } from '../utils'
 import { backupAssistantDatabaseSet } from './assistant-database-files'
+import { recoverLegacyAssistantInterruptions } from './legacy-terminal-recovery'
 import { createDefaultSnapshot, recoverPersistedSnapshot } from './projector'
 import { mergeAssistantSearchTurnIds, readAssistantActivity, readAssistantHistoryAroundMessage, readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
 import { hydrateSnapshotThreads, summarizeThread } from './persistence-snapshot'
 import { initializeAssistantSearchIndex, searchAssistantChatsFallback } from './assistant-search-index'
 import { AssistantSearchWorkerClient } from './assistant-search-worker-client'
-import { deleteFleetProjection, projectFleetSnapshot, readFleetSnapshot } from './fleet-persistence'
+import { deleteFleetProjection, projectFleetSnapshot, readFleetSnapshot, readFleetSnapshots } from './fleet-persistence'
 import {
     associateAssistantProjectFolder,
     canonicalAssistantFolderKey,
@@ -175,6 +176,7 @@ export class AssistantPersistence {
         await this.ensureInitialized()
         return this.enqueue(() => {
             const record = readAssistantPersistenceRecord(this.requireDb())
+            recoverLegacyAssistantInterruptions(record.snapshot, join(process.env.ZYRA_STATE_DIR || join(dirname(this.filePath), 'agent-server'), 'agent-events'))
             this.fallbackSnapshotSource = record.snapshot
             return record
         })
@@ -490,6 +492,11 @@ export class AssistantPersistence {
     async readFleet(threadId: string): Promise<FleetSnapshot | null> {
         await this.ensureInitialized()
         return this.enqueue(() => readFleetSnapshot(this.requireDb(), threadId))
+    }
+
+    async readFleets(threadIds: readonly string[]): Promise<Record<string, FleetSnapshot>> {
+        await this.ensureInitialized()
+        return this.enqueue(() => readFleetSnapshots(this.requireDb(), threadIds))
     }
 
     deleteFleet(threadId: string): void {

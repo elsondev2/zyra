@@ -54,8 +54,8 @@ export function isolateBridgeEnvironment(temporary) {
     ZYRA_DATA_ROOT: path.join(temporary, "zyra-data"),
     ZYRA_STATE_DIR: path.join(temporary, "state"),
     ZYRA_CALLER_CWD: path.join(temporary, "project"),
-    PI_CODING_AGENT_DIR: piDirectory,
-    PI_OFFLINE: "1",
+    ZYRA_CODING_AGENT_DIR: piDirectory,
+    ZYRA_OFFLINE: "1",
     ZYRA_ANALYTICS_ENABLED: "0",
     ZYRA_ANALYTICS_USE_RELEASE_CONFIG: "0",
     ZYRA_BRIDGE_TEST_NETWORK_LOG: networkLog,
@@ -69,7 +69,9 @@ export function isolateBridgeEnvironment(temporary) {
   };
   try {
     mkdirSync(piDirectory, { recursive: true });
-    writeFileSync(path.join(piDirectory, "auth.json"), JSON.stringify({
+    const credentialsDirectory = path.join(process.env.ZYRA_STATE_DIR, "credentials");
+    mkdirSync(credentialsDirectory, { recursive: true });
+    writeFileSync(path.join(credentialsDirectory, "auth.json"), JSON.stringify({
       [fixtureProvider]: { type: "api_key", key: "offline-bridge-fixture-key" },
     }), { mode: 0o600 });
     writeFileSync(path.join(piDirectory, "models.json"), JSON.stringify({

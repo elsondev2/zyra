@@ -375,18 +375,16 @@ export function useProjectGitRefresh(
                 )
             }
 
-            const settledTasks = await Promise.allSettled(tasks.map((entry) => entry.task))
+            // Paint each result as it arrives. History and metadata should not hold back status.
+            await Promise.all(tasks.map(async (entry) => {
+                try {
+                    const result = await entry.task
+                    if (!isStaleRefresh()) entry.apply(result)
+                } catch (error) {
+                    if (!isStaleRefresh()) appendError(entry.label, error)
+                }
+            }))
             if (isStaleRefresh()) return
-
-            unstable_batchedUpdates(() => {
-                settledTasks.forEach((result, index) => {
-                    if (result.status === 'rejected') {
-                        appendError(tasks[index].label, result.reason)
-                        return
-                    }
-                    tasks[index].apply(result.value)
-                })
-            })
 
             if (readErrors.length > 0) {
                 const preview = readErrors.slice(0, 3).join(' | ')

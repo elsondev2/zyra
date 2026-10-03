@@ -3,6 +3,8 @@ package dev.zyra.mobile.notifications
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.*
 import dev.zyra.mobile.*
 import dev.zyra.mobile.data.Chat
@@ -25,7 +27,13 @@ class ChatNotificationService : Service() {
         val owner = (application as ZyraApplication).sessions.acquire(); lease = owner
         if (!owner.value.preferences.notifications.value || !allowed(this)) { stopSelf(); return START_NOT_STICKY }
         manager.createNotificationChannel(NotificationChannel(CONNECTION, "Chat connection", NotificationManager.IMPORTANCE_LOW))
-        manager.createNotificationChannel(NotificationChannel(ALERTS, "Chat responses and requests", NotificationManager.IMPORTANCE_DEFAULT))
+        manager.createNotificationChannel(NotificationChannel(ALERTS, "Chat responses and requests", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Heads-up alerts for replies, approvals, questions, and errors"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 180, 80, 240)
+            setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT).build())
+        })
         val stop = PendingIntent.getService(this, 0, Intent(this, javaClass).setAction(STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val status = Notification.Builder(this, CONNECTION).setSmallIcon(R.drawable.ic_bell).setContentTitle("Zyra chat notifications")
             .setContentText("Keeping your paired computers connected").setOngoing(true).setOnlyAlertOnce(true)
@@ -61,6 +69,7 @@ class ChatNotificationService : Service() {
         val open = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val alert = Notification.Builder(this, ALERTS).setSmallIcon(R.drawable.ic_bell).setContentTitle(chat.title)
             .setContentText(message).setContentIntent(open).setAutoCancel(true).setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE)
             .setCategory(if (chat.attention != null) Notification.CATEGORY_REMINDER else Notification.CATEGORY_MESSAGE).build()
         manager.notify(chat.key, 1202, alert)
     }
@@ -69,7 +78,7 @@ class ChatNotificationService : Service() {
         const val OPEN = "dev.zyra.mobile.OPEN_CHAT_ALERT"
         private const val STOP = "dev.zyra.mobile.STOP_CHAT_ALERTS"
         private const val CONNECTION = "chat-connection"
-        private const val ALERTS = "chat-alerts"
+        private const val ALERTS = "chat-alerts-v2"
         fun allowed(context: Context) = context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
         fun start(context: Context): Boolean = runCatching {
             if (!allowed(context)) false else { context.startForegroundService(Intent(context, ChatNotificationService::class.java)); true }

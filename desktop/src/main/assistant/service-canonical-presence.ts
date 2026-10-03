@@ -1,4 +1,4 @@
-import type { AssistantLatestTurn, AssistantThreadState } from '../../shared/assistant/contracts'
+import type { AssistantLatestTurn, AssistantThread, AssistantThreadState } from '../../shared/assistant/contracts'
 import { normalizeAssistantMessageReferenceId } from '../../shared/assistant/message-identity'
 import type { CanonicalAgentChatPresence } from './zyra-agent-server-worker'
 
@@ -39,13 +39,20 @@ export function mergeCanonicalPresenceObservation(
  */
 export function resolveCanonicalPresenceThreadState(input: {
     currentState: AssistantThreadState
+    localThread?: AssistantThread
     previousPresence?: CanonicalAgentChatPresence | null
     presence?: CanonicalAgentChatPresence | null
 }): AssistantThreadState {
-    const { currentState, previousPresence, presence } = input
+    const { currentState, previousPresence, presence, localThread } = input
     if (!presence) return currentState
     if (presence.state === 'running') return 'running'
     if (presence.state === 'background') return 'waiting'
+    if (presence.state === 'ready' && localThread) {
+        const localTurn = localThread.latestTurn
+        if (localTurn?.state === 'running'
+            && (presence.latestTurn?.id !== localTurn.id || presence.latestTurn.state === 'running')) return currentState
+        if (currentState === 'starting' && hasLocallyUnstartedPrompt(localThread)) return currentState
+    }
     if (
         presence.state === 'ready'
         && (
@@ -56,6 +63,15 @@ export function resolveCanonicalPresenceThreadState(input: {
         return 'ready'
     }
     return currentState
+}
+
+function hasLocallyUnstartedPrompt(thread: AssistantThread): boolean {
+    const lastUser = [...(thread.messages || [])].reverse().find((message) => message.role === 'user')
+    if (!lastUser) return false
+    if (!thread.latestTurn) return true
+    const completedAt = thread.latestTurn.completedAt
+    if (!completedAt) return false
+    return Date.parse(lastUser.createdAt) > Date.parse(completedAt)
 }
 
 export function resolveCanonicalPresenceAttention(input: {
@@ -98,6 +114,12 @@ export function mergeCanonicalPresenceLatestTurn(
     return {
         ...current,
         ...canonical,
+        // A terminal ledger entry is immutable for this turn identity. A new
+        // turn can start normally, but attachment/replay cannot resurrect it.
+        state: current.state !== 'running' && (canonical.state === 'running' || current.state === 'interrupted' && canonical.state === 'error') ? current.state : canonical.state,
+        requestedAt: current.requestedAt || canonical.requestedAt,
+        startedAt: current.startedAt || canonical.startedAt,
+        completedAt: current.state !== 'running' ? current.completedAt || canonical.completedAt : canonical.completedAt,
         assistantMessageId: canonicalAssistantMessageId || current.assistantMessageId,
         effort: current.effort,
         serviceTier: current.serviceTier,

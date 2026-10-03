@@ -1,0 +1,81 @@
+import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
+import { AssistantAgentInboxSidebar } from '../../src/renderer/src/pages/assistant/AssistantAgentInboxSidebar'
+import type { AssistantSession, AssistantThread } from '../../src/shared/assistant/contracts'
+import { toAssistantShellSnapshot } from '../../src/main/assistant/persistence-snapshot'
+import { materializeAssistantShellSnapshot } from '../../src/renderer/src/lib/assistant/assistant-history-state'
+import { applyAssistantDomainEvents, createDefaultAssistantSnapshot } from '../../src/shared/assistant/projector'
+
+const root = createRoot(document.getElementById('root')!)
+const now = new Date().toISOString()
+const messageAt = new Date(Date.parse(now) + 1000).toISOString()
+const hydratedThread = {
+    id: 'settled-thread', source: 'root', model: 'openai/gpt-test',
+    messages: [{ id: 'answer', role: 'assistant', text: 'Saved answer', createdAt: messageAt, updatedAt: messageAt }],
+    activities: [], pendingApprovals: [], pendingUserInputs: [], state: 'ready', messageCount: 1,
+    createdAt: now, updatedAt: now,
+    latestTurn: { id: 'turn', state: 'completed', requestedAt: now, startedAt: now, completedAt: now },
+    lastSeenCompletedTurnId: 'turn'
+} as unknown as AssistantThread
+const hydrated = { id: 'settled', title: 'Settled chat', createdAt: now, updatedAt: now, projectPath: null,
+    threads: [hydratedThread], activeThreadId: hydratedThread.id, threadIds: [hydratedThread.id], archived: false } as AssistantSession
+let sessions = [hydrated]
+let selected: string | null = 'settled'
+function render(mounted = true) {
+    flushSync(() => root.render(mounted ? <div className="flex h-full w-[300px] flex-col p-2">
+        <AssistantAgentInboxSidebar sessions={sessions} activeSessionId={selected} activeThreadId={selected ? 'settled-thread' : null}
+            commandPending={false} pendingControlThreadIds={new Set()} projectIconOverrides={{}} headerActions={null}
+            onSelectSession={() => undefined} onCreateProjectChat={() => undefined} onRename={() => undefined}
+            getSessionMenuItems={() => []} onOpenContextMenu={() => undefined} />
+    </div> : null))
+}
+const sleep = () => new Promise(resolve => setTimeout(resolve, 300))
+function check(value: unknown, label: string) { if (!value) throw new Error(label) }
+function row() { return document.querySelector<HTMLElement>('[data-agent-inbox-layout-id="settled"]') }
+function isSettled() { return Boolean(row()?.querySelector('[aria-label="Un-settle chat"]')) }
+
+async function run() {
+    localStorage.clear()
+    render(); await sleep()
+    row()!.querySelector<HTMLButtonElement>('[aria-label="Settle chat"]')!.click(); await sleep()
+    check(isSettled(), 'Explicit settlement moves the chat to Settled')
+    const shell = materializeAssistantShellSnapshot(toAssistantShellSnapshot({ ...createDefaultAssistantSnapshot(), sessions: [hydrated] })).sessions[0]
+    selected = null; sessions = [shell]; render(); await sleep()
+    check(isSettled(), 'Settled chat stays settled when navigation replaces hydrated history with a shell')
+    selected = 'settled'; sessions = [hydrated]; render(); await sleep()
+    check(isSettled(), 'Opening history keeps the settled chat in Settled')
+    // Selection, model changes and canonical settings writes are metadata,
+    // rather than new conversational activity.
+    const refreshed = structuredClone(shell)
+    refreshed.updatedAt = messageAt
+    Object.assign(refreshed.threads[0], { updatedAt: messageAt, model: 'openai/another-model', canonicalHistoryModifiedAt: messageAt })
+    selected = null; sessions = [refreshed]; render(); await sleep()
+    check(isSettled(), 'Metadata refresh does not revive the chat')
+    render(false); render(); await sleep()
+    check(isSettled(), 'Persisted settlement survives sidebar remount')
+    sessions = applyAssistantDomainEvents({ ...createDefaultAssistantSnapshot(), sessions }, [{
+        eventId: 'new-turn', sequence: 1, occurredAt: messageAt, type: 'thread.latest-turn.updated',
+        sessionId: 'settled', threadId: 'settled-thread', payload: { threadId: 'settled-thread',
+            latestTurn: { ...hydratedThread.latestTurn, id: 'next-turn', state: 'running', completedAt: null } }
+    } as any]).sessions
+    render(); await sleep()
+    check(!isSettled() && Boolean(row()?.textContent?.includes('Working')), 'A new projected turn revives the chat as Working')
+
+    render(false)
+    localStorage.setItem('assistant:agent-inbox-settled-overrides:v1', JSON.stringify({ settled: { state: 'settled', activityAt: messageAt } }))
+    sessions = [shell]; render(); await sleep()
+    check(isSettled(), 'Legacy timestamp-only settlement is retained on first catalog load')
+    sessions = [hydrated]; selected = 'settled'; render(); await sleep()
+    check(isSettled(), 'Legacy settlement survives history loading')
+    check(Boolean(JSON.parse(localStorage.getItem('assistant:agent-inbox-settled-overrides:v1')!).settled.activityKey), 'Legacy settlement is upgraded to catalog metadata')
+    sessions = [{ ...hydrated, threads: [{ ...hydratedThread, messageCount: 2 }] }]; render(); await sleep()
+    check(!isSettled(), 'A new message revives a chat with migrated settlement')
+    row()!.querySelector<HTMLButtonElement>('[aria-label="Settle chat"]')!.click(); await sleep()
+    check(isSettled(), 'Revived chat can be settled again')
+    row()!.querySelector<HTMLButtonElement>('[aria-label="Un-settle chat"]')!.click(); await sleep()
+    check(!isSettled(), 'Explicit un-settle returns the chat to Recent')
+    render(false); render(); await sleep()
+    check(!isSettled(), 'Explicit un-settle survives remount')
+    return ['settlement survives shell/history navigation, metadata refresh and remount; legacy choices upgrade; projected new work and new messages revive chats; explicit un-settle persists']
+}
+;(window as any).sidebarContinuityCheck = run()

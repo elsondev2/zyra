@@ -5,7 +5,7 @@ import { buildSettingsChoiceItems } from './settings-choice-options'
 
 export function SettingsChoiceDropdown<T extends string>({ value, options, onChange, label, disabled = false }: {
     value: T
-    options: ReadonlyArray<{ value: T; label: string; icon?: ReactNode }>
+    options: ReadonlyArray<{ value: T; label: string; hint?: string; icon?: ReactNode }>
     onChange: (value: T) => void
     label: string
     disabled?: boolean

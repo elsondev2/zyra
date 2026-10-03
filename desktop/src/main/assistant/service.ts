@@ -1,7 +1,12 @@
 import { usageProjectionFallback } from '../../shared/assistant/usage-ownership'
+import { ensureCanonicalChatAvailability } from './canonical-chat-availability'
+import { projectThreadMessage } from '../../shared/assistant/thread-message'
+import { readLegacyAgentDelegation } from '../../shared/assistant/agent-delegation-presentation'
+import { resolveAgentThreadOwner } from '../../shared/assistant/thread-owner'
 import { buildUsageSummary, mergeUsageSummaries, usageWindow, type UsageSummaryInput } from '../../shared/assistant/usage-summary'
 import { isAssistantSessionProjectLocked } from '../../shared/assistant/session-project'
 import { validateAssistantSessionConfiguration } from '../../shared/assistant/session-configuration'
+import { isAssistantModelCatalogRefreshDue } from './model-catalog-refresh-policy'
 import { MobileVoicePresence, clearRestoredMobileVoice } from './mobile-voice-presence'
 import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
 import { canonicalVoicePresentationEvent } from './voice/canonical-voice-presentation'
@@ -10,7 +15,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { app } from 'electron'
+import { app, safeStorage, shell } from 'electron'
+import { PluginMcpConnections } from './plugin-mcp-connections'
 import log from 'electron-log'
 import type {
     AssistantApprovePendingPlaygroundLabRequestInput,
@@ -42,8 +48,10 @@ import type {
     AssistantInspectLocalPluginInput,
     AssistantInstallInspectedPluginInput,
     AssistantPluginSkillSource,
+    AssistantPluginMcpSource,
     AssistantRefreshChatPluginScopeInput,
     AssistantSetPluginSetInput,
+    AssistantSetPluginAppViewSettingsInput,
     AssistantRealtimeVoiceEvent,
     AssistantRemoveProjectFolderInput,
     AssistantRuntimeStatus,
@@ -84,6 +92,7 @@ import type { AnalyticsEventInput, AnalyticsEventName } from '../../shared/analy
 import { inspectProjectAnalyticsCapabilities } from '../analytics/project-capabilities'
 import { classifyAnalyticsErrorCode as classifyAnalyticsError } from '../../shared/analytics/error-code'
 import { findAssistantMessageReplayDuplicateIds, preserveCanonicalUserReplayBoundaries } from '../../shared/assistant/message-reconciliation'
+import { normalizeCanonicalMessageSourceId } from '../../shared/assistant/message-identity'
 import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { reconcileAssistantUserInputResponseMessageIds } from '../../shared/assistant/user-input-continuation'
 import { recoverCanonicalUserInputReceipts, mergeRecoveredUserInputReceipts } from './user-input-history'
@@ -99,7 +108,7 @@ import { normalizeInstructorRealtimeMessage } from './codex-realtime-voice-contr
 import { ConversationGateway } from './foreground/conversation-gateway'
 import { ForegroundControllerPersistence } from './foreground/foreground-controller-persistence'
 import { ForegroundRouteController, routeExpectation } from './foreground/foreground-route-controller'
-import { PiCanonicalMessageWriter } from './foreground/pi-canonical-message-writer'
+import { ZyraCanonicalMessageWriter } from './foreground/zyra-canonical-message-writer'
 import { AssistantRealtimeContinuitySource } from './voice/assistant-realtime-continuity-source'
 import { CanonicalVoiceSessionController } from './voice/canonical-voice-session-controller'
 import { CanonicalVoiceTranscriptCommitter } from './voice/canonical-voice-transcript-committer'
@@ -116,9 +125,9 @@ import { buildVoiceStrongTaskActivity } from './voice/voice-strong-task-activity
 import { ZyraAccountService } from './zyra-account-service'
 import {
     classifyZyraToolActivity,
-    readPiFileChangeData,
-    ZyraPiRuntime
-} from './zyra-pi-runtime'
+    readRuntimeFileChangeData,
+    ZyraRuntime
+} from './zyra-runtime'
 import { readTerminalAssistantMessageOutcome } from './assistant-terminal-outcome'
 import { createAssistantId, deriveSessionTitleFromPrompt, isDefaultSessionTitle, nowIso } from './utils'
 import { canonicalImageAttachmentSection } from './canonical-media-cache'
@@ -139,7 +148,7 @@ import {
 } from './prompt-resources'
 import { toAssistantShellSnapshot } from './persistence-snapshot'
 import { FleetProjection, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
-import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
+import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, regenerateSessionTitleFromPrompt, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
 import { resolveSessionTitleTarget } from './session-title-target'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
@@ -176,6 +185,7 @@ import {
     handleAssistantRuntimeEvent
 } from './service-runtime-events'
 import { hasCanonicalUserInputAttention, mergeCanonicalPresenceLatestTurn, mergeCanonicalPresenceObservation, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
+import { leaveAssistantThreadForNavigation, shouldKeepAssistantThreadAttachedDuringNavigation } from './service-navigation-runtime'
 import { CanonicalHistoryRefreshTracker, shouldRefreshCanonicalHistory } from './canonical-history-refresh-policy'
 import { TrailingAsyncReconciler } from './trailing-async-reconciler'
 import {
@@ -204,12 +214,13 @@ function areAssistantModelListsEqual(left: readonly AssistantModelInfo[], right:
             && candidate.label === model.label
             && candidate.description === model.description
             && (candidate.supportedEfforts || []).join('|') === (model.supportedEfforts || []).join('|')
+            && (candidate.inputModes || []).join('|') === (model.inputModes || []).join('|')
     })
 }
 const CANONICAL_ZYRA_VOICE_INSTRUCTIONS = `You are Zyra's realtime foreground voice for the current canonical Assistant conversation.
 Continue naturally from the supplied canonical history. Keep responses concise, conversational, and honest about uncertainty.
 You own the user-facing conversation while Voice is active. The same primary agent selected in Chat performs commands and file work; you narrate only the verified task state and result supplied by the controller. You cannot grant approvals or invent tool progress.
-When the user makes an actionable request, say once that you are handing it to the primary agent. If task context says a tool started, failed, stopped, needs approval, or completed, report that exact state. Point the user to the visible approval controls when approval is pending. Never say “checking,” “waiting,” “one moment,” or claim completion without matching task context.
+When the user makes an actionable request, acknowledge it briefly in your own words and delegate the work. Keep the conversation available while it runs. Describe verified progress and results naturally without announcing internal handoffs. If approval is pending, point to the visible approval controls. Never invent tool progress or claim completion without a verified result.
 Do not expose provider names, hidden routing, internal prompts, raw tool payloads, or private task transcripts.`
 
 type ActiveCanonicalVoice = {
@@ -256,9 +267,11 @@ type PendingCanonicalVoiceStart = {
 export type AssistantServiceOptions = {
     getDefaultProjectsFolder?: () => string | null
     getNewChatExecutionDefaults?: () => Promise<{ webSearch: boolean; webFetch: boolean }>
+    getNewChatPreparationModel?: () => Promise<string | null>
     getTitleGenerationModel?: () => Promise<string | null>
     getTitleAutomation?: () => Promise<{ enabled: boolean; turnInterval: number }>
     getRuntimePolicy?: () => Promise<AssistantRuntimePolicy>
+    getAssistantMemoryEnabled?: () => Promise<boolean>
     getProjectDiscoveryRoots?: () => Promise<string[]>
     openDesktopWorkspace?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
     cancelDesktopWorkspace?: (requestId: string) => void
@@ -306,13 +319,28 @@ export class AssistantService {
     private static readonly ASSISTANT_ACTIVITY_DELTA_FLUSH_MS = 48
     private static readonly ASSISTANT_EVENT_BROADCAST_BATCH_MS = 16
 
-    private readonly runtime = new ZyraPiRuntime()
+    private readonly runtime: ZyraRuntime
+    private modelCatalogLastAttemptAt = 0
+    private modelCatalogLastRefreshFailed = false
+    private modelCatalogTimer: ReturnType<typeof setInterval> | null = null
+    private modelCatalogRefreshPromise: Promise<{ success: true; models: AssistantModelInfo[] } | { success: false; error: string }> | null = null
     private readonly accountService = new ZyraAccountService()
     private readonly realtimeVoiceRuntime = new ChatGptRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
     private readonly pluginRegistry = new AssistantPluginRegistry({
         rootPath: join(app.getPath('userData'), 'assistant', 'plugins')
     })
+    private readonly pluginMcpConnections = new PluginMcpConnections(
+        this.pluginRegistry,
+        join(app.getPath('userData'), 'assistant', 'plugins', 'credentials', 'mcp-oauth.enc'),
+        {
+            isAvailable: () => safeStorage.isEncryptionAvailable(),
+            encrypt: (value) => safeStorage.encryptString(value),
+            decrypt: (value) => safeStorage.decryptString(value)
+        },
+        (url) => shell.openExternal(url),
+        (pluginId, serverName) => this.runtime.closePluginMcpConnections(pluginId, serverName)
+    )
     private foregroundPersistence: ForegroundControllerPersistence | null = null
     private foregroundRoutes: ForegroundRouteController | null = null
     private conversationGateway: ConversationGateway | null = null
@@ -421,6 +449,16 @@ export class AssistantService {
     }>()
 
     constructor(private readonly options: AssistantServiceOptions = {}) {
+        this.runtime = new ZyraRuntime()
+        this.runtime.setPluginMcpConnections(this.pluginMcpConnections)
+        this.runtime.setPluginAppViewSettingsResolver(async (pluginId) => {
+            const catalog = await this.pluginRegistry.getCatalog()
+            const enabled = catalog.appViews.enabled
+                && catalog.appViews.pluginIds.includes(pluginId)
+                && catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.state === 'active')
+            return { enabled, displayMode: catalog.appViews.displayMode }
+        })
+        this.runtime.setMemoryEnabledResolver(options.getAssistantMemoryEnabled || (async () => true))
         this.runtime.setDesktopWorkspaceHandler(options.openDesktopWorkspace || null, options.cancelDesktopWorkspace || null, options.handleDesktopWorkspaceTurn || null, options.handleDetachedControl || null, options.handleDesktopWorkspaceTurnEnded || null)
         this.readyPromise = this.initialize()
         this.actionDeps = {
@@ -433,6 +471,7 @@ export class AssistantService {
             getFirstUserMessageText: (sessionId: string) => this.persistence.readFirstUserMessageText(sessionId),
             getNewChatExecutionDefaults: () => this.options.getNewChatExecutionDefaults?.()
                 || Promise.resolve({ webSearch: true, webFetch: true }),
+            getNewChatPreparationModel: () => this.options.getNewChatPreparationModel?.() || Promise.resolve(null),
             getTitleGenerationModel: () => this.options.getTitleGenerationModel?.() || Promise.resolve(null),
             getRuntimePolicy: async () => normalizeAssistantRuntimePolicy(
                 await this.options.getRuntimePolicy?.()
@@ -593,6 +632,11 @@ export class AssistantService {
         return toAssistantShellSnapshot(this.state.snapshot)
     }
 
+    async ensureCanonicalChatAvailable(canonicalChatId: string): Promise<boolean> {
+        await this.ensureReady()
+        return ensureCanonicalChatAvailability(canonicalChatId, () => this.state.snapshot, () => this.queueCanonicalChatImport())
+    }
+
     async getMobileTerminalIdentity(canonicalChatId: string) {
         await this.ensureReady()
         let session = this.state.snapshot.sessions.find(session => session.threads.some(thread => thread.providerThreadId === canonicalChatId))
@@ -732,6 +776,22 @@ export class AssistantService {
         return { success: true as const, catalog: await this.pluginRegistry.getCatalog() }
     }
 
+    async getPluginMcpConnections(pluginId: string) {
+        await this.ensureReady()
+        return { success: true as const, connections: await this.pluginMcpConnections.list(pluginId) }
+    }
+
+    async connectPluginMcp(pluginId: string, serverName: string) {
+        await this.ensureReady()
+        return { success: true as const, result: await this.pluginMcpConnections.connect(pluginId, serverName) }
+    }
+
+    async disconnectPluginMcp(pluginId: string, serverName: string) {
+        await this.ensureReady()
+        await this.pluginMcpConnections.disconnect(pluginId, serverName)
+        return { success: true as const }
+    }
+
     onPluginCatalogChanged(listener: () => void): () => void {
         return this.pluginRegistry.onChange(listener)
     }
@@ -778,6 +838,27 @@ export class AssistantService {
             if (!catalog.projects.some((project) => project.id === projectId)) throw new Error('Project was not found.')
         }
         return this.pluginRegistry.setPluginSet({ ...input, projectId: projectId || null })
+    }
+
+    async setPluginAppViewSettings(input: AssistantSetPluginAppViewSettingsInput) {
+        await this.ensureReady()
+        return this.pluginRegistry.setAppViewSettings(input)
+    }
+
+    async readPluginAppView(input: { threadId: string; pluginId: string; server: string; tool: string; uri: string }) {
+        await this.ensureReady()
+        if (!input || [input.threadId, input.pluginId, input.server, input.tool, input.uri].some((value) => typeof value !== 'string' || !value.trim())) {
+            throw new Error('Choose an app view from this Chat.')
+        }
+        return { success: true as const, view: await this.runtime.readPluginAppView(input.threadId, input.pluginId, input.server, input.tool, input.uri) }
+    }
+
+    async callPluginAppViewTool(input: { threadId: string; pluginId: string; server: string; tool: string; arguments: Record<string, unknown> }) {
+        await this.ensureReady()
+        if (!input || [input.threadId, input.pluginId, input.server, input.tool].some((value) => typeof value !== 'string' || !value.trim())) {
+            throw new Error('Choose a tool from this app view.')
+        }
+        return { success: true as const, result: await this.runtime.callPluginAppViewTool(input.threadId, input.pluginId, input.server, input.tool, input.arguments) }
     }
 
     async refreshChatPluginScope(input: AssistantRefreshChatPluginScopeInput) {
@@ -866,15 +947,43 @@ export class AssistantService {
     async listModels(forceRefresh = false) {
         await this.ensureReady()
         const knownModels = this.state.snapshot.knownModels
-        if (!forceRefresh && knownModels.length > 0) {
+        if (this.modelCatalogRefreshPromise) {
+            const result = await this.modelCatalogRefreshPromise
+            if (forceRefresh || result.success) return result
+            return { success: true as const, models: structuredClone(this.state.snapshot.knownModels) }
+        }
+        const refreshDue = forceRefresh || isAssistantModelCatalogRefreshDue(this.modelCatalogLastAttemptAt, Date.now(), this.modelCatalogLastRefreshFailed)
+        if (!refreshDue) {
             return { success: true as const, models: structuredClone(knownModels) }
         }
-        const { models, authoritative } = await this.runtime.listModelsWithProvenance(forceRefresh)
-        if (authoritative && !areAssistantModelListsEqual(this.state.snapshot.knownModels, models)) {
-            this.state.snapshot.knownModels = models
-            this.persistence.updateMetadata(this.state.snapshot)
+
+        this.modelCatalogLastAttemptAt = Date.now()
+        const refreshPromise = (async () => {
+            const { models, authoritative, error } = await this.runtime.listModelsWithProvenance(true, !forceRefresh)
+            this.modelCatalogLastRefreshFailed = !authoritative
+            if (this.disposeRequested) return { success: false as const, error: 'Assistant is shutting down.' }
+            if (!authoritative) {
+                return { success: false as const, error: error || 'Could not refresh the model catalog.' }
+            }
+            if (authoritative) {
+                this.modelCatalogLastAttemptAt = Date.now()
+                if (!areAssistantModelListsEqual(this.state.snapshot.knownModels, models)) {
+                    this.appendEvent('models.updated', nowIso(), { models })
+                }
+            }
+            return {
+                success: true as const,
+                models: structuredClone(authoritative || knownModels.length === 0 ? models : knownModels)
+            }
+        })()
+        this.modelCatalogRefreshPromise = refreshPromise
+        try {
+            const result = await refreshPromise
+            if (forceRefresh || result.success) return result
+            return { success: true as const, models: structuredClone(this.state.snapshot.knownModels) }
+        } finally {
+            if (this.modelCatalogRefreshPromise === refreshPromise) this.modelCatalogRefreshPromise = null
         }
-        return { success: true as const, models }
     }
 
     /** Utility generation never attaches or creates a canonical Inbox chat. */
@@ -1070,6 +1179,7 @@ export class AssistantService {
                 ? await this.persistence.createProjectChatScope(projectId, requestedPath || null)
                 : null
             await this.pluginRegistry.createChatScope(plannedSessionId, projectId || null, input?.mode !== 'playground', pluginSelection)
+            if (input?.mode !== 'playground') await this.pluginRegistry.ensureAvailableChatScope(plannedSessionId, projectId || null)
             if (pluginSelection) await this.stopCanonicalVoiceForNavigation()
             const result = await createAssistantSessionAction(this.actionDeps, {
                 ...input,
@@ -1350,17 +1460,17 @@ export class AssistantService {
         await this.ensureReady()
         const session = requireSession(this.state.snapshot, sessionId)
         const { thread, canonicalIds } = resolveSessionTitleTarget(session, canonicalChatId)
-        if (['starting', 'running', 'waiting'].includes(thread.state) || thread.latestTurn?.state === 'running') {
-            throw new Error('Wait for the current turn to finish before refreshing the title.')
-        }
         const review = await this.persistence.readReviewIndex(thread.id)
         const completedTurns = review.turns.filter((turn) => turn.state === 'completed' && turn.prompt && turn.response)
-        if (completedTurns.length === 0) throw new Error('Complete a conversation turn before refreshing the title.')
+        const firstPrompt = completedTurns.length === 0
+            ? thread.messages.find((message) => message.role === 'user' && message.text.trim())?.text
+                || await this.persistence.readFirstUserMessageText(session.id)
+            : null
+        if (completedTurns.length === 0 && !firstPrompt) throw new Error('Send a message before refreshing the title.')
         const preferredModel = await this.options.getTitleGenerationModel?.().catch(() => null) || null
-        const title = await generateReplacementSessionTitle({
+        const titleArgs: Omit<Parameters<typeof regenerateSessionTitleFromPrompt>[0], 'messageText'> = {
             sessionId: session.id,
             threadId: thread.id,
-            turns: completedTurns,
             seedTitle: session.title,
             cwd: this.getSessionRuntimeCwd(session, thread),
             preferredModel,
@@ -1373,7 +1483,10 @@ export class AssistantService {
                 await Promise.allSettled(canonicalIds
                     .map((providerThreadId) => this.runtime.updateCanonicalChat(providerThreadId, { title: nextTitle })))
             }
-        })
+        }
+        const title = firstPrompt
+            ? await regenerateSessionTitleFromPrompt({ ...titleArgs, messageText: firstPrompt })
+            : await generateReplacementSessionTitle({ ...titleArgs, turns: completedTurns })
         return { success: true as const, title: title || session.title }
     }
 
@@ -1510,6 +1623,14 @@ export class AssistantService {
 
     async attachSessionToPlaygroundLab(input: AssistantAttachSessionToPlaygroundLabInput) {
         return attachSessionToPlaygroundLabAction(this.actionDeps, input)
+    }
+
+    setMemoryEnabled(enabled: boolean): Promise<void> {
+        return this.runtime.setMemoryEnabled(enabled)
+    }
+
+    refreshAuthProvider(provider: string): Promise<void> {
+        return this.runtime.refreshAuthProvider(provider)
     }
 
     async newThread(sessionId?: string) {
@@ -1905,6 +2026,8 @@ export class AssistantService {
     dispose(): Promise<void> {
         if (this.disposePromise) return this.disposePromise
         this.disposeRequested = true
+        if (this.modelCatalogTimer) clearInterval(this.modelCatalogTimer)
+        this.modelCatalogTimer = null
         this.externalEventSubscribers.clear()
         this.externalRealtimeVoiceSubscribers.clear()
         this.assistantTextDeltaBuffer.dispose()
@@ -1924,6 +2047,7 @@ export class AssistantService {
         this.activeCanonicalVoice = null
         const pending = (async () => {
             await this.readyPromise.catch(() => undefined)
+            await this.modelCatalogRefreshPromise?.catch(() => undefined)
             await this.canonicalVoiceSetupPromise?.catch(() => undefined)
             await this.canonicalTypedVoiceCommitter?.dispose()
             await this.canonicalVoiceCommitter?.flush().catch(() => undefined)
@@ -1968,13 +2092,22 @@ export class AssistantService {
         void this.ensureCanonicalVoiceSetup().catch((error) => {
             log.warn('[AssistantVoice] Background capability setup failed', error)
         })
+        const persistedFleets = await this.persistence.readFleets(
+            this.state.snapshot.sessions.flatMap(session => session.threads.map(thread => thread.id))
+        )
         for (const session of this.state.snapshot.sessions) {
             for (const thread of session.threads) {
-                const fleet = await this.persistence.readFleet(thread.id)
+                const fleet = persistedFleets[thread.id]
                 if (!fleet) continue
                 this.fleetProjection.apply(thread.id, fleet)
                 this.state.snapshot.fleetByThreadId[thread.id] = fleet
             }
+        }
+        if (!this.disposeRequested) {
+            this.modelCatalogTimer = setInterval(() => {
+                if (!this.disposeRequested) void this.listModels(false).catch(error => log.warn('[Assistant] Model catalog refresh failed', error))
+            }, 60_000)
+            this.modelCatalogTimer.unref()
         }
     }
 
@@ -2008,7 +2141,7 @@ export class AssistantService {
         const filePath = ForegroundControllerPersistence.defaultPath(app.getPath('userData'))
         const persistence = await ForegroundControllerPersistence.open(filePath)
         const routes = new ForegroundRouteController(persistence)
-        const writer = new PiCanonicalMessageWriter(
+        const writer = new ZyraCanonicalMessageWriter(
             this.runtime,
             (operationId) => persistence.canonicalMessageOperation(operationId)?.conversation_id || null,
             (input, receipt) => this.projectCanonicalVoiceMessage(input, receipt)
@@ -2022,6 +2155,15 @@ export class AssistantService {
         this.realtimeContinuity = new AssistantRealtimeContinuitySource(
             (conversationId) => this.readCanonicalVoiceContinuity(conversationId)
         )
+
+        routes.initializeChats(this.state.snapshot.sessions.flatMap(session => session.threads
+            .filter(thread => Boolean(thread.providerThreadId))
+            .map(thread => ({
+                conversationId: thread.providerThreadId!,
+                contextVersion: this.voiceContextVersion(thread),
+                activationReason: 'migration' as const,
+                attachedTaskIds: this.attachedTaskIds(thread.id)
+            }))))
 
         for (const session of this.state.snapshot.sessions) {
             for (const thread of session.threads) {
@@ -2073,6 +2215,23 @@ export class AssistantService {
                 this.requireForegroundRoutes(),
                 this.requireConversationGateway()
             )
+            committer.onCommit((receipt, event) => {
+                if (event.type !== 'realtime.assistant.transcript.completed' || !event.voiceTaskId) return
+                const record = findThreadRecord(this.state.snapshot, event.conversationId)
+                const activity = record?.thread.activities.find((entry) => entry.id === `voice-strong-task:${event.voiceTaskId}`)
+                if (!record || !activity) return
+                this.appendEvent('thread.activity.appended', receipt.observedAt, {
+                    threadId: record.thread.id,
+                    activity: {
+                        ...activity,
+                        payload: {
+                            ...activity.payload,
+                            canonicalMessageId: receipt.canonicalMessageId,
+                            spokenProviderItemId: event.providerItemId
+                        }
+                    }
+                }, record.session.id, record.thread.id)
+            })
             committer.onError((error, event) => {
                 log.error('[AssistantVoice] Canonical transcript commit failed', error)
                 this.broadcastRealtimeVoiceEvent({
@@ -2320,7 +2479,7 @@ export class AssistantService {
             }
             await this.requireCanonicalRealtimeAdapter().appendTransientContext(
                 active.adapterSessionId,
-                `The primary agent is still working on the current request. The next request is ${accepted ? 'queued' : 'not queued because the queue is full'}. Do not claim progress on it yet.`
+                `The current task is still running. The next request is ${accepted ? 'queued' : 'not queued because the queue is full'}. Explain this naturally if needed; do not claim progress on the next request yet.`
             ).catch(() => undefined)
             return
         }
@@ -2340,7 +2499,7 @@ export class AssistantService {
         this.projectVoiceStrongTask(task, record.session.id, 'running', 'Primary agent working', event.text)
         const runningContext = this.requireCanonicalRealtimeAdapter().appendTransientContext(
             active.adapterSessionId,
-            `Primary task ${taskId} is running for this exact request: ${event.text.slice(0, 1000)}. Say only that the primary agent is working if asked for status.`
+            `Task ${taskId} has started for this request: ${event.text.slice(0, 1000)}. No result has been verified yet. Describe the task state naturally if asked; do not announce internal routing or invent tool progress.`
         ).catch(() => undefined)
         try {
             const result = await this.runtime.runPrivateVoiceTask({
@@ -2360,15 +2519,9 @@ export class AssistantService {
             const current = this.activeCanonicalVoice
             if (!current || current.adapterSessionId !== active.adapterSessionId) return
             const narration = boundedVoiceTaskResult(result.text)
-            this.projectVoiceStrongTask(task, record.session.id, 'completed', 'Primary agent finished', narration)
+            this.projectVoiceStrongTask(task, record.session.id, 'completed', 'Primary agent finished', result.text)
             await runningContext
-            await Promise.all([
-                this.requireCanonicalRealtimeAdapter().appendTransientContext(
-                    current.adapterSessionId,
-                    `Verified primary-agent result for ${taskId}: ${narration}`
-                ).catch(() => undefined),
-                this.submitVoiceTaskNarration(current, taskId, narration)
-            ])
+            await this.submitVoiceTaskNarration(current, taskId, narration)
         } catch (error) {
             if (abortController.signal.aborted) {
                 this.projectVoiceStrongTask(task, record.session.id, 'cancelled', 'Primary agent stopped', 'Voice ended before the request completed.')
@@ -2467,21 +2620,13 @@ export class AssistantService {
         if (route.surface_mode !== 'voice' || route.realtime_session_id === null) return
         const now = Date.now()
         const canonicalMessageId = `voice_result_${taskId}`
-        const committer = this.requireCanonicalTypedVoiceCommitter()
-        const receipt = await committer.commit({
-            adapterSessionId: active.adapterSessionId,
-            conversationId: active.conversationId,
-            routeClaim: foregroundRouteClaim(route),
-            messageId: canonicalMessageId,
-            providerItemId: `voice-result:${taskId}`,
-            text,
-            completedAt: new Date(now).toISOString()
-        })
-        if (!receipt || !committer.isAccepting(active.adapterSessionId)) return
+        // The result stays on the task. Only the foreground's actual transcript
+        // is committed as an assistant message, after it has been spoken.
         await this.requireCanonicalRealtimeAdapter().requestSpeech(active.adapterSessionId, {
             narrationId: `voice_narration_${taskId}`,
             deliveryId: `voice_delivery_${taskId}`,
             canonicalMessageId,
+            voiceTaskId: taskId,
             text,
             safeFacts: [text],
             expiresAt: new Date(now + 2 * 60 * 1000).toISOString(),
@@ -2686,14 +2831,18 @@ export class AssistantService {
         }
         if (generation !== this.navigationSelectionGeneration) {
             const currentThread = getActiveThread(getSelectedSession(this.state.snapshot))
-            if (currentThread?.id !== thread.id) this.runtime.disconnect(thread.id)
+            if (currentThread?.id !== thread.id) {
+                leaveAssistantThreadForNavigation(this.actionDeps, findThreadRecord(this.state.snapshot, thread.id)?.thread || thread)
+            }
             return null
         }
 
         await this.refreshSelectedCanonicalPresence(sessionId)
         if (generation !== this.navigationSelectionGeneration) {
             const currentThread = getActiveThread(getSelectedSession(this.state.snapshot))
-            if (currentThread?.id !== thread.id) this.runtime.disconnect(thread.id)
+            if (currentThread?.id !== thread.id) {
+                leaveAssistantThreadForNavigation(this.actionDeps, findThreadRecord(this.state.snapshot, thread.id)?.thread || thread)
+            }
             return null
         }
         return toAssistantShellSnapshot(this.state.snapshot)
@@ -2722,8 +2871,8 @@ export class AssistantService {
             const attention = resolveCanonicalPresenceAttention({
                 currentHasPendingApprovals: thread.hasPendingApprovals,
                 currentHasPendingUserInputs: thread.hasPendingUserInputs,
-                hasLocalPendingApproval: thread.pendingApprovals.some((entry) => entry.status === 'pending'),
-                hasLocalPendingInput: thread.pendingUserInputs.some((entry) => entry.status === 'pending'),
+                hasLocalPendingApproval: (thread.pendingApprovals?.some((entry) => entry.status === 'pending') ?? thread.hasPendingApprovals),
+                hasLocalPendingInput: (thread.pendingUserInputs?.some((entry) => entry.status === 'pending') ?? thread.hasPendingUserInputs),
                 presence: chat.presence
             })
             this.appendEvent('thread.updated', occurredAt, {
@@ -2733,6 +2882,7 @@ export class AssistantService {
                     latestTurn,
                     state: resolveCanonicalPresenceThreadState({
                         currentState: thread.state,
+                        localThread: thread,
                         previousPresence: thread.canonicalPresence,
                         presence: chat.presence
                     }),
@@ -2799,6 +2949,7 @@ export class AssistantService {
                 const presenceChanged = JSON.stringify(existing.thread.canonicalPresence || null) !== JSON.stringify(nextCanonicalPresence || null)
                 const nextThreadState = resolveCanonicalPresenceThreadState({
                     currentState: existing.thread.state,
+                    localThread: existing.thread,
                     previousPresence: existing.thread.canonicalPresence,
                     presence: nextCanonicalPresence
                 })
@@ -2807,8 +2958,8 @@ export class AssistantService {
                 const nextAttention = resolveCanonicalPresenceAttention({
                     currentHasPendingApprovals: existing.thread.hasPendingApprovals,
                     currentHasPendingUserInputs: existing.thread.hasPendingUserInputs,
-                    hasLocalPendingApproval: existing.thread.pendingApprovals.some((entry) => entry.status === 'pending'),
-                    hasLocalPendingInput: existing.thread.pendingUserInputs.some((entry) => entry.status === 'pending'),
+                    hasLocalPendingApproval: (existing.thread.pendingApprovals?.some((entry) => entry.status === 'pending') ?? existing.thread.hasPendingApprovals),
+                    hasLocalPendingInput: (existing.thread.pendingUserInputs?.some((entry) => entry.status === 'pending') ?? existing.thread.hasPendingUserInputs),
                     presence: chat.presence
                 })
                 const nextHasPendingApprovals = nextAttention.hasPendingApprovals
@@ -2823,6 +2974,7 @@ export class AssistantService {
                     || existing.thread.hasPendingUserInputs !== nextHasPendingUserInputs
                     || latestTurnChanged
                     || presenceChanged
+                    || Boolean(chat.agentLabel && existing.thread.agentNickname !== chat.agentLabel)
                 ) {
                     this.appendEvent('thread.updated', updatedAt, {
                         threadId: existing.thread.id,
@@ -2836,10 +2988,18 @@ export class AssistantService {
                             hasPendingApprovals: nextHasPendingApprovals,
                             hasPendingUserInputs: nextHasPendingUserInputs,
                             state: nextThreadState,
+                            ...(chat.agentCreatedBy ? { source: 'subagent', providerParentThreadId: chat.agentCreatedBy, agentNickname: chat.agentLabel || 'Agent' } : {}),
                             updatedAt
                         }
                     }, existing.session.id, existing.thread.id)
                 }
+                const currentThread = findThreadRecord(this.state.snapshot, existing.thread.id)?.thread || existing.thread
+                const selectedThread = getActiveThread(getSelectedSession(this.state.snapshot))
+                if (
+                    selectedThread?.id !== currentThread.id
+                    && nextCanonicalPresence?.state === 'ready'
+                    && !shouldKeepAssistantThreadAttachedDuringNavigation(currentThread)
+                ) this.runtime.releaseNavigationBackgroundedThread(currentThread.id)
                 continue
             }
             this.markCanonicalHistoryDirty(chat.canonicalChatId)
@@ -2850,6 +3010,11 @@ export class AssistantService {
             const thread = createAssistantThread(createdAt, null, canonicalRuntimeCwd)
             thread.id = threadId
             thread.providerThreadId = chat.canonicalChatId
+            if (chat.agentCreatedBy) {
+                thread.source = 'subagent'
+                thread.providerParentThreadId = chat.agentCreatedBy
+                thread.agentNickname = chat.agentLabel || 'Agent'
+            }
             thread.messageCount = messageCount
             thread.activityCount = activityCount
             thread.canonicalPresence = chat.presence
@@ -2972,11 +3137,13 @@ export class AssistantService {
                 input.key,
                 input.fallbackCreatedAt,
                 canonicalStartCursor,
-                history.chat.cwd || input.project
+                history.chat.cwd || input.project,
+                history.chat.agentCreatedBy
             )
             const seenCanonicalCursors = new Set<string>()
             while (
                 !projection.messages.some((message) => message.role === 'user')
+                && !projection.activities.some((activity) => activity.payload?.origin === 'delegation')
                 && canonicalHasOlder
                 && canonicalOldestCursor
             ) {
@@ -3003,7 +3170,8 @@ export class AssistantService {
                     input.key,
                     input.fallbackCreatedAt,
                     canonicalStartCursor,
-                    history.chat.cwd || input.project
+                    history.chat.cwd || input.project,
+                    history.chat.agentCreatedBy
                 )
             }
             const record = findThreadRecord(this.state.snapshot, input.threadId)
@@ -3013,13 +3181,13 @@ export class AssistantService {
                 const persistedTimeline = await this.persistence.readTimelineProjectionRows(input.threadId)
                 const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
                 const reconciledUserInputs = reconcileAssistantUserInputResponseMessageIds(
-                    mergeRecoveredUserInputReceipts(record.thread.pendingUserInputs, recoverCanonicalUserInputReceipts(canonicalEntries, [...persistedTimeline.messages, ...canonicalMessages], canonicalStartCursor)),
+                    mergeRecoveredUserInputReceipts(record.thread.pendingUserInputs || persistedTimeline.pendingUserInputs, recoverCanonicalUserInputReceipts(canonicalEntries, [...persistedTimeline.messages, ...canonicalMessages], canonicalStartCursor)),
                     persistedTimeline.messages,
                     canonicalMessages
                 )
                 for (let index = 0; index < reconciledUserInputs.length; index += 1) {
                     const userInput = reconciledUserInputs[index]!
-                    if (JSON.stringify(userInput) === JSON.stringify(record.thread.pendingUserInputs[index])) continue
+                    if (JSON.stringify(userInput) === JSON.stringify((record.thread.pendingUserInputs || persistedTimeline.pendingUserInputs)[index])) continue
                     this.appendEvent('thread.user-input.updated', nowIso(), {
                         threadId: record.thread.id,
                         userInput
@@ -3165,18 +3333,19 @@ export class AssistantService {
             key,
             thread.createdAt,
             baseEntryIndex,
-            latest.chat.cwd || project
+            latest.chat.cwd || project,
+            latest.chat.agentCreatedBy || thread.providerParentThreadId
         )
         const persistedTimeline = await this.persistence.readTimelineProjectionRows(thread.id)
         const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
         const reconciledUserInputs = reconcileAssistantUserInputResponseMessageIds(
-            mergeRecoveredUserInputReceipts(thread.pendingUserInputs, recoverCanonicalUserInputReceipts(entries, [...persistedTimeline.messages, ...canonicalMessages], baseEntryIndex)),
+            mergeRecoveredUserInputReceipts(thread.pendingUserInputs || persistedTimeline.pendingUserInputs, recoverCanonicalUserInputReceipts(entries, [...persistedTimeline.messages, ...canonicalMessages], baseEntryIndex)),
             persistedTimeline.messages,
             canonicalMessages
         )
         for (let index = 0; index < reconciledUserInputs.length; index += 1) {
             const userInput = reconciledUserInputs[index]!
-            if (JSON.stringify(userInput) === JSON.stringify(thread.pendingUserInputs[index])) continue
+            if (JSON.stringify(userInput) === JSON.stringify((thread.pendingUserInputs || persistedTimeline.pendingUserInputs)[index])) continue
             this.appendEvent('thread.user-input.updated', nowIso(), {
                 threadId: thread.id,
                 userInput
@@ -3313,7 +3482,11 @@ export class AssistantService {
         return null
     }
 
-    private async connectSessionRuntime(session: AssistantSession, thread: AssistantThread): Promise<void> {
+    private async connectSessionRuntime(session: AssistantSession, thread: AssistantThread, visited = new Set<string>()): Promise<void> {
+        if (visited.has(thread.id)) throw new Error('Agent thread ownership contains a cycle.')
+        visited.add(thread.id)
+        const owner = resolveAgentThreadOwner(this.state.snapshot.sessions, thread)
+        if (owner) await this.connectSessionRuntime(owner.session, owner.thread, visited)
         await connectWithStablePluginAuthority({
             getGeneration: () => this.pluginAuthorityMutations.generation(session.id),
             waitForSettled: () => this.pluginAuthorityMutations.wait(session.id),
@@ -3324,14 +3497,16 @@ export class AssistantService {
                 return {
                     session: currentSession,
                     thread: currentThread,
-                    pluginSkillSources: await this.getSessionPluginSkillSources(currentSession)
+                    pluginSkillSources: await this.getSessionPluginSkillSources(currentSession),
+                    pluginMcpSources: await this.pluginRegistry.getChatMcpSources(currentSession.id)
                 }
             },
-            connect: ({ session: currentSession, thread: currentThread, pluginSkillSources }) => this.runtime.connect(
+            connect: ({ session: currentSession, thread: currentThread, pluginSkillSources, pluginMcpSources }) => this.runtime.connect(
                 currentThread,
                 this.getSessionRuntimeCwd(currentSession, currentThread),
                 currentSession.chatScope,
-                pluginSkillSources
+                pluginSkillSources,
+                pluginMcpSources
             ),
             disconnect: ({ thread: currentThread }) => this.runtime.disconnect(getAssistantCanonicalThreadId(currentThread))
         })
@@ -3341,7 +3516,9 @@ export class AssistantService {
         const projectId = session.projectId || session.chatScope?.projectId || null
         const expectedOwnerKind = projectId ? 'project' : 'global'
         const expectedOwnerId = projectId || 'global'
-        let scope = await this.pluginRegistry.getChatScope(session.id)
+        let scope = session.mode !== 'playground'
+            ? await this.pluginRegistry.ensureAvailableChatScope(session.id, projectId)
+            : await this.pluginRegistry.getChatScope(session.id)
         if (!scope) {
             scope = await this.pluginRegistry.ensureLegacyChatScope(session.id, projectId)
         } else if (scope.ownerKind !== expectedOwnerKind || scope.ownerId !== expectedOwnerId || session.mode === 'playground' && scope.plugins.length > 0) {
@@ -3492,7 +3669,9 @@ export class AssistantService {
                 void this.submitVoiceTaskNarration(
                     activeVoice,
                     `${activeTask.taskId}_approval_resolved_${event.requestId || 'request'}`,
-                    'Approval received. The primary agent is continuing.'
+                    event.payload.decision === 'decline'
+                        ? 'That approval was declined. I will not run that action.'
+                        : 'Approval received. I can continue now.'
                 ).catch(() => undefined)
             }
             const targetRecord = findThreadRecord(this.state.snapshot, privateVoiceTarget)
@@ -3567,7 +3746,7 @@ export class AssistantService {
         const activeThread = getActiveThread(selectedSession)
         if (!selectedSession || !activeThread) return
         if ((completedThreadRecord?.thread.id || event.threadId) !== activeThread.id) return
-        if (!activeThread.latestTurn || activeThread.latestTurn.state !== 'completed') return
+        if (!activeThread.latestTurn || !['completed', 'interrupted'].includes(activeThread.latestTurn.state)) return
         if (activeThread.lastSeenCompletedTurnId === activeThread.latestTurn.id) return
 
         this.appendEvent('thread.updated', event.createdAt, {
@@ -3682,7 +3861,8 @@ export function projectCanonicalTimeline(
     key: string,
     fallbackCreatedAt: string,
     baseEntryIndex: number,
-    cwd = process.cwd()
+    cwd = process.cwd(),
+    agentSenderCanonicalThreadId?: string | null
 ): {
     messages: AssistantMessage[]
     activities: AssistantActivity[]
@@ -3708,6 +3888,12 @@ export function projectCanonicalTimeline(
         const entryId = String(entry['id'] || `entry:${key}:${timelineSequence}`)
         const historyBodyRef = asCanonicalRecord(entry['historyBodyRef'])
         const occurredAt = normalizeCatalogDate(entry['timestamp'], fallbackCreatedAt)
+        if (entry['type'] === 'custom_message' && entry['customType'] === 'zyra_thread_message') {
+            const activity = projectThreadMessage(entry['details'], occurredAt, timelineSequence)
+            if (activity) activities.set(activity.id, activity)
+            if (activity?.payload?.origin === 'delegation') activeTurnId = `shared-turn:${key}:${entryId}`
+            continue
+        }
         if (entry['type'] !== 'message') {
             if (entry['type'] === 'compaction' || entry['type'] === 'branch_summary') {
                 activities.set(`shared-activity:${entryId}`, {
@@ -3737,6 +3923,16 @@ export function projectCanonicalTimeline(
         const messageOccurredAt = normalizeCatalogDate(message['timestamp'] || entry['timestamp'], occurredAt)
         const content = canonicalContentParts(message['content'])
         const text = canonicalMessageText(content)
+        const legacyGoal = role === 'user' ? readLegacyAgentDelegation(text, agentSenderCanonicalThreadId) : null
+        if (legacyGoal) {
+            activeTurnId = `shared-turn:${key}:${sourceMessageId}`
+            legacyMessageIds.add(messageId)
+            const activity = projectThreadMessage({ messageId: `agent-delegation:${sourceMessageId}`, senderThreadId: agentSenderCanonicalThreadId,
+                senderCanonicalThreadId: agentSenderCanonicalThreadId, senderLabel: 'Zyra', recipientThreadId: canonicalChatId,
+                text: legacyGoal, origin: 'delegation', createdAt: messageOccurredAt }, messageOccurredAt, timelineSequence)
+            if (activity) activities.set(activity.id, activity)
+            continue
+        }
         if (role === 'user') {
             suppressInternalTitleTurn = isAssistantTitleGenerationPrompt(text)
             activeActionBatchIntent = null
@@ -3839,7 +4035,7 @@ export function projectCanonicalTimeline(
                 state: 'running'
             })
             if (classified.kind === 'file-change') {
-                Object.assign(classified.data, readPiFileChangeData({
+                Object.assign(classified.data, readRuntimeFileChangeData({
                     cwd,
                     toolName,
                     args,
@@ -3987,11 +4183,11 @@ function countMergedCanonicalRecords<T extends { id: string }>(existing: T[], in
 function canonicalPiMessageSourceId(message: Record<string, unknown>, fallback: string): string {
     const zyraCanonical = asCanonicalRecord(message['zyraCanonicalMessage'])
     const canonicalMessageId = String(zyraCanonical?.['canonicalMessageId'] || '').trim()
-    if (canonicalMessageId) return canonicalMessageId
+    if (canonicalMessageId) return normalizeCanonicalMessageSourceId(canonicalMessageId)
     const timestamp = Number(message['timestamp'])
     const role = String(message['role'] || 'unknown')
     return Number.isFinite(timestamp) && timestamp > 0
-        ? `pi-message:${role}:${Math.trunc(timestamp)}`
+        ? `zyra-message:${role}:${Math.trunc(timestamp)}`
         : fallback
 }
 
@@ -4021,7 +4217,7 @@ export function findDuplicateProjectedMessageIds(messages: AssistantMessage[]): 
     const removed = new Set(findAssistantMessageReplayDuplicateIds(messages))
     for (const group of groups.values()) {
         if (group.length < 2) continue
-        const isCanonicalMessageId = (id: string) => !id.startsWith('assistant-message-') || id.includes('pi-message:')
+        const isCanonicalMessageId = (id: string) => !id.startsWith('assistant-message-') || id.includes('pi-message:') || id.includes('zyra-message:')
         const canonical = group.filter((message) => isCanonicalMessageId(message.id))
         const generated = group.filter((message) => !isCanonicalMessageId(message.id))
         for (const message of generated) {
@@ -4191,7 +4387,7 @@ function projectCanonicalToolResult(input: {
         output
     })
     if (classified.kind === 'file-change') {
-        Object.assign(classified.data, readPiFileChangeData({
+        Object.assign(classified.data, readRuntimeFileChangeData({
             cwd: input.cwd,
             toolName: input.toolName,
             args: input.args,

@@ -760,7 +760,11 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 model: event.payload.model || existingThread.model,
                 thinking: event.payload.thinking,
                 profile: event.payload.profile,
-                runtimeMode: event.payload.runtimeMode,
+                // A warm connection can report its initial configuration after
+                // the first prompt has already selected a different mode.
+                runtimeMode: existingThread.state === 'starting' && existingThread.messages.some(message => message.role === 'user')
+                    ? existingThread.runtimeMode
+                    : event.payload.runtimeMode,
                 webSearch: typeof event.payload.webSearch === 'boolean' ? event.payload.webSearch : existingThread.webSearch,
                 webFetch: typeof event.payload.webFetch === 'boolean' ? event.payload.webFetch : existingThread.webFetch,
                 updatedAt: event.createdAt
@@ -835,6 +839,9 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 agentRole: event.payload.agentRole ?? existing?.thread.agentRole ?? null,
                 cwd: event.payload.cwd ?? existing?.thread.cwd ?? null,
                 state: event.payload.state || 'ready',
+                lastError: event.payload.state === 'ready' && existing?.thread.latestTurn?.state === 'completed'
+                    ? null
+                    : existing?.thread.lastError ?? null,
                 updatedAt: event.createdAt
             }
         }, existing?.session.id || eventSession!.id, targetThreadId)
@@ -862,6 +869,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
     if (event.type === 'turn.started') {
         if (!eventSession) return
         const existingThread = eventThreadRecord?.thread || deps.requireThread(event.threadId)
+        if (existingThread.latestTurn && event.turnId === existingThread.latestTurn.id && existingThread.latestTurn.state !== 'running') return
         if (isOlderMismatchedTurnEvent(existingThread.latestTurn, event.turnId, event.createdAt)) return
         deps.appendEvent('thread.updated', event.createdAt, {
             threadId: eventThreadId,
@@ -926,7 +934,9 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
             ? {
                 ...existingThread.latestTurn!,
                 state: completedTurnState,
-                completedAt: event.createdAt,
+                completedAt: existingThread.latestTurn!.state !== 'running'
+                    ? existingThread.latestTurn!.completedAt || event.createdAt
+                    : event.createdAt,
                 effort: event.payload.effort || existingThread.latestTurn!.effort || null,
                 serviceTier: event.payload.serviceTier || existingThread.latestTurn!.serviceTier || null,
                 usage: event.payload.usage || existingThread.latestTurn!.usage || null
@@ -971,6 +981,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                     createdAt: event.createdAt,
                     payload: {
                         status: turnTerminalOutcome === 'interrupted' ? 'cancelled' : 'failed',
+                        ...(event.payload.interruption ? { interruption: event.payload.interruption } : {}),
                         completedAt: event.createdAt,
                         ...(event.itemId ? { canonicalMessageId: `assistant-message-${event.itemId}` } : {})
                     }

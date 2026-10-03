@@ -92,10 +92,10 @@ import dev.zyra.mobile.data.permissionLabel
 
 @Composable internal fun PermissionControls(mode: String, connected: Boolean, select: (String) -> Unit) {
     val choices = listOf(
-        Triple("approval-required", R.drawable.ic_shield_check, "Ask before actions"),
-        Triple("auto-review", R.drawable.ic_check, "Automatic review"),
-        Triple("edits-only", R.drawable.ic_pencil, "Allow file edits"),
-        Triple("full-access", R.drawable.ic_shield_check, "Full access"),
+        Triple("approval-required", R.drawable.ic_lock, "Supervised"),
+        Triple("auto-review", R.drawable.ic_shield_check, "Auto review"),
+        Triple("edits-only", R.drawable.ic_pencil, "Edits only"),
+        Triple("full-access", R.drawable.ic_lock_open, "Full access"),
     )
     if (mode.isBlank() || choices.none { it.first == mode }) Text(permissionLabel(mode), Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
     choices.forEach { (value, icon, label) ->

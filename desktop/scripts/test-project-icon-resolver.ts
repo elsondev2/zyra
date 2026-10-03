@@ -30,6 +30,8 @@ const rootRelativeProject = join(fixtureRoot, 'root-relative-project')
 const workspaceEscapeRoot = join(fixtureRoot, 'workspace-project')
 const outsideWorkspaceRoot = join(fixtureRoot, 'outside-workspace')
 const outsideIcon = join(fixtureRoot, 'outside.png')
+const namedAssetProject = join(fixtureRoot, 'named-asset-project')
+const productNameProject = join(fixtureRoot, 'product-name-project')
 
 try {
     await mkdir(join(projectRoot, 'public'), { recursive: true })
@@ -38,6 +40,22 @@ try {
 
     const detected = await resolveProjectIconPath(projectRoot, ['public'], {})
     assert.equal(detected, join(projectRoot, 'public', 'favicon.svg'), 'bounded common favicon detection should resolve inside the project')
+
+    await mkdir(join(namedAssetProject, 'src', 'assets'), { recursive: true })
+    await writeFile(join(namedAssetProject, 'src', 'assets', 'my-product-logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    assert.equal(
+        await resolveProjectIconPath(namedAssetProject, ['package.json', 'src'], { name: 'named-asset' }),
+        join(namedAssetProject, 'src', 'assets', 'my-product-logo.svg'),
+        'project artwork with a descriptive file name should resolve from common asset folders'
+    )
+
+    await mkdir(join(productNameProject, 'public', 'images'), { recursive: true })
+    await writeFile(join(productNameProject, 'public', 'images', 'Monax.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    assert.equal(
+        await resolveProjectIconPath(productNameProject, ['package.json', 'public'], { name: '@scope/monax' }),
+        join(productNameProject, 'public', 'images', 'Monax.svg'),
+        'project artwork named after the package should resolve without an icon suffix'
+    )
 
     await rm(join(projectRoot, 'public', 'favicon.svg'))
     const escaped = await resolveProjectIconPath(projectRoot, ['package.json'], { build: { icon: outsideIcon } })
@@ -90,7 +108,7 @@ try {
     assert.match(chatRailSource, /<AssistantProjectIcon[\s\S]{0,220}projectIconPath=\{group\.projectIconPath\}/, 'the standard chat sidebar should render discovered project identity')
     assert.match(agentInboxSource, /<AssistantProjectIcon[\s\S]{0,220}projectIconPath=\{group\.projectIconPath\}/, 'Agent Inbox should render the same project identity')
     assert.match(conversationHeaderSource, /<AssistantProjectIcon projectPath=\{selectedProjectPath\} size=\{12\}/, 'the chat header should render the active project identity')
-    assert.match(projectChipSource, /<AssistantProjectIcon projectPath=\{project\.path\} size=\{13\}/, 'the new-chat project picker should render project identity per choice')
+    assert.match(projectChipSource, /<AssistantProjectIcon projectPath=\{project\.iconSourcePath\} size=\{13\}/, 'the new-chat project picker should render project identity per choice')
     assert.match(legacyRowsSource, /<AssistantProjectIcon[\s\S]{0,220}projectIconPath=\{group\.projectIconPath\}/, 'the legacy rail should share the same project mark')
 
     console.log('Project icon resolver: ok')

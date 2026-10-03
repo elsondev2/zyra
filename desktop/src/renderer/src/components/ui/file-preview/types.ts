@@ -6,6 +6,7 @@ export interface PreviewHtmlLocation { search: string; hash: string }
 
 export interface PreviewFile {
     name: string
+    displayName?: string
     path: string
     type: PreviewFileType
     language?: string
@@ -34,6 +35,7 @@ export interface PreviewMediaItem extends PreviewMediaSource {
 }
 
 export interface PreviewOpenOptions {
+    displayName?: string
     startInEditMode?: boolean
     mediaItems?: PreviewMediaSource[]
     focusLine?: number

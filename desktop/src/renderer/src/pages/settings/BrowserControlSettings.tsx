@@ -1,6 +1,7 @@
 import type { DesktopLinkPreference } from '@shared/desktop-link-policy'
+import type { BrowserExtensionRecord } from '@shared/browser-extensions'
 import { useEffect, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { FolderPlus, RefreshCw, Trash2 } from 'lucide-react'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { useSettings } from '@/lib/settings'
 import { useDesktopLinkPreference, setDesktopLinkPreference } from '@/lib/desktop-links'
@@ -15,19 +16,93 @@ import {
     SettingsRow,
     SettingsSection,
     SettingsSegmented,
+    SettingsInput,
     SettingsSwitch
 } from './settings-layout'
 import { SettingsPageTabs } from './SettingsPageTabs'
 
-export default function BrowserControlSettings({ view = 'browsing' }: { view?: 'browsing' | 'privacy' | 'data' }) {
+export default function BrowserControlSettings({ view = 'browsing' }: { view?: 'browsing' | 'privacy' | 'data' | 'extensions' }) {
     const { settings, updateSettings } = useSettings()
     const linkPreference = useDesktopLinkPreference()
     const [retainedWorkspaceCount, setRetainedWorkspaceCount] = useState(() => view === 'data' ? countPersistedAssistantBrowserWorkspaces() : 0)
     const [browserHistoryState, setBrowserHistoryState] = useState<'checking' | 'present' | 'empty' | 'unavailable'>('checking')
     const [adBlockBusy, setAdBlockBusy] = useState(false)
     const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string; view: typeof view } | null>(null)
+    const [extensions, setExtensions] = useState<BrowserExtensionRecord[]>([])
+    const [extensionsBusy, setExtensionsBusy] = useState(false)
+    const [webStoreInput, setWebStoreInput] = useState('')
     const showStatus = (next: Omit<NonNullable<typeof status>, 'view'>) => setStatus({ ...next, view })
     const integratedBrowserAvailable = isElectronRendererRuntime()
+
+    useEffect(() => {
+        if (view !== 'extensions') return
+        let cancelled = false
+        void window.devscope.listBrowserExtensions().then(result => {
+            if (!cancelled && result.success) setExtensions(result.extensions)
+        })
+        return () => { cancelled = true }
+    }, [view])
+
+    const refreshExtensions = async () => {
+        const result = await window.devscope.listBrowserExtensions()
+        if (result.success) setExtensions(result.extensions)
+        else throw new Error(result.error || 'Could not read Browser extensions.')
+    }
+
+    const installExtension = async () => {
+        setExtensionsBusy(true)
+        try {
+            const result = await window.devscope.installBrowserExtension()
+            if (!result.success) throw new Error(result.error || 'Could not install the Browser extension.')
+            await refreshExtensions()
+            showStatus({ tone: 'success', message: `${result.extension.name} is ready in Zyra Browser.` })
+        } catch (error) {
+            if (error instanceof Error && error.message !== 'Extension installation cancelled.') showStatus({ tone: 'error', message: error.message })
+        } finally { setExtensionsBusy(false) }
+    }
+
+    const installFromWebStore = async () => {
+        if (!webStoreInput.trim()) return
+        setExtensionsBusy(true)
+        try {
+            const review = await window.devscope.inspectBrowserExtensionFromWebStore(webStoreInput.trim())
+            if (!review.success) throw new Error(review.error || 'Could not download the Chrome Web Store extension.')
+            const permissions = [...review.extension.permissions, ...review.extension.hostPermissions]
+            const approved = window.confirm(`Install ${review.extension.name} v${review.extension.version}?\n\n${permissions.length > 0 ? `Requested permissions:\n${permissions.join(', ')}` : 'This extension declares no permissions.'}\n\nOnly approve extensions you trust.`)
+            if (!approved) {
+                await window.devscope.discardBrowserExtensionFromWebStore(review.extension.id)
+                throw new Error('Extension was not kept.')
+            }
+            const result = await window.devscope.approveBrowserExtensionFromWebStore(review.extension.id)
+            if (!result.success) throw new Error(result.error || 'Could not install the approved extension.')
+            setWebStoreInput('')
+            await refreshExtensions()
+            showStatus({ tone: 'success', message: `${result.extension.name} is installed in Zyra Browser.` })
+        } catch (error) { showStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Could not install the Chrome Web Store extension.' }) }
+        finally { setExtensionsBusy(false) }
+    }
+
+    const setExtensionEnabled = async (id: string, enabled: boolean) => {
+        setExtensionsBusy(true)
+        try {
+            const result = await window.devscope.setBrowserExtensionEnabled({ id, enabled })
+            if (!result.success) throw new Error(result.error || 'Could not update the extension.')
+            await refreshExtensions()
+        } catch (error) { showStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Could not update the extension.' }) }
+        finally { setExtensionsBusy(false) }
+    }
+
+    const removeExtension = async (id: string, name: string) => {
+        if (!window.confirm(`Remove ${name} from Zyra Browser?`)) return
+        setExtensionsBusy(true)
+        try {
+            const result = await window.devscope.removeBrowserExtension(id)
+            if (!result.success) throw new Error(result.error || 'Could not remove the extension.')
+            await refreshExtensions()
+            showStatus({ tone: 'success', message: `${name} was removed.` })
+        } catch (error) { showStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Could not remove the extension.' }) }
+        finally { setExtensionsBusy(false) }
+    }
 
     useEffect(() => {
         if (view !== 'data') return
@@ -100,7 +175,22 @@ export default function BrowserControlSettings({ view = 'browsing' }: { view?: '
         >
             {integratedBrowserAvailable ? (
                 <>
-                    {view === 'browsing' ? (
+                    {view === 'extensions' ? (
+                        <SettingsSection title="Extensions" searchSection="Browser extensions" headerAction={
+                            <SettingsButton variant="accent" className="w-8 px-0" aria-label="Install unpacked extension" title="Install unpacked extension" onClick={() => void installExtension()} disabled={extensionsBusy}>
+                                <FolderPlus size={15} aria-hidden="true" />
+                            </SettingsButton>
+                        }>
+                            <SettingsNotice tone="warning">Only install extensions you trust. Review their permissions.</SettingsNotice>
+                            <SettingsRow title="Chrome Web Store" description="Install an extension from its Chrome Web Store URL or ID." control={<div className="flex w-full gap-2 sm:w-auto"><SettingsInput value={webStoreInput} onChange={event => setWebStoreInput(event.target.value)} placeholder="Extension URL or ID" aria-label="Chrome Web Store extension URL or ID" /><SettingsButton variant="accent" disabled={extensionsBusy || !webStoreInput.trim()} onClick={() => void installFromWebStore()}>Install</SettingsButton></div>} />
+                            {extensions.length === 0 ? <div className="px-4 py-6 text-xs text-[var(--settings-text-secondary)]">No extensions installed.</div> : extensions.map(extension => (
+                                <SettingsRow key={extension.id} title={extension.name} description={extension.description || 'No description provided.'} status={`v${extension.version}`} statusTone="info" control={<div className="flex items-center gap-1"><SettingsSwitch checked={extension.enabled} disabled={extensionsBusy} onCheckedChange={enabled => void setExtensionEnabled(extension.id, enabled)} label={`${extension.enabled ? 'Disable' : 'Enable'} ${extension.name}`} /><SettingsButton variant="ghost" aria-label={`Reload ${extension.name}`} title="Reload extension" disabled={extensionsBusy} onClick={() => void window.devscope.reloadBrowserExtension(extension.id).then(refreshExtensions).catch(error => showStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Could not reload the extension.' }))}><RefreshCw size={13} /></SettingsButton><SettingsButton variant="ghost" aria-label={`Remove ${extension.name}`} title="Remove extension" disabled={extensionsBusy} onClick={() => void removeExtension(extension.id, extension.name)}><Trash2 size={13} /></SettingsButton></div>}>
+                                    {extension.warnings.length > 0 ? <p className="mt-2 text-[11px] leading-5 text-amber-200/80">{extension.warnings.join(' ')}</p> : null}
+                                    <p className="mt-1 break-all text-[10px] text-[var(--settings-text-faint)]">{[...extension.permissions, ...extension.hostPermissions].length > 0 ? `Permissions: ${[...extension.permissions, ...extension.hostPermissions].join(', ')}` : 'No declared permissions.'}</p>
+                                </SettingsRow>
+                            ))}
+                        </SettingsSection>
+                    ) : view === 'browsing' ? (
                         <SettingsSection title="Browsing" searchSection="Browser workspace">
                             <SettingsRow title="Open links in" description="Choose where links from chats, files, and the Plugin store open." info="Remembered on this device. Sign-in flows and explicitly named browser actions keep their own destination." control={<SettingsSegmented<DesktopLinkPreference> value={linkPreference} options={[{ value: 'ask', label: 'Ask me' }, { value: 'zyra', label: 'Zyra Browser' }, { value: 'system', label: 'Default browser' }]} onChange={value => { try { setDesktopLinkPreference(value) } catch { showStatus({ tone: 'error', message: 'Could not save the link preference.' }) } }} label="Open links in" />} />
                             <SettingsRow title="Restore Browser tabs" description="Reopen saved tabs when you return to a chat workspace." control={<SettingsSwitch checked={settings.assistantBrowserRestoreTabs} onCheckedChange={(assistantBrowserRestoreTabs) => updateSettings({ assistantBrowserRestoreTabs })} label="Restore Browser tabs" />} />

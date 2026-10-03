@@ -9,15 +9,20 @@ import electronPath from 'electron'
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const directory = await mkdtemp(join(tmpdir(), 'zyra-timeline-presentation-'))
 try {
+    await writeFile(join(directory, 'settings.ts'), 'export function useSettings(){ return { settings: { assistantAllowCollapseWhileWorking:false, assistantShowActionStats:false } } }');
     const bundle = await build({
         entryPoints: [join(desktop, 'scripts/fixtures/assistant-timeline-presentation.tsx')],
         bundle: true, write: false, format: 'iife', jsx: 'automatic', platform: 'browser',
-        alias: { '@': join(desktop, 'src/renderer/src') }, logLevel: 'silent'
+        define: { 'import.meta.env.DEV': 'true' },
+        alias: { '@/lib/settings': join(directory, 'settings.ts'), '@': join(desktop, 'src/renderer/src'), '@shared': join(desktop, 'src/shared') }, logLevel: 'silent'
     })
     const html = join(directory, 'index.html')
     await writeFile(html, `<!doctype html><html><head><meta charset="utf-8"><style>
         html,body,#root{height:100%;margin:0}.h-full{height:100%}.w-full{width:100%}
         .relative{position:relative}.absolute{position:absolute}.inset-0{inset:0}
+        .grid{display:grid}.grid-rows-\\[1fr\\]{grid-template-rows:1fr}.grid-rows-\\[0fr\\]{grid-template-rows:0fr}
+        .min-h-0{min-height:0}.overflow-hidden{overflow:hidden}
+        .transition-\\[grid-template-rows\\]{transition-property:grid-template-rows}
         </style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`)
     const harness = join(directory, 'run.cjs')
     await writeFile(harness, `

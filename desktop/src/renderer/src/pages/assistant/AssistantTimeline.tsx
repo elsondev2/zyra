@@ -25,13 +25,13 @@ import {
 import { TimelineTurnInterruptionMarker, TimelineTurnWorkSummary } from './AssistantTimelineWorkSummary'
 import { TimelineVoiceTaskStatus } from './AssistantTimelineVoiceTask'
 import { AssistantTimelineNetworkRecovery } from './AssistantTimelineNetworkRecovery'
+import { AssistantTimelineThreadMessage } from './AssistantTimelineThreadMessage'
+import { getAssistantInterruptionLabel } from '@shared/assistant/interruption'
 import { AssistantVirtualTimeline } from './AssistantVirtualTimeline'
 import { computeStableAssistantTimelineRows, type StableTimelineRowsState } from './assistant-virtual-timeline-rows'
 import {
-    buildCommandCheckpointDisplayActivity,
     buildTimelineRows,
     countRunningCommandActivities,
-    findRelatedCommandActivityId,
     getTimelineActivityDomId,
     getTimelineMessageDomId,
     isCommandCheckpointActivity,
@@ -46,7 +46,11 @@ import {
 } from './assistant-timeline-helpers'
 import { stripProposedPlanBlocks } from './assistant-proposed-plan'
 import { groupTimelineRowsIntoWorkSummaries } from './assistant-turn-work'
+import { addAssistantConversationMarkers } from './assistant-conversation-markers'
+import { AssistantConversationMarker } from './AssistantConversationMarker'
 import { useAssistantTimelineEntries } from './useAssistantTimelineEntries'
+import { buildCommandCheckpointMaps } from './assistant-command-checkpoint-index'
+import { resolveAssistantTimelineFocusAfterFollow, type AssistantTimelineFocusOwnership } from './assistant-timeline-scroll-policy'
 
 const ASSISTANT_MARKDOWN_PREWARM_MAX_LENGTH = 32_000
 
@@ -86,6 +90,7 @@ type AssistantTimelineProps = {
     scrollContainerRef?: RefObject<HTMLDivElement | null>
     overlayContainerRef?: RefObject<HTMLDivElement | null>
     isWorking?: boolean
+    waitingForCompaction?: boolean
     workingLabel?: string
     activeWorkStartedAt?: string | null
     latestAssistantMessageId?: string | null
@@ -93,6 +98,7 @@ type AssistantTimelineProps = {
     turnUsageById?: ReadonlyMap<string, AssistantSessionTurnUsageEntry>
     deletingMessageId?: string | null
     focusMessageId?: string | null
+    followLatestRequestKey?: string | null
     loadingChats?: boolean
     selectionHydrating?: boolean
     coldStart?: boolean
@@ -138,13 +144,15 @@ function AssistantTimelineImpl({
     scrollContainerRef,
     overlayContainerRef,
     isWorking = false,
+    waitingForCompaction = false,
     workingLabel = 'Working...',
     activeWorkStartedAt = null,
     latestAssistantMessageId = null,
     latestTurnStartedAt = null,
     turnUsageById,
     deletingMessageId = null,
-    focusMessageId = null,
+    focusMessageId: requestedFocusMessageId = null,
+    followLatestRequestKey = null,
     loadingChats = false,
     selectionHydrating = false,
     coldStart = false,
@@ -171,6 +179,12 @@ function AssistantTimelineImpl({
     onLoadNewer,
     onScrollContainer
 }: AssistantTimelineProps) {
+    // A send supersedes the current search/reveal target. A new target can still
+    // take ownership later, but the old target must not reclaim the live edge.
+    const focusOwnershipRef = useRef<AssistantTimelineFocusOwnership | null>(null)
+    const focusOwnership = resolveAssistantTimelineFocusAfterFollow(focusOwnershipRef.current, { windowKey, followLatestRequestKey, focusMessageId: requestedFocusMessageId })
+    focusOwnershipRef.current = focusOwnership.state
+    const focusMessageId = focusOwnership.focusMessageId
     const [initialLayoutWindowKey, setInitialLayoutWindowKey] = useState<string | null>(null)
     useEffect(() => {
         if (initialLayoutWindowKey !== windowKey) return
@@ -241,24 +255,33 @@ function AssistantTimelineImpl({
         [activeWorkStartedAt, entries, isWorking]
     )
     const rows = useMemo(
-        () => groupTimelineRowsIntoWorkSummaries({
-            rows: baseRows,
-            messages,
-            turnUsageById,
-            latestAssistantMessageId: resolvedLatestAssistantMessageId,
-            latestTurnStartedAt,
-            isWorking
-        }).filter((row) => row.kind !== 'user-input'),
-        [baseRows, isWorking, latestTurnStartedAt, messages, resolvedLatestAssistantMessageId, turnUsageById]
+        () => {
+            const grouped = groupTimelineRowsIntoWorkSummaries({
+                rows: baseRows,
+                messages,
+                turnUsageById,
+                latestAssistantMessageId: resolvedLatestAssistantMessageId,
+                latestTurnStartedAt,
+                isWorking
+            }).filter((row) => row.kind !== 'user-input')
+            if (waitingForCompaction && !grouped.some(row => row.kind === 'working')) {
+                grouped.push({ kind: 'working', id: 'compaction-waiting-message', createdAt: null })
+            }
+            return addAssistantConversationMarkers(grouped, turnUsageById)
+        },
+        [baseRows, isWorking, latestTurnStartedAt, messages, resolvedLatestAssistantMessageId, turnUsageById, waitingForCompaction]
     )
     const lastAssistantMessageIdByTurn = useMemo(() => {
         const next = new Map<string, string>()
-        for (const message of messages) {
-            if (message.role !== 'assistant' || !message.turnId) continue
-            next.set(message.turnId, message.id)
+        for (const row of rows) {
+            const segment = row.kind === 'turn-work-summary' ? row.rows : [row]
+            for (const nested of segment) {
+                if (nested.kind !== 'message' || nested.message.role !== 'assistant' || !nested.message.turnId) continue
+                next.set(nested.message.turnId, nested.message.id)
+            }
         }
         return next
-    }, [messages])
+    }, [rows])
     const questionResponseByMessageId = useMemo(() => new Map(
         userInputs.flatMap((input) => (
             input.status === 'resolved' && input.responseMessageId
@@ -266,16 +289,9 @@ function AssistantTimelineImpl({
                 : []
         ))
     ), [userInputs])
-    const commandCheckpointTargetById = useMemo(() => new Map(
-        activities
-            .filter(isCommandCheckpointActivity)
-            .map((activity) => [activity.id, findRelatedCommandActivityId(activity, activities)] as const)
-    ), [activities])
-    const commandCheckpointDisplayById = useMemo(() => new Map(
-        activities
-            .filter(isCommandCheckpointActivity)
-            .map((activity) => [activity.id, buildCommandCheckpointDisplayActivity(activity, activities)] as const)
-    ), [activities])
+    const { targetById: commandCheckpointTargetById, displayById: commandCheckpointDisplayById } = useMemo(
+        () => buildCommandCheckpointMaps(activities), [activities]
+    )
     const runningCommandCount = useMemo(() => countRunningCommandActivities(activities), [activities])
     const stableRowsStateRef = useRef<StableTimelineRowsState | null>(null)
     const stableRows = useMemo(() => {
@@ -380,8 +396,10 @@ function AssistantTimelineImpl({
                     startedAt={row.startedAt}
                     completedAt={row.completedAt}
                     running={row.running}
+                    statusLabel={row.running && waitingForCompaction ? 'Letting compaction finish' : null}
                     collapseForTerminalResponse={row.terminalResponseVisible}
                     outcome={row.outcome}
+                    interruptionLabel={row.interruptionLabel}
                     displayMode={assistantChatDisplayMode}
                     actionCount={countTimelineWorkActions(row.rows)}
                     hasWork={row.rows.length > 0}
@@ -454,13 +472,16 @@ function AssistantTimelineImpl({
             return interruptionActivities.length > 0 ? (
                 <div key={row.id}>
                     {activityContent}
-                    <TimelineTurnInterruptionMarker />
+                    <TimelineTurnInterruptionMarker label={getAssistantInterruptionLabel(interruptionActivities[0]?.payload?.interruption)} />
                 </div>
             ) : activityContent
         }
         if (row.kind === 'activity') {
+            if (row.activity.kind === 'thread-message') {
+                return <AssistantTimelineThreadMessage key={row.id} activity={row.activity} displayMode={assistantChatDisplayMode} />
+            }
             if (row.activity.turnTerminalOutcome === 'interrupted') {
-                return <TimelineTurnInterruptionMarker key={row.id} />
+                return <TimelineTurnInterruptionMarker key={row.id} label={getAssistantInterruptionLabel(row.activity.payload?.interruption)} />
             }
             if (isAssistantConnectionRecoveryActivity(row.activity)) {
                 return <AssistantTimelineNetworkRecovery key={row.id} activity={row.activity} />
@@ -520,6 +541,7 @@ function AssistantTimelineImpl({
                 />
             )
         }
+        if (row.kind === 'model-change' || row.kind === 'conversation-time') return <AssistantConversationMarker row={row} />
         if (row.kind === 'user-input') return null
         if (row.kind === 'working') {
             return <TimelineWorkingIndicator key={row.id} startedAt={activeWorkStartedAt} label={workingLabel} />
@@ -540,12 +562,16 @@ function AssistantTimelineImpl({
                 />
             )
         }
+        if (row.kind === 'message' && row.threadMessage) {
+            return <AssistantTimelineThreadMessage key={row.id} activity={row.threadMessage} displayMode={assistantChatDisplayMode} />
+        }
         return (
             <TimelineMessage
                 key={options.liveNarration ? 'active-live-narration' : row.id}
                 message={row.message}
+                peerReply={row.peerReply}
                 isLatestAssistant={row.message.role === 'assistant' && row.message.id === resolvedLatestAssistantMessageId}
-                isLastAssistantInTurn={row.message.role === 'assistant' && !!row.message.turnId && lastAssistantMessageIdByTurn.get(row.message.turnId) === row.message.id}
+                isLastAssistantInTurn={Boolean(row.peerReply) || (row.message.role === 'assistant' && !!row.message.turnId && lastAssistantMessageIdByTurn.get(row.message.turnId) === row.message.id)}
                 latestTurnStartedAt={latestTurnStartedAt}
                 turnUsage={row.message.role === 'assistant'
                     ? (row.message.turnId ? turnUsageById?.get(row.message.turnId) : null)
@@ -590,10 +616,11 @@ function AssistantTimelineImpl({
             rows={stableRows}
             windowKey={windowKey}
             focusMessageId={focusMessageId}
+            followLatestRequestKey={followLatestRequestKey}
             listRef={listRef}
             scrollContainerRef={scrollContainerRef}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
-            isWorking={isWorking}
+            isWorking={isWorking || waitingForCompaction}
             selectionHydrating={selectionHydrating}
             coldStart={coldStart}
             hasOlder={hasOlder}

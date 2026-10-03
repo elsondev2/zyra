@@ -58,7 +58,7 @@ export class AssistantPluginAcquisitions {
         if (this.disposed) throw new Error('Plugin downloads are shutting down.')
         if (!Number.isSafeInteger(owner) || owner < 1) throw new Error('Plugin downloads require a Desktop owner.')
         const entry = catalog.entries.find(entry => entry.name === name)
-        if (!entry || !entry.hasSkills || entry.installation === 'BLOCKED') throw new Error('This Plugin cannot be installed from the catalog.')
+        if (!entry || !(entry.hasSkills || entry.hasMcp || entry.hasApps) || entry.installation === 'BLOCKED') throw new Error('This Plugin cannot be installed from the catalog.')
         if (this.operations.size >= 16 || [...this.operations.values()].filter(op => op.state.status === 'downloading').length >= 2) throw new Error('Finish or cancel the current Plugin downloads first.')
         if ([...this.operations.values()].some(op => op.owner === owner)) throw new Error('Finish or cancel your current Plugin review first.')
         const id = randomUUID()

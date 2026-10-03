@@ -12,6 +12,7 @@ import { AgentControlError } from '../../agent-control/control-errors'
 import { bindTrustedBrowserTarget, getAgentControlBroker } from '../../agent-control'
 import { BrowserSurfaceHost } from '../../agent-control/browser-surface-host'
 import { isWindowsControlOverlayWindow } from '../../agent-control/windows-control-overlay'
+import type { BrowserViewManager } from '../../browser-view-manager'
 
 function isTrustedAssistantRenderer(window: BrowserWindow | null, mainWindow: BrowserWindow): boolean {
     if (!window || window.isDestroyed() || isWindowsControlOverlayWindow(window)) return false
@@ -43,7 +44,7 @@ async function result<T>(operation: () => T | Promise<T>) {
     }
 }
 
-export function createAgentControlHandlers(mainWindow: BrowserWindow, getMainWindow: () => BrowserWindow | null = () => mainWindow) {
+export function createAgentControlHandlers(mainWindow: BrowserWindow, getMainWindow: () => BrowserWindow | null = () => mainWindow, browserViews?: Pick<BrowserViewManager, 'executeHiddenControlRequest'>) {
     const broker = getAgentControlBroker()
     const surfaceRequestWindows = new Map<string, BrowserWindow>()
     const currentMainWindow = () => {
@@ -51,6 +52,14 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow, getMainWin
         return window && !window.isDestroyed() && !window.webContents.isDestroyed() ? window : null
     }
     const browserSurface = new BrowserSurfaceHost({
+        ...(browserViews ? { executeHidden: (request, signal) => {
+            const targetOwnerId = request.targetId ? broker.targets.get(request.targetId).ownerWebContentsId : undefined
+            const destination = targetOwnerId
+                ? BrowserWindow.getAllWindows().find(window => !window.isDestroyed() && window.webContents.id === targetOwnerId)
+                : currentMainWindow()
+            if (!destination || destination.webContents.isDestroyed()) return Promise.reject(new Error('The Browser owner window is unavailable.'))
+            return browserViews.executeHiddenControlRequest(destination, request, signal)
+        } } : {}),
         send: (request) => {
             const targetOwnerId = request.targetId
                 ? broker.targets.list().find((entry) => entry.target.targetId === request.targetId)?.ownerWebContentsId

@@ -118,7 +118,7 @@ assert.equal(events.filter((event) => event.type === 'session.created').length, 
 assert.equal(events.filter((event) => event.type === 'session.updated').length, 2, 'only the heuristic title and final generated title update session metadata')
 
 const serviceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
-const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 const promptTurnStart = runtimeSource.indexOf('private async runPromptTurn')
 const promptTurnSource = runtimeSource.slice(promptTurnStart, runtimeSource.indexOf('private async ensureConnected', promptTurnStart))
 const recoverySource = serviceSource.slice(serviceSource.indexOf('private async recoverSelectedSessionTitle'), serviceSource.indexOf('private async ensureReady'))

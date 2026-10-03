@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { AssistantPluginCatalog, AssistantPluginInspection, AssistantProject, AssistantSession } from '@shared/assistant/contracts'
+import type { AssistantPluginCatalog, AssistantPluginInspection, AssistantProject, AssistantSession, AssistantSetPluginAppViewSettingsInput } from '@shared/assistant/contracts'
 import { getPluginRelease, getPluginSet, getReviewedCatalogPluginSelection, togglePluginSetId } from './plugin-directory-state'
 import { assistantStore } from '@/lib/assistant/store'
 import { pluginDownloadController } from './plugin-download-controller'
+import storeCatalog from '@shared/plugins/openai-directory.json'
 
 export function usePluginDirectory(desktopHost: boolean, selectedSession: AssistantSession | null) {
     const serviceAvailable = typeof window.devscope.assistant.getPluginCatalog === 'function'
@@ -15,10 +16,11 @@ export function usePluginDirectory(desktopHost: boolean, selectedSession: Assist
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [notice, setNotice] = useState<string | null>(null)
+    const [installationToast, setInstallationToast] = useState<{ message: string; key: number } | null>(null)
     const mutationPending = useRef(false)
     const loadRevision = useRef(0)
     const download = useSyncExternalStore(pluginDownloadController.subscribe, pluginDownloadController.getSnapshot, pluginDownloadController.getSnapshot)
-    const downloadPending = ['preparing', 'ready', 'installing', 'cancelling'].includes(download.phase)
+    const downloadPending = ['preparing', 'ready', 'installing', 'connecting', 'cancelling'].includes(download.phase)
     const mounted = useRef(true)
     const catalogInstallAvailable = typeof window.devscope.assistant.startPluginDownload === 'function'
 
@@ -61,12 +63,31 @@ export function usePluginDirectory(desktopHost: boolean, selectedSession: Assist
         return () => { loadRevision.current += 1 }
     }, [loadCatalog])
 
-    const observedInstallation = useRef(download.installationRevision)
+    const observedInstallation = useRef(download.installationRevision || 0)
+    const installingName = useRef<string | null>(null)
+    if (download.name) installingName.current = download.name
     useEffect(() => {
-        if (observedInstallation.current === download.installationRevision) return
-        observedInstallation.current = download.installationRevision
+        const revision = download.installationRevision || 0
+        if (observedInstallation.current === revision) return
+        observedInstallation.current = revision
+        const name = download.installedName || installingName.current
+        setInstallationToast({ message: `${storeCatalog.entries.find(entry => entry.name === name)?.displayName || name || 'Plugin'} installed`, key: Date.now() })
         void loadCatalog()
-    }, [download.installationRevision, loadCatalog])
+    }, [download.installationRevision, download.installedName, loadCatalog])
+    const observedConnection = useRef(download.connectionRevision || 0)
+    useEffect(() => {
+        const revision = download.connectionRevision || 0
+        if (observedConnection.current === revision) return
+        observedConnection.current = revision
+        if (download.connectionError) setError(`Plugin installed. ${download.connectionError} Use Connect on its page to retry.`)
+        else setNotice('Connected. Ready to use in chat.')
+        void loadCatalog()
+    }, [download.connectionRevision, download.connectionError, loadCatalog])
+    useEffect(() => {
+        if (!installationToast) return
+        const timer = window.setTimeout(() => setInstallationToast(null), 4000)
+        return () => window.clearTimeout(timer)
+    }, [installationToast])
 
     const mutate = useCallback(async (action: () => Promise<void>) => {
         if (mutationPending.current || !desktopHost || !serviceAvailable) return
@@ -105,7 +126,7 @@ export function usePluginDirectory(desktopHost: boolean, selectedSession: Assist
         if (!catalogInstallAvailable) { setError('Restart Zyra Desktop to enable managed Plugin installation.'); return }
         setError(null)
         setNotice(null)
-        await pluginDownloadController.start(name)
+        await pluginDownloadController.start(name, { install: true, connect: storeCatalog.entries.find(entry => entry.name === name)?.hasMcp === true })
     }, [catalogInstallAvailable, desktopHost, serviceAvailable, inspection])
 
     const useInNewChat = useCallback((pluginId: string, onCreated: (sessionId: string) => void) => mutate(async () => {
@@ -134,7 +155,7 @@ export function usePluginDirectory(desktopHost: boolean, selectedSession: Assist
             return
         }
         if (managed) pluginDownloadController.finishInstall()
-        if (mounted.current) { setCatalog(installedCatalog); setInspection(null); setNotice('Plugin installed.') }
+        if (mounted.current) { setCatalog(installedCatalog); setInspection(null); if (!managed) setInstallationToast({ message: `${reviewed.manifest.interface.displayName || 'Plugin'} installed`, key: Date.now() }) }
         const release = !managed ? installedCatalog.releases.find(entry => entry.contentDigest === reviewed.release.contentDigest) : null
         if (release && mounted.current) setSelectedPluginId(release.pluginId)
         if (!onCreated || !managed) return
@@ -173,6 +194,14 @@ export function usePluginDirectory(desktopHost: boolean, selectedSession: Assist
         setNotice(enabled ? 'Plugin activated. Its availability remains unchanged.' : 'Plugin disabled and removed from new-Chat Plugin sets.')
     }), [mutate])
 
+    const updateAppViewSettings = useCallback((input: Omit<AssistantSetPluginAppViewSettingsInput, 'expectedCatalogRevision'>) => mutate(async () => {
+        if (!catalog) return
+        const result = await window.devscope.assistant.setPluginAppViewSettings({ ...input, expectedCatalogRevision: catalog.revision })
+        if (!result.success) throw new Error(result.error || 'Could not update app views.')
+        setCatalog(result.catalog)
+        setNotice('App view settings saved.')
+    }), [catalog, mutate])
+
     const refreshCurrentChat = useCallback(() => mutate(async () => {
         if (!selectedSession) return
         const result = await window.devscope.assistant.refreshChatPluginScope({ sessionId: selectedSession.id })
@@ -196,11 +225,11 @@ export function usePluginDirectory(desktopHost: boolean, selectedSession: Assist
     }), [mutate])
 
     return {
-        catalog, projects, loading, busy, error, notice, serviceAvailable,
+        catalog, projects, loading, busy: busy || downloadPending, error, notice, installationToast, serviceAvailable,
         selectedPlugin: catalog?.plugins.find((plugin) => plugin.id === selectedPluginId) || null,
         selectPlugin: setSelectedPluginId,
         inspection, packageLabel, cancelInspection: () => { if (!mutationPending.current) setInspection(null) },
         download, downloadPending, cancelDownload, catalogInstallAvailable, beginCatalogInstall, useInNewChat,
-        loadCatalog, beginInstall, installReviewedPlugin, updatePluginSet, updatePluginState, refreshCurrentChat, rollbackPlugin
+        loadCatalog, beginInstall, installReviewedPlugin, updatePluginSet, updatePluginState, updateAppViewSettings, refreshCurrentChat, rollbackPlugin
     }
 }

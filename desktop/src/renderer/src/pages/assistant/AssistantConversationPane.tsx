@@ -1,8 +1,9 @@
 import { withExtensionTabContext } from '@/lib/browser-extension'
 import { normalizeSpeakingStyle } from '@shared/assistant/speaking-style'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantApprovalDecision, AssistantChatScopeRoot, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantChatScopeRoot, AssistantMessage, AssistantProject, AssistantProposedPlan, AssistantSession, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
+import { hasActiveAssistantCompaction } from '@shared/assistant/compaction-state'
 import { isAssistantSessionProjectLocked } from '@shared/assistant/session-project'
 import { useSettings, type AssistantProductProfile } from '@/lib/settings'
 import {
@@ -22,13 +23,14 @@ import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
 import { projectVoiceLiveTimelineMessages } from './assistant-voice-live-timeline'
 import { resolveAssistantComposerLaunchConfiguration } from './assistant-new-chat-composer-config'
+import { supportsAssistantFastMode } from './assistant-model-groups'
 import { AssistantCanonicalVoiceDock } from './AssistantCanonicalVoiceDock'
 import { AssistantCanonicalVoiceStage } from './AssistantCanonicalVoiceStage'
 import { AssistantChatOnboardingOverlay } from './AssistantChatOnboardingOverlay'
 import { AssistantConnectionRecoveryBanner } from './AssistantConnectionRecoveryBanner'
 import { AssistantConversationHeader } from './AssistantConversationHeader'
 import { AssistantConversationComposerPane } from './AssistantConversationComposerPane'
-import { AssistantConversationTimelinePane } from './AssistantConversationTimelinePane'
+import { AssistantConversationTimelinePane, preloadAssistantTimeline } from './AssistantConversationTimelinePane'
 import type { AssistantConversationPaneProps } from './AssistantConversationPane.types'
 import { RenameSessionModal, SessionDeleteModal } from './AssistantSessionsRailDialogs'
 import type { AssistantComposerSendOptions, AssistantElementBounds, ComposerContextFile } from './assistant-composer-types'
@@ -41,6 +43,7 @@ import {
 import { getAssistantThreadDisplayTitle, getProjectLabel, getSessionDisplayTitle, isAssistantDraftSession, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import {
     deriveAssistantConversationSurfaceMode,
+    isAssistantComposerTurnActive,
     resolveAssistantComposerConnectionPresentation
 } from './assistant-conversation-surface-mode'
 import { readInstructorVoicePreferences } from './instructor-voice-preferences'
@@ -52,6 +55,7 @@ import { useAssistantPageTimelineScroll } from './useAssistantPageTimelineScroll
 import { useAssistantProjectCatalog } from './useAssistantProjectCatalog'
 import { resolveAssistantProjectLabel } from './assistant-project-label'
 import { buildAssistantProjectChoices, getAssistantProjectIconSourcePath } from './assistant-project-choices'
+import { getNewChatProjectUnavailableReason, getOptimisticProjectWorkingRoot, runLatestProjectSave } from './assistant-new-chat-project-selection'
 import { useAgentControlState } from './useAgentControlState'
 import { isControlPrincipalForThread } from './assistant-thread-details'
 
@@ -62,6 +66,13 @@ const NEW_CHAT_HANDOFF_VISUAL_MS = 360
 const NEW_CHAT_HANDOFF_SESSION_ID = 'assistant-session-new-chat-handoff'
 const VOICE_TIMELINE_RESERVE_PX = 500
 const VOICE_SCROLL_BUTTON_BOTTOM_PX = 78
+type PendingProjectSelection = {
+    sessionId: string
+    projectId: string | null
+    projectPath: string
+    project: AssistantProject | null
+    saving: boolean
+}
 function areQueuedComposerSessionStatesEqual(
     left: AssistantQueuedComposerSessionState[],
     right: AssistantQueuedComposerSessionState[]
@@ -77,6 +88,7 @@ function areQueuedComposerSessionStatesEqual(
             || leftState.latestTurnState !== rightState.latestTurnState
             || leftState.pendingApprovalCount !== rightState.pendingApprovalCount
             || leftState.pendingUserInputCount !== rightState.pendingUserInputCount
+            || leftState.compacting !== rightState.compacting
         ) {
             return false
         }
@@ -85,6 +97,10 @@ function areQueuedComposerSessionStatesEqual(
 }
 
 export function AssistantConversationPane(props: AssistantConversationPaneProps) {
+    useEffect(() => {
+        // Empty chats also warm rendering before the first prompt is sent.
+        void preloadAssistantTimeline().catch(() => undefined)
+    }, [])
     const controller = useAssistantConversationStore()
     const historyWindowKey = `${controller.selectedSession?.id || ''}:${controller.activeThread?.id || ''}`
     const initialHistoryRef = useRef({key: historyWindowKey, cold: !controller.history})
@@ -100,6 +116,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const composerPaneRef = useRef<HTMLDivElement | null>(null)
     const [zyraProfileOverride, setZyraProfileOverride] = useState<AssistantProductProfile | null>(null)
     const [optimisticPromptStartedAt, setOptimisticPromptStartedAt] = useState<string | null>(null)
+    const optimisticPromptStartedAtRef = useRef<string | null>(null)
     const [optimisticPromptSending, setOptimisticPromptSending] = useState(false)
     const [optimisticPromptBoundary, setOptimisticPromptBoundary] = useState<{
         sessionId: string
@@ -131,6 +148,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const [interactionModeOverride, setInteractionModeOverride] = useState<'default' | null>(null)
     const [implementationToastVisible, setImplementationToastVisible] = useState(false)
     const [newChatHandoffRevision, setNewChatHandoffRevision] = useState(0)
+    const [pendingProjectSelections, setPendingProjectSelections] = useState<Record<string, PendingProjectSelection>>({})
+    const pendingProjectSelectionsRef = useRef(new Map<string, PendingProjectSelection>())
+    const projectSaveWorkersRef = useRef(new Set<string>())
     const [composerInsetEnd, setComposerInsetEnd] = useState(0)
     const [attachmentShelfTop, setAttachmentShelfTop] = useState<number | null>(null)
     const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
@@ -187,10 +207,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const newChatHandoffActive = isCreatingFreshChat || newChatHandoffUntilRef.current > Date.now()
     const activeComposerSessionId = newChatHandoffActive ? null : selectedSessionId
     useEffect(() => {
+        if (optimisticPromptBoundary?.sessionId === selectedSessionId || (optimisticPromptSending && !optimisticPromptBoundary)) return
+        optimisticPromptStartedAtRef.current = null
         setOptimisticPromptSending(false)
         setOptimisticPromptStartedAt(null)
         setOptimisticPromptBoundary(null)
-    }, [activeComposerSessionId])
+    }, [activeComposerSessionId, optimisticPromptBoundary?.sessionId, optimisticPromptSending, selectedSessionId])
     const queueSessionStates = useAssistantStoreSelector((state) => (
         state.snapshot.sessions.map((session) => {
             const activeThread = session.threads.find((thread) => thread.id === session.activeThreadId) || null
@@ -198,6 +220,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                 sessionId: session.id,
                 threadState: activeThread?.state || 'idle',
                 latestTurnState: activeThread?.latestTurn?.state || null,
+                compacting: hasActiveAssistantCompaction(activeThread?.activities || []),
                 pendingApprovalCount: activeThread?.pendingApprovals.filter((approval) => approval.status === 'pending').length || 0,
                 pendingUserInputCount: activeThread?.pendingUserInputs.filter((input) => input.status === 'pending').length || 0
             }
@@ -205,19 +228,32 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     ), areQueuedComposerSessionStatesEqual)
     const selectedProjectPath = controller.selectedSession ? resolveSessionProjectPath(controller.selectedSession) : ''
     const selectedProjectId = controller.selectedSession?.projectId || null
+    const visiblePendingProjectSelection = selectedSessionId ? pendingProjectSelections[selectedSessionId] || null : null
+    useEffect(() => {
+        if (!selectedSessionId || !visiblePendingProjectSelection || visiblePendingProjectSelection.saving) return
+        if (selectedProjectId !== visiblePendingProjectSelection.projectId) return
+        if (pendingProjectSelectionsRef.current.get(selectedSessionId) !== visiblePendingProjectSelection) return
+        pendingProjectSelectionsRef.current.delete(selectedSessionId)
+        setPendingProjectSelections((current) => {
+            const next = { ...current }
+            delete next[selectedSessionId]
+            return next
+        })
+    }, [selectedProjectId, selectedSessionId, visiblePendingProjectSelection])
     const pendingCreateProjectPath = pendingCreateSessionInput?.workingRoot?.trim()
         || pendingCreateSessionInput?.projectPath?.trim()
         || ''
     const pendingCreateProjectId = pendingCreateSessionInput?.projectId?.trim() || null
     const lastResolvedProjectPathBySessionRef = useRef<Record<string, string>>({})
     const selectedSessionMode = 'work' as const
-    const displayProjectPath = isCreatingFreshChat ? pendingCreateProjectPath : selectedProjectPath || (
+    const displayProjectPath = isCreatingFreshChat ? pendingCreateProjectPath : visiblePendingProjectSelection?.projectPath ?? (selectedProjectPath || (
         (controller.commandPending || controller.loading) && selectedSessionId
             ? lastResolvedProjectPathBySessionRef.current[selectedSessionId] || ''
             : ''
-    )
-    const displayProjectId = isCreatingFreshChat ? pendingCreateProjectId : selectedProjectId
-    const selectedProjectRecord = projectCatalogState.catalog.projects.find((project) => project.id === displayProjectId) || null
+    ))
+    const displayProjectId = isCreatingFreshChat ? pendingCreateProjectId : visiblePendingProjectSelection ? visiblePendingProjectSelection.projectId : selectedProjectId
+    const selectedProjectRecord = projectCatalogState.catalog.projects.find((project) => project.id === displayProjectId)
+        || (visiblePendingProjectSelection?.projectId === displayProjectId ? visiblePendingProjectSelection.project : null)
     const displayProjectName = selectedProjectRecord?.name || null
     const selectedSessionTitle = controller.selectedSession ? getSessionDisplayTitle(controller.selectedSession) : 'Assistant'
     const activeThreadIsSubagent = controller.activeThread?.source === 'subagent'
@@ -325,10 +361,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const shouldShowWorkingIndicator = timelinePresentationIsWorking
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
     const canonicalLatestTurnStartedAt = controller.activeThread?.latestTurn?.startedAt || null
-    const effectiveLatestTurnStartedAt = optimisticBoundaryBelongsToThread
-        && optimisticPromptBoundary
-        && (!canonicalLatestTurnStartedAt || canonicalLatestTurnStartedAt < optimisticPromptBoundary.startedAt)
-        ? optimisticPromptBoundary.startedAt
+    const effectiveLatestTurnStartedAt = optimisticBoundaryBelongsToThread && optimisticPromptBoundary
+        ? [optimisticPromptBoundary.startedAt, canonicalLatestTurnStartedAt].filter((value): value is string => Boolean(value)).sort()[0]
         : canonicalLatestTurnStartedAt || optimisticPromptStartedAt
     const displayedTimelineMessages = useMemo((): AssistantMessage[] => {
         const canonicalMessages = reconcileAssistantMessageReplays(controller.timelineMessages)
@@ -380,7 +414,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         connectionRecovery.reconnectPending || (controller.commandPending && !controller.connected && !isThreadWorking)
     )
     const isThreadConnecting = controller.phase.key === 'starting' || isReconnectPending
-    const activeStatusLabel = isThreadConnecting ? 'Connecting...' : 'Working...'
+    const selectedCompacting = queueSessionStates.find(state => state.sessionId === selectedSessionId)?.compacting === true
+    const activeStatusLabel = selectedCompacting ? 'Letting compaction finish' : isThreadConnecting ? 'Connecting...' : 'Working...'
     const composerConnectionPresentation = resolveAssistantComposerConnectionPresentation({
         connected: controller.connected,
         hasComposerSession: Boolean(activeComposerSessionId),
@@ -744,8 +779,16 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
 
     const handleComposerSendingChange = useCallback((sending: boolean) => {
         setOptimisticPromptSending(sending)
-        setOptimisticPromptStartedAt((current) => sending ? current || new Date().toISOString() : null)
+        if (sending) optimisticPromptStartedAtRef.current ||= new Date().toISOString()
+        else optimisticPromptStartedAtRef.current = null
+        setOptimisticPromptStartedAt(optimisticPromptStartedAtRef.current)
     }, [])
+
+    const canDispatchPrompt = useCallback((sessionId: string) => {
+        if (!pendingProjectSelectionsRef.current.get(sessionId)?.saving) return true
+        props.onShowToast?.('Project change is still saving. Try sending again in a moment.', 'error')
+        return false
+    }, [props.onShowToast])
 
     const handleDispatchPrompt = useCallback(async (
         sessionId: string,
@@ -754,10 +797,18 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         options: AssistantComposerSendOptions
     ) => {
         if (!sessionId) return false
+        if (pendingProjectSelectionsRef.current.get(sessionId)?.saving) {
+            props.onShowToast?.('Project change is still saving. Try sending again in a moment.', 'error')
+            return false
+        }
         let browserPrompt: string
         try { browserPrompt = await withExtensionTabContext(buildPromptWithContextFiles(prompt, contextFiles)) }
         catch (reason) { props.onShowToast?.(reason instanceof Error ? reason.message : 'Browser context is unavailable.', 'error'); return false }
-        const startedAt = new Date().toISOString()
+        if (pendingProjectSelectionsRef.current.get(sessionId)?.saving) {
+            props.onShowToast?.('Project change is still saving. Try sending again in a moment.', 'error')
+            return false
+        }
+        const startedAt = optimisticPromptStartedAtRef.current || new Date().toISOString()
         const previousUserMessageId = [...controller.timelineMessages].reverse().find((message) => message.role === 'user')?.id || null
         setOptimisticPromptBoundary({
             sessionId,
@@ -783,7 +834,14 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         }
         return result.success
     }, [actions, activeRuntimeZyraProfile, controller.activeThread?.id, controller.timelineMessages, props.onShowToast])
-    const isAssistantBusy = !newChatHandoffActive && (controller.commandPending || isThreadWorking)
+    const composerTurnActive = isAssistantComposerTurnActive({
+        newChatHandoffActive,
+        selectedSessionIsDraft,
+        isThreadWorking,
+        optimisticPromptSending,
+        optimisticPromptAwaitingUserMessage
+    })
+    const isAssistantBusy = !newChatHandoffActive && (controller.commandPending || composerTurnActive)
     const {
         sendingComposerPrompt,
         queuedComposerMessageCount,
@@ -801,8 +859,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         activeTurnId: newChatHandoffActive ? null : controller.activeThread?.latestTurn?.id || null,
         busyMessageMode: settings.assistantBusyMessageMode,
         onSendingChange: handleComposerSendingChange,
+        canDispatchPrompt,
         dispatchPrompt: handleDispatchPrompt,
-        interruptTurn: (turnId, sessionId) => actions.interruptTurn(turnId, sessionId)
+        interruptTurn: async (turnId, sessionId) => {
+            const result = await actions.interruptTurnResult(turnId, sessionId)
+            if (!result.success) throw new Error(result.error || 'Could not interrupt the current turn.')
+        }
     })
     const handleImplementProposedPlan = useCallback(async (plan: AssistantProposedPlan) => {
         const planMarkdown = String(plan.planMarkdown || '').trim()
@@ -818,7 +880,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                 runtimeMode: controller.activeThread?.runtimeMode || 'approval-required',
                 interactionMode: 'default',
                 effort: controller.activeThread?.latestTurn?.effort || undefined,
-                serviceTier: controller.activeThread?.latestTurn?.serviceTier === 'fast' ? 'fast' : undefined,
+                serviceTier: controller.activeThread?.latestTurn?.serviceTier === 'fast' && supportsAssistantFastMode(controller.activeThread?.model || '') ? 'fast' : undefined,
                 profile: activeRuntimeZyraProfile
             }
         )
@@ -969,26 +1031,106 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         }
     }, [actions, controller.commandPending, controller.selectedSession?.id, projectCatalogState, props.onShowToast, requestProjectCreation])
 
-    const handleSelectNewChatProject = useCallback(async (projectId: string | null) => {
+    const startProjectSaveWorker = useCallback((sessionId: string) => {
+        if (projectSaveWorkersRef.current.has(sessionId)) return
+        projectSaveWorkersRef.current.add(sessionId)
+        void (async () => {
+            try {
+                await runLatestProjectSave({
+                    getLatest: () => {
+                        const selection = pendingProjectSelectionsRef.current.get(sessionId)
+                        return selection?.saving ? selection : null
+                    },
+                    save: (selection) => actions.setSessionProjectResult(sessionId, { projectId: selection.projectId }),
+                    settle: (selection, result) => {
+                        if (!result.success) {
+                            pendingProjectSelectionsRef.current.delete(sessionId)
+                            setPendingProjectSelections((current) => {
+                                const next = { ...current }
+                                delete next[sessionId]
+                                return next
+                            })
+                            props.onShowToast?.(`Could not update Project: ${result.error}`, 'error')
+                            void actions.refresh()
+                            return
+                        }
+                        const savedSelection = { ...selection, saving: false }
+                        pendingProjectSelectionsRef.current.set(sessionId, savedSelection)
+                        setPendingProjectSelections((current) => ({ ...current, [sessionId]: savedSelection }))
+                    }
+                })
+            } finally {
+                projectSaveWorkersRef.current.delete(sessionId)
+                if (pendingProjectSelectionsRef.current.get(sessionId)?.saving) startProjectSaveWorker(sessionId)
+            }
+        })()
+    }, [actions, props.onShowToast])
+
+    const commitNewChatProject = useCallback((projectId: string | null, project?: AssistantProject) => {
         const session = controller.selectedSession
-        if (!session || !selectedSessionIsDraft || projectDirectoryLocked || controller.commandPending) return
-        // Selecting a Project uses the existing backend Working-root policy.
-        // Its icon source is presentation metadata, not a scope/authority choice.
-        const result = await actions.setSessionProjectResult(session.id, { projectId })
-        if (!result.success) {
-            props.onShowToast?.(`Could not update Project: ${result.error}`, 'error')
+        const unavailableReason = getNewChatProjectUnavailableReason({
+            hasSession: Boolean(session),
+            isDraft: selectedSessionIsDraft,
+            projectLocked: projectDirectoryLocked || optimisticPromptSending || optimisticPromptAwaitingUserMessage,
+            commandPending: controller.commandPending,
+            catalogLoading: projectCatalogState.loading && projectCatalogState.catalog.projects.length === 0
+                && !pendingProjectSelectionsRef.current.has(session?.id || '')
+        })
+        if (unavailableReason) {
+            props.onShowToast?.(unavailableReason, 'error')
+            return
         }
-    }, [actions, controller.commandPending, controller.selectedSession, projectDirectoryLocked, props.onShowToast, selectedSessionIsDraft])
+        if (!session) return
+        const pendingSelection = pendingProjectSelectionsRef.current.get(session.id)
+        const currentProjectId = pendingSelection ? pendingSelection.projectId : session.projectId || null
+        if (projectId === currentProjectId) return
+        const selectedProject = project || projectCatalogState.catalog.projects.find((candidate) => candidate.id === projectId)
+        if (projectId && (!selectedProject || selectedProject.archived)) {
+            props.onShowToast?.('That project is no longer available. Refresh the project list and try again.', 'error')
+            return
+        }
+        const projectPath = selectedProject ? getOptimisticProjectWorkingRoot(selectedProject) : ''
+        const selection = { sessionId: session.id, projectId, projectPath, project: selectedProject || null, saving: true }
+        pendingProjectSelectionsRef.current.set(session.id, selection)
+        setPendingProjectSelections((current) => ({ ...current, [session.id]: selection }))
+        startProjectSaveWorker(session.id)
+    }, [controller.commandPending, controller.selectedSession, optimisticPromptAwaitingUserMessage, optimisticPromptSending, projectCatalogState.catalog.projects, projectCatalogState.loading, projectDirectoryLocked, props.onShowToast, selectedSessionIsDraft, startProjectSaveWorker])
+
+    const handleSelectNewChatProject = useCallback(async (projectId: string | null) => {
+        await commitNewChatProject(projectId)
+    }, [commitNewChatProject])
+
+    const projectContextUnavailableReason = getNewChatProjectUnavailableReason({
+        hasSession: Boolean(controller.selectedSession) && !newChatHandoffActive,
+        isDraft: selectedSessionIsDraft,
+        projectLocked: projectDirectoryLocked || optimisticPromptSending || optimisticPromptAwaitingUserMessage,
+        commandPending: controller.commandPending,
+        catalogLoading: projectCatalogState.loading && projectCatalogState.catalog.projects.length === 0
+            && !pendingProjectSelectionsRef.current.has(selectedSessionId || '')
+    })
+    const handleProjectContextUnavailable = useCallback((reason: string) => {
+        props.onShowToast?.(reason, 'error')
+    }, [props.onShowToast])
 
     const handleCreateNewChatProject = useCallback(async () => {
         const session = controller.selectedSession
-        if (!session || !selectedSessionIsDraft || projectDirectoryLocked || controller.commandPending) return
+        const unavailableReason = getNewChatProjectUnavailableReason({
+            hasSession: Boolean(session),
+            isDraft: selectedSessionIsDraft,
+            projectLocked: projectDirectoryLocked || optimisticPromptSending || optimisticPromptAwaitingUserMessage,
+            commandPending: controller.commandPending,
+            catalogLoading: projectCatalogState.loading && projectCatalogState.catalog.projects.length === 0
+                && !pendingProjectSelectionsRef.current.has(session?.id || '')
+        })
+        if (unavailableReason) {
+            props.onShowToast?.(unavailableReason, 'error')
+            return
+        }
         const project = await requestProjectCreation()
         if (!project) return
-        const workingRoot = project.folders[0]?.path || project.homePath
-        const result = await actions.setSessionProjectResult(session.id, { projectId: project.id, workingRoot })
-        if (!result.success) props.onShowToast?.(`Could not update Project: ${result.error}`, 'error')
-    }, [actions, controller.commandPending, controller.selectedSession, projectDirectoryLocked, props.onShowToast, requestProjectCreation, selectedSessionIsDraft])
+        await commitNewChatProject(project.id, project)
+        await projectCatalogState.refresh()
+    }, [commitNewChatProject, controller.commandPending, controller.selectedSession, optimisticPromptAwaitingUserMessage, optimisticPromptSending, projectCatalogState, projectDirectoryLocked, props.onShowToast, requestProjectCreation, selectedSessionIsDraft])
 
     const handleToggleDetailsPanel = useCallback(() => {
         props.onToggleRightSidebar()
@@ -1113,6 +1255,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             assistantMessageFilePath={assistantMessageFilePath}
                             windowKey={`${controller.selectedSession?.id || 'no-session'}:${controller.activeThread?.id || 'no-thread'}`}
                             isWorking={timelinePresentationIsWorking}
+                            waitingForCompaction={selectedCompacting && queuedComposerMessageCount > 0}
                             activeStatusLabel={activeStatusLabel}
                             isConnecting={isThreadConnecting && !voiceVisible}
                             suppressEmptyProjectBadge={voiceVisible}
@@ -1122,6 +1265,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             turnUsageById={turnUsageById}
                             deletingMessageId={props.deletingMessageId}
                             focusMessageId={props.focusMessageId}
+                            followLatestRequestKey={optimisticBoundaryBelongsToThread && optimisticPromptBoundary ? `${optimisticPromptBoundary.sessionId}:${optimisticPromptBoundary.startedAt}` : null}
                             loadingChats={isLoadingSelectedChat}
                             selectionHydrating={controller.selectionHydrating}
                             coldStart={initialHistoryRef.current.cold}
@@ -1187,7 +1331,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         commandPending={!newChatHandoffActive && controller.commandPending}
                         composerDisabled={newChatHandoffActive}
                         sending={sendingComposerPrompt}
-                        thinking={!newChatHandoffActive && (controller.commandPending || isThreadWorking)}
+                        thinking={composerTurnActive}
                         queuedMessageCount={queuedComposerMessageCount}
                         queuedMessages={queuedComposerMessageItems}
                         onForceQueuedMessage={handleForceQueuedMessage}
@@ -1206,7 +1350,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         projectIconSourcePath={projectIconSourcePath}
                         projectRoots={composerProjectRoots}
                         projectChoices={composerIsCentered ? newChatProjectChoices : undefined}
-                        projectContextDisabled={newChatHandoffActive || projectDirectoryLocked || controller.commandPending || projectCatalogState.loading}
+                        projectContextUnavailableReason={projectContextUnavailableReason}
+                        onProjectContextUnavailable={handleProjectContextUnavailable}
                         onSelectProject={composerIsCentered ? handleSelectNewChatProject : undefined}
                         onCreateProject={composerIsCentered ? handleCreateNewChatProject : undefined}
                         availableModels={availableModels}

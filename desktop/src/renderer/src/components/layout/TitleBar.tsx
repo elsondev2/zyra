@@ -1,3 +1,5 @@
+import { resolveShortcut } from '@shared/keybindings'
+import { isShortcutRecording, isProtectedShortcutTarget, keyboardInput, shortcutPlatform, useShortcutLabel } from '@/lib/keybindings'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
 import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
@@ -7,7 +9,7 @@ import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/compone
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { AudioLines, ChevronDown, Copy, Minus, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Puzzle, RotateCw, Search, Settings2, Square, SquarePen, X } from 'lucide-react'
+import { AudioLines, ChevronDown, Copy, Info, Minus, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Puzzle, RotateCw, Search, Settings2, Square, SquarePen, X } from 'lucide-react'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import { useAssistantTitleBarContent, useAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
 import { useLoadingScreenActive } from '@/components/ui/LoadingState'
@@ -62,6 +64,7 @@ export default function TitleBar() {
     const navigate = useNavigate()
     const location = useLocation()
     const commandPalette = useCommandPalette()
+    const shortcut = useShortcutLabel()
     const { settings } = useSettings()
     const { runtime, policy: windowChromePolicy, isMaximized } = useWindowChrome()
     const loadingScreenActive = useLoadingScreenActive()
@@ -84,6 +87,7 @@ export default function TitleBar() {
     const pendingNavigationKeyRef = useRef<string | null>(null)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(settings.sidebarCollapsed)
     const [appMenuOpen, setAppMenuOpen] = useState(false)
+    const [runtimeDetailsOpen, setRuntimeDetailsOpen] = useState(false)
     const [accessoryError, setAccessoryError] = useState<string | null>(null)
     const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
     const controlActive = Boolean(controlState?.active || (controlState && controlState.pairing.state !== 'stopped') || controlState?.pendingGrants.length)
@@ -248,11 +252,12 @@ export default function TitleBar() {
 
     useEffect(() => {
         const handleHistoryShortcut = (event: KeyboardEvent) => {
-            if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-            if (event.key === 'ArrowLeft' && canGoBack) {
+            if (event.defaultPrevented || isShortcutRecording() || isProtectedShortcutTarget(event)) return
+            const command = resolveShortcut(keyboardInput(event), shortcutPlatform(), 'navigation')
+            if (command === 'navigation.back' && canGoBack) {
                 event.preventDefault()
                 navigateHistory(-1)
-            } else if (event.key === 'ArrowRight' && canGoForward) {
+            } else if (command === 'navigation.forward' && canGoForward) {
                 event.preventDefault()
                 navigateHistory(1)
             }
@@ -271,28 +276,19 @@ export default function TitleBar() {
         void createAssistantChatAndNavigate(assistantActions, navigate)
     }, [assistantActions, navigate, selectedAssistantSession])
 
-    useEffect(() => window.devscope.window.onAppMenuCommand((command) => {
-        if (command === 'new-chat') handleNewChat()
-        else if (command === 'search') commandPalette.open()
-        else if (command === 'settings') navigate('/settings')
-        else if (command === 'about') navigate('/settings/about')
-        else if (command === 'reload') window.location.reload()
-    }), [commandPalette, handleNewChat, navigate])
-
     const runAppMenuAction = (action: () => void) => {
         setAppMenuOpen(false)
         action()
     }
 
-    const primaryShortcut = isMac ? 'âŒ˜' : 'Ctrl '
     const appMenuGroups: AppMenuItem[][] = [
         [
-            { id: 'new-chat', label: 'New chat', icon: <SquarePen size={14} />, shortcut: `${primaryShortcut}N`, action: handleNewChat },
-            { id: 'search', label: 'Search', icon: <Search size={14} />, shortcut: `${primaryShortcut}K`, action: commandPalette.open }
+            { id: 'new-chat', label: 'New chat', icon: <SquarePen size={14} />, shortcut: shortcut('app.newChat'), action: handleNewChat },
+            { id: 'search', label: 'Search', icon: <Search size={14} />, shortcut: shortcut('app.search').split(' / ')[0], action: commandPalette.open }
         ],
         [
             { id: 'plugins', label: 'Plugins', icon: <Puzzle size={14} />, action: () => navigate('/plugins') },
-            { id: 'settings', label: 'Settings', icon: <Settings2 size={14} />, shortcut: isMac ? 'âŒ˜,' : undefined, action: () => navigate('/settings') },
+            { id: 'settings', label: 'Settings', icon: <Settings2 size={14} />, shortcut: shortcut('app.settings'), action: () => navigate('/settings') },
             ...(!nativeDesktop ? [{ id: 'voice-lab', label: 'Voice Lab', icon: <AudioLines size={14} />, action: () => navigate('/assistant/instructor') }] : [])
         ]
     ]
@@ -334,7 +330,7 @@ export default function TitleBar() {
                         onClick={handleToggleSidebar}
                         className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-sparkle-text-secondary transition-colors hover:text-sparkle-text focus:outline-none focus-visible:text-sparkle-text"
                         style={{ WebkitAppRegion: 'no-drag' } as any}
-                        title={sidebarActionLabel}
+                        title={`${sidebarActionLabel}${!filePreviewFocusState.active && shortcut('app.sidebar') ? ` (${shortcut('app.sidebar')})` : ''}`}
                         aria-label={sidebarActionLabel}
                         aria-pressed={effectiveSidebarOpen}
                     >
@@ -356,14 +352,26 @@ export default function TitleBar() {
                             title={`${runtimeConnection.label} · ${runtimeConnection.detail}`}
                             aria-label={`Zyra · ${runtimeConnection.label} · ${runtimeConnection.detail}`}
                             style={{ color: `var(--status-${runtimeConnection.tone})` }}
-                        >Zyra{runtimeConnection.state.installation?.kind === 'development' ? ' Dev' : ''}</span>
+                        >{runtimeConnection.state.installation?.kind === 'development' ? 'Dev' : 'Zyra'}</span>
                         <ChevronDown size={11} className={cn('text-sparkle-text-muted transition-[color,transform] group-hover:text-sparkle-text-secondary', appMenuOpen && 'rotate-180 text-sparkle-text-secondary')} />
                     </button>
                     {appMenuOpen ? (
-                        <AnchoredNativeOverlay><div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">
-                            <div className="border-b border-[var(--surface-divider)] px-2.5 py-2 text-[11px] text-sparkle-text-muted" role="presentation">
-                                <div>{runtimeConnection.label} · {runtimeConnection.detail}</div>
-                                {runtimeConnection.state.instance ? <div className="mt-1 font-mono text-[10px] opacity-70" title="Connected instance">{runtimeConnection.state.instance.namespaceId.slice(0, 8)} / {runtimeConnection.state.instance.instanceId.slice(0, 8)}</div> : null}
+                        <AnchoredNativeOverlay><div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-visible rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">
+                            <div
+                                className="relative border-b border-[var(--surface-divider)] px-2.5 py-2 text-[11px] text-sparkle-text-muted"
+                                role="presentation"
+                                onMouseEnter={() => setRuntimeDetailsOpen(true)}
+                                onMouseLeave={() => setRuntimeDetailsOpen(false)}
+                            >
+                                <div className="flex items-center gap-1.5">
+                                    <span>{runtimeConnection.state.installation?.kind === 'development' ? 'Dev' : runtimeConnection.label} · {runtimeConnection.detail}</span>
+                                    <Info size={11} className={cn('shrink-0 transition-opacity', runtimeDetailsOpen ? 'opacity-85' : 'opacity-45')} aria-label="Show runtime details" />
+                                </div>
+                                <div className={cn('pointer-events-none absolute left-full top-0 z-[300] ml-2 w-56 rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-2.5 py-2 text-[10px] leading-4 text-sparkle-text-secondary shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition-[opacity,visibility]', runtimeDetailsOpen ? 'visible opacity-100' : 'invisible opacity-0')}>
+                                    <div className="font-medium text-sparkle-text">Runtime details</div>
+                                    <div>Commit: <span className="font-mono">{runtimeConnection.state.revision || 'Unavailable'}</span></div>
+                                    {runtimeConnection.state.instance ? <div>Instance: <span className="font-mono">{runtimeConnection.state.instance.namespaceId.slice(0, 8)} / {runtimeConnection.state.instance.instanceId.slice(0, 8)}</span></div> : null}
+                                </div>
                             </div>
                             {appMenuGroups.map((group, groupIndex) => (
                                 <div key={group[0]?.id || groupIndex} className={cn(groupIndex > 0 && 'mt-1 border-t border-[var(--surface-divider)] pt-1')}>
@@ -389,7 +397,7 @@ export default function TitleBar() {
                                     }} /> : null}
                                     {groupIndex === 1 ? <AppSubmenu label="View" icon={<PanelsTopLeft size={14} />} items={[
                                         ...(sidebarWorkspaceActive ? [{ id: 'sidebar', label: sidebarActionLabel, icon: <SidebarIcon size={14} />, onSelect: () => runAppMenuAction(handleToggleSidebar) }] : []),
-                                        { id: 'reload', label: 'Reload UI', icon: <RotateCw size={14} />, onSelect: () => runAppMenuAction(() => window.location.reload()) }
+                                        { id: 'reload', label: `Reload UI${shortcut('app.reload') ? ` (${shortcut('app.reload')})` : ''}`, icon: <RotateCw size={14} />, onSelect: () => runAppMenuAction(() => window.location.reload()) }
                                     ]} /> : null}
                                 </div>
                             ))}

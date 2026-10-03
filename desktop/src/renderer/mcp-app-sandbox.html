@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;background:transparent"><script>
+// Opaque-origin relay. Plugin HTML is always loaded into a second sandbox.
+if (window === window.top) throw new Error('An app view can only run inside Zyra.')
+const inner = document.createElement('iframe')
+inner.setAttribute('sandbox', 'allow-scripts')
+inner.setAttribute('referrerpolicy', 'no-referrer')
+inner.setAttribute('title', 'Plugin app view')
+inner.style.cssText = 'display:block;width:100%;height:100%;border:0;background:transparent'
+document.body.append(inner)
+document.documentElement.style.cssText = 'width:100%;height:100%'
+document.body.style.cssText = 'width:100%;height:100%;margin:0;overflow:hidden'
+
+function allowedOrigins(values) {
+  if (!Array.isArray(values)) return []
+  return values.filter((value) => typeof value === 'string' && /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(value)).slice(0, 16)
+}
+function viewDocument(html, csp) {
+  const policy = csp && typeof csp === 'object' ? csp : {}
+  const resources = allowedOrigins(policy.resourceDomains).join(' ')
+  const connections = allowedOrigins(policy.connectDomains).join(' ')
+  const directives = [
+    "default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-src 'none'", "object-src 'none'",
+    `script-src 'unsafe-inline' blob: ${resources}`, `style-src 'unsafe-inline' ${resources}`,
+    `img-src data: blob: ${resources}`, `font-src data: ${resources}`, `media-src data: blob: ${resources}`,
+    `connect-src ${connections || "'none'"}`
+  ].join('; ').replaceAll('&', '&amp;').replaceAll('"', '&quot;')
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${directives}"></head><body>${html}</body></html>`
+}
+window.addEventListener('message', (event) => {
+  document.body.dataset.lastMethod = String(event.data?.method || 'none')
+  if (event.source === window.parent) {
+    if (event.data?.jsonrpc !== '2.0') return
+    if (event.data.method === 'ui/notifications/sandbox-resource-ready') {
+      const params = event.data.params
+      if (typeof params?.html !== 'string' || params.html.length > 2 * 1024 * 1024) return
+      inner.srcdoc = viewDocument(params.html, params.csp)
+      return
+    }
+    inner.contentWindow?.postMessage(event.data, '*')
+  } else if (event.source === inner.contentWindow && event.data?.jsonrpc === '2.0') {
+    try { if (JSON.stringify(event.data).length > 256 * 1024) return } catch { return }
+    window.parent.postMessage(event.data, '*')
+  }
+})
+window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready', params: {} }, '*')
+</script></body>
+</html>

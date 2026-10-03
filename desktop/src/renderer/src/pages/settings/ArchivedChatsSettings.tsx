@@ -6,7 +6,6 @@ import { SettingsActionsMenu } from './SettingsActionsMenu'
 import { SettingsListPagination } from './SettingsListPagination'
 import { paginateSettingsItems } from './settings-list-page'
 import { createSettingsRowTargetId } from './settings-search'
-import { SettingsPageTabs } from './SettingsPageTabs'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import {
     formatAssistantSidebarRelativeTime,
@@ -75,13 +74,9 @@ export default function ArchivedChatsSettings() {
     const page = paginateSettingsItems(filteredSessions, requestedPage)
 
     return (
-        <SettingsPageContainer title="Chats" navigation={<SettingsPageTabs family="chats" />}>
-            <SettingsSection title="Archive">
-                <SettingsRow title="Archived chats" description="Chats stay saved until you restore or delete them." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{archivedSessions.length}</span>} />
+        <SettingsPageContainer title="Archived chats">
+            <SettingsSection title="Chats" hideHeader>
                 {actionError ? <SettingsNotice tone="error">{actionError}</SettingsNotice> : null}
-            </SettingsSection>
-
-            <SettingsSection title="Chats">
                 <div className="border-b border-[var(--settings-row-divider)] px-4 py-3" data-settings-search-target={createSettingsRowTargetId('Archive', 'Search')} tabIndex={-1}>
                     <SettingsInput value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} placeholder="Search by title, project or chat ID" aria-label="Search archived chats" className="sm:w-full" />
                 </div>

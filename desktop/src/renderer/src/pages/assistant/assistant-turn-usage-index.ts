@@ -20,7 +20,7 @@ export function buildAssistantTurnUsageIndex(
             id: live.latestTurn.id,
             sessionId: live.sessionId,
             threadId: live.threadId,
-            model: live.model,
+            model: persisted?.model || (live.latestTurn.state === 'running' ? live.model : ''),
             state: live.latestTurn.state,
             requestedAt: live.latestTurn.requestedAt,
             startedAt: live.latestTurn.startedAt,

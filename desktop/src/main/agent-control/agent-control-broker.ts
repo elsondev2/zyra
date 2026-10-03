@@ -1,4 +1,5 @@
 import { pointerPathIntersectsBounds } from './pointer-path-geometry'
+import { backgroundBrowserOperation } from './background-browser-policy'
 import { resolveWindowsControlBounds } from './windows-control-geometry'
 import { randomUUID } from 'crypto'
 import { matchesWindowsApplication } from './windows-application-match'
@@ -47,6 +48,7 @@ import { TargetInteractionArbiter } from './interaction-arbiter'
 import { redactObservation } from './redaction'
 import { TargetRegistry } from './target-registry'
 import type { AgentControlDriver } from './drivers/driver'
+import type { AssistantRuntimeMode } from '../../shared/assistant/contracts/runtime'
 
 export type BrowserSurfaceController = {
     openTab(principal: ControlPrincipal, reveal: boolean, sessionMode: 'normal' | 'incognito', signal?: AbortSignal): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
@@ -654,7 +656,7 @@ export class AgentControlBroker extends EventEmitter {
         }
     }
 
-    async act(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal, includeScreenshot = false) {
+    async act(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal, includeScreenshot = false, permissionMode: AssistantRuntimeMode = 'approval-required') {
         this.assertAlive()
         const request = assertControlActionRequest(requestValue)
         const grant = this.grants.requireActive(request.grantId, principal)
@@ -667,16 +669,16 @@ export class AgentControlBroker extends EventEmitter {
         const requiredSideEffect = controlActionRequiresApproval(request.action) ? request.action.sideEffect : undefined
         assertActionAllowed(grant, registered.target, request.action, { approvedSideEffect: requiredSideEffect })
         const requestedObservation = this.observations.requireRevision(request.targetId, request.observationRevision)
-        assertSafeObservedElementAction(requestedObservation, request.action)
+        assertSafeObservedElementAction(requestedObservation, request.action, permissionMode)
         assertVisualActionInsideObservation(requestedObservation, request.action)
-        if (requiredSideEffect) {
+        if (requiredSideEffect && permissionMode !== 'full-access') {
             await this.waitForActionApproval(principal, grant, request, requiredSideEffect, signal)
         }
         return this.actions.enqueue(request.targetId, async () => {
             const currentGrant = this.grants.requireActive(request.grantId, principal)
             const previousObservation = this.observations.requireRevision(request.targetId, request.observationRevision)
             assertActionAllowed(currentGrant, registered.target, request.action, { approvedSideEffect: requiredSideEffect })
-            assertSafeObservedElementAction(previousObservation, request.action)
+            assertSafeObservedElementAction(previousObservation, request.action, permissionMode)
             assertVisualActionInsideObservation(previousObservation, request.action)
             const startedAt = Date.now()
             try {
@@ -731,7 +733,7 @@ export class AgentControlBroker extends EventEmitter {
         }, signal)
     }
 
-    async semanticActionSequence(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal): Promise<ControlSemanticActionSequenceResult> {
+    async semanticActionSequence(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal, permissionMode: AssistantRuntimeMode = 'approval-required'): Promise<ControlSemanticActionSequenceResult> {
         this.assertAlive()
         const request = assertControlSemanticActionSequenceRequest(requestValue)
         const grant = this.grants.requireRemaining(request.grantId, principal, request.steps.length)
@@ -749,7 +751,7 @@ export class AgentControlBroker extends EventEmitter {
         for (const [index, step] of request.steps.entries()) {
             let action: ControlAction
             try {
-                action = resolveSemanticSequenceAction(step, observation, index)
+                action = resolveSemanticSequenceAction(step, observation, index, permissionMode)
             } catch (error) {
                 const controlError = toAgentControlError(error)
                 throw new AgentControlError(
@@ -766,7 +768,7 @@ export class AgentControlBroker extends EventEmitter {
                     targetId: request.targetId,
                     observationRevision: revision,
                     action
-                }, signal, index === request.steps.length - 1 && grant.capabilities.includes('observe.screenshot'))
+                }, signal, index === request.steps.length - 1 && grant.capabilities.includes('observe.screenshot'), permissionMode)
                 completedSteps += 1
                 changed = changed || result.changed
                 observation = result.observation
@@ -793,7 +795,7 @@ export class AgentControlBroker extends EventEmitter {
         }
     }
 
-    async perform(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal): Promise<ControlPlanResult> {
+    async perform(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal, permissionMode: AssistantRuntimeMode = 'approval-required'): Promise<ControlPlanResult> {
         this.assertAlive()
         const request = assertControlPlanRequest(requestValue)
         const grant = this.grants.requireRemaining(request.grantId, principal, request.steps.length + 1)
@@ -816,13 +818,13 @@ export class AgentControlBroker extends EventEmitter {
         const requiredSideEffects = request.steps.map((action) => controlActionRequiresApproval(action) ? action.sideEffect : undefined)
         for (const [index, action] of request.steps.entries()) {
             assertActionAllowed(grant, registered.target, action, { approvedSideEffect: requiredSideEffects[index] })
-            assertSafeObservedElementAction(requestedObservation, action)
+            assertSafeObservedElementAction(requestedObservation, action, permissionMode)
             assertVisualActionInsideObservation(requestedObservation, action)
             assertActionInsideStageRegion(request.stage.expectedRegion, action)
         }
         for (const [index, action] of request.steps.entries()) {
             const requiredSideEffect = requiredSideEffects[index]
-            if (!requiredSideEffect) continue
+            if (!requiredSideEffect || permissionMode === 'full-access') continue
             await this.waitForActionApproval(principal, grant, {
                 version: 1,
                 requestId: `${request.requestId}:step:${index + 1}`,
@@ -847,7 +849,7 @@ export class AgentControlBroker extends EventEmitter {
                 for (const [index, action] of request.steps.entries()) {
                     this.grants.requireActive(currentGrant.grantId, principal)
                     assertActionAllowed(currentGrant, registered.target, action, { approvedSideEffect: requiredSideEffects[index] })
-                    assertSafeObservedElementAction(previousObservation, action)
+                    assertSafeObservedElementAction(previousObservation, action, permissionMode)
                     assertVisualActionInsideObservation(previousObservation, action)
                     const actionResult = await registered.driver.act(registered, action, {
                         allowWindowFocus: currentGrant.capabilities.includes('window.focus'),
@@ -951,6 +953,21 @@ export class AgentControlBroker extends EventEmitter {
             grantId: grant.grantId, outcome: 'cancelled', message: 'Control grant revoked.', redactions: []
         })
         this.releaseTargetIfIdle(grant.targetId)
+        this.changed()
+    }
+
+    revokeForegroundPrincipal(principal: ControlPrincipal): void {
+        const isForeground = (targetId: string) => {
+            try { return this.targets.get(targetId).target.kind !== 'zyra-browser' } catch { return true }
+        }
+        for (const grant of this.grants.listForPrincipal(principal)) {
+            if (grant.state === 'active' && isForeground(grant.targetId)) this.revokeGrant(grant.grantId)
+        }
+        for (const pending of this.grants.listPending()) {
+            if (!sameControlPrincipal(pending.principal, principal) || !isForeground(pending.targetId)) continue
+            this.grants.removePending(pending.requestId)
+            this.pendingGrantWaiters.get(pending.requestId)?.reject(new AgentControlError('CONTROL_CANCELLED', 'The chat moved to the background.'))
+        }
         this.changed()
     }
 
@@ -1135,7 +1152,7 @@ export class AgentControlBroker extends EventEmitter {
         principalValue: unknown,
         operationValue: unknown,
         signal?: AbortSignal,
-        options: { permissionMode?: 'approval-required' | 'auto-review' | 'edits-only' | 'full-access'; deferInitialScreenshot?: boolean; reuseWindowsGrantForActions?: number } = {}
+        options: { permissionMode?: 'approval-required' | 'auto-review' | 'edits-only' | 'full-access'; deferInitialScreenshot?: boolean; reuseWindowsGrantForActions?: number; backgrounded?: boolean } = {}
     ): Promise<Record<string, unknown>> {
         this.assertAlive()
         assertBridgeMessageSize(operationValue)
@@ -1143,7 +1160,13 @@ export class AgentControlBroker extends EventEmitter {
         if (!operationValue || typeof operationValue !== 'object' || Array.isArray(operationValue)) {
             throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Control operation is invalid.')
         }
-        const operation = operationValue as AgentControlBridgeOperation
+        let operation = operationValue as AgentControlBridgeOperation
+        if (options.backgrounded) {
+            let targetId = 'targetId' in operation ? operation.targetId : undefined
+            if (!targetId && 'grantId' in operation) targetId = this.grants.requireActive(operation.grantId, principal).targetId
+            if (!targetId && 'planId' in operation && operation.planId) targetId = this.requirePausedPlan(operation.planId, principal).request.targetId
+            operation = backgroundBrowserOperation(principal, operation, targetId ? this.targets.get(targetId).target : undefined)
+        }
         switch (operation.operation) {
             case 'open_tab': {
                 if (operation.reveal !== undefined && typeof operation.reveal !== 'boolean') {
@@ -1346,7 +1369,7 @@ export class AgentControlBroker extends EventEmitter {
                         targetId: grant.targetId,
                         observationRevision: observation.revision,
                         steps: requestedSequence.steps
-                    }, signal)
+                    }, signal, options.permissionMode)
                 } catch (error) {
                     this.revokeGrant(grant.grantId)
                     throw error
@@ -1391,9 +1414,7 @@ export class AgentControlBroker extends EventEmitter {
                     throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents may request only an integrated Zyra Browser tab. Chrome and Windows require root delegation.')
                 }
                 if (requestedTarget.kind === 'zyra-browser') this.assertBrowserTargetOwnedByPrincipal(principal, requestedTarget)
-                if (principal.type === 'root' && requestedTarget.kind === 'zyra-browser' && this.browserSurface) {
-                    await this.browserSurface.revealTabs(principal, requestedTarget, null, signal)
-                }
+                // Browser access is target-local; only explicit reveal operations open the inspector.
                 const automaticGrant = principal.type === 'root' && (
                     options.permissionMode === 'full-access'
                     || (options.permissionMode === 'auto-review' && requestedTarget.kind === 'zyra-browser')
@@ -1504,16 +1525,16 @@ export class AgentControlBroker extends EventEmitter {
                 return { observation, ...(screenshot ? { screenshot } : {}) }
             }
             case 'act':
-                return await this.act(principal, operation, signal) as unknown as Record<string, unknown>
+                return await this.act(principal, operation, signal, false, options.permissionMode) as unknown as Record<string, unknown>
             case 'act_sequence': {
-                const sequence = await this.semanticActionSequence(principal, operation, signal)
+                const sequence = await this.semanticActionSequence(principal, operation, signal, options.permissionMode)
                 const screenshot = sequence.observation.screenshotRef
                     ? this.targets.get(sequence.targetId).driver.readScreenshot?.(sequence.observation.screenshotRef)
                     : undefined
                 return { ...sequence, ...(screenshot ? { screenshot } : {}) } as unknown as Record<string, unknown>
             }
             case 'perform': {
-                const plan = await this.perform(principal, operation, signal)
+                const plan = await this.perform(principal, operation, signal, options.permissionMode)
                 const registered = this.targets.get(plan.targetId)
                 const screenshot = plan.observation.screenshotRef
                     ? registered.driver.readScreenshot?.(plan.observation.screenshotRef)
@@ -1942,7 +1963,7 @@ function boundObservation(observation: ControlObservation): ControlObservation {
     }
 }
 
-function assertSafeObservedElementAction(observation: ControlObservation, action: ControlAction): void {
+function assertSafeObservedElementAction(observation: ControlObservation, action: ControlAction, permissionMode: AssistantRuntimeMode = 'approval-required'): void {
     if (!('elementRef' in action) || !action.elementRef) return
     const element = observation.elements.find((entry) => entry.elementRef === action.elementRef)
     if (!element) throw new AgentControlError('CONTROL_STALE_OBSERVATION', 'The element reference is absent from the current bounded observation.', { retryable: true, freshRevision: observation.revision })
@@ -1950,7 +1971,7 @@ function assertSafeObservedElementAction(observation: ControlObservation, action
         throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Model control cannot type into a password or sensitive field. Pause control and enter it manually.')
     }
     const semantics = `${element.role} ${element.name || ''} ${element.text || ''}`
-    if ((action.type === 'click' || action.type === 'type' || action.type === 'select')
+    if (permissionMode !== 'full-access' && (action.type === 'click' || action.type === 'type' || action.type === 'select')
         && /buy|purchase|pay|send|publish|post|delete|remove account|install|accept terms|agree|upload/i.test(semantics)) {
         throw new AgentControlError('CONTROL_SIDE_EFFECT_APPROVAL_REQUIRED', 'This observed control may cause an external side effect and requires explicit per-action approval.')
     }
@@ -2057,7 +2078,8 @@ function assertLaunchedSequenceHasBlankTypingTargets(
 function resolveSemanticSequenceAction(
     step: ControlSemanticActionStep,
     observation: ControlObservation,
-    index: number
+    index: number,
+    permissionMode: AssistantRuntimeMode = 'approval-required'
 ): ControlAction {
     if (step.type === 'wait') {
         return {
@@ -2092,7 +2114,7 @@ function resolveSemanticSequenceAction(
             if (element.sensitive) {
                 throw new AgentControlError('CONTROL_TARGET_BLOCKED', `A sequence ${description} cannot target a sensitive control.`, { freshRevision: observation.revision })
             }
-            if (semanticActionMayHaveCriticalSideEffect(`${element.name || ''} ${element.text || ''}`)) {
+            if (permissionMode !== 'full-access' && semanticActionMayHaveCriticalSideEffect(`${element.name || ''} ${element.text || ''}`)) {
                 throw new AgentControlError('CONTROL_SIDE_EFFECT_APPROVAL_REQUIRED', `This ${description} must use an individual action with its canonical side-effect review.`, { freshRevision: observation.revision })
             }
         }
@@ -2100,7 +2122,7 @@ function resolveSemanticSequenceAction(
             ? { ...step, button: 'left' }
             : { type: 'click', x: step.x, y: step.y, button: 'left', clickCount: 1, sideEffect: 'none' }
     }
-    if (semanticActionMayHaveCriticalSideEffect(step.name)) {
+    if (permissionMode !== 'full-access' && semanticActionMayHaveCriticalSideEffect(step.name)) {
         throw new AgentControlError(
             'CONTROL_SIDE_EFFECT_APPROVAL_REQUIRED',
             `${JSON.stringify(step.name)} must use an individual action with its canonical side-effect review.`,

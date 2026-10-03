@@ -23,12 +23,14 @@ function retainScrollOffset(key: string, offset: number): void {
 }
 
 export function usePreviewVirtualWindow({
+    active = true,
     rowCount,
     rowHeight,
     restoreKey,
     overscanRows = PREVIEW_TREE_OVERSCAN_ROWS,
     guardRows = PREVIEW_TREE_RANGE_GUARD_ROWS
 }: {
+    active?: boolean
     rowCount: number
     rowHeight: number
     restoreKey?: string
@@ -78,6 +80,7 @@ export function usePreviewVirtualWindow({
     }, [updateRange])
 
     useLayoutEffect(() => {
+        if (!active) return
         const scrollElement = scrollElementRef.current
         if (!scrollElement) return
         const maxScrollTop = Math.max(0, rowCount * rowHeight - scrollElement.clientHeight)
@@ -107,7 +110,7 @@ export function usePreviewVirtualWindow({
                 frameRef.current = null
             }
         }
-    }, [restoreKey, rowCount, rowHeight, scheduleRangeUpdate, updateRange])
+    }, [active, restoreKey, rowCount, rowHeight, scheduleRangeUpdate, updateRange])
 
     const scrollToIndex = useCallback((index: number, alignment: PreviewTreeScrollAlignment = 'auto') => {
         const scrollElement = scrollElementRef.current

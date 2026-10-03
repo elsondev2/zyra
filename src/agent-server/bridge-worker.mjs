@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import readline from "node:readline";
+import { existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 export class AgentBridgeWorker extends EventEmitter {
   constructor(options = {}) {
@@ -67,9 +69,10 @@ export class AgentBridgeWorker extends EventEmitter {
   ensureStarted() {
     if (this.child) return;
     if (this.disposed) throw new Error("Agent bridge worker is disposed.");
+    const schemaPreload = path.join(this.root, 'src', 'runtime', 'schema', 'preload.mjs');
     const childArgs = process.env.ZYRA_STANDALONE === "1"
       ? ["--internal-agent-bridge"]
-      : [this.bridgePath];
+      : [...(existsSync(schemaPreload) ? ['--import', pathToFileURL(schemaPreload).href] : []), this.bridgePath];
     this.child = spawn(process.execPath, childArgs, {
       cwd: this.root,
       env: {
@@ -116,6 +119,8 @@ export class AgentBridgeWorker extends EventEmitter {
       this.emit("control", message);
       return;
     }
+    if (message?.type === 'threads.request') { this.emit('thread-request', message); return; }
+    if (message?.type === 'harness.transport.request') { this.emit('harness-transport-request', message); return; }
     if (message?.type === "protocol_error") {
       this.emit("stderr", String(message.error || "Agent bridge protocol error."));
       return;

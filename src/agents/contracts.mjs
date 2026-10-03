@@ -32,7 +32,9 @@ export function createFleetSnapshot(input = {}) {
     appliedEventIds: normalizeStringArray(input.appliedEventIds).slice(-MAX_APPLIED_EVENT_IDS),
     pendingEvents: Array.isArray(input.pendingEvents) ? input.pendingEvents.slice(-MAX_PENDING_EVENTS) : [],
     definitionsRevision: finiteInteger(input.definitionsRevision, 0),
-    agents: objectRecord(input.agents),
+    agents: Object.fromEntries(Object.entries(objectRecord(input.agents)).map(([id, run]) => [id,
+      run?.status === 'failed' && run.error?.code === 'CHILD_MAX_TURNS' ? { ...run, status: 'cancelled' } : run
+    ])),
     workflows: objectRecord(input.workflows),
     writeLocks: objectRecord(input.writeLocks),
     usage: normalizeUsage(input.usage),
@@ -71,7 +73,7 @@ export function validateFleetEvent(event) {
 }
 
 export function normalizeAgentRun(input = {}) {
-  const status = normalizeAgentRunState(input.status ?? "queued");
+  const status = normalizeAgentRunState(input.status === 'failed' && input.error?.code === 'CHILD_MAX_TURNS' ? 'cancelled' : input.status ?? "queued");
   const now = input.createdAt ?? new Date().toISOString();
   return {
     version: FLEET_SCHEMA_VERSION,

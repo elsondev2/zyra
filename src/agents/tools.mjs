@@ -1,8 +1,8 @@
 import { Type } from "typebox";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineZyraTool } from "./define-zyra-tool.mjs";
 
 export function createFleetTools(holder) {
-  const agentTool = defineTool({
+  const agentTool = defineZyraTool({
     name: "agent",
     label: "Agent fleet",
     description: "Manage bounded child agents. Before choosing a delegated model or effort, use action=models to read current delegation preferences and a small authenticated model/API-cost shortlist; choose suitable model and effort from that result. Respect explicit agent-model requirements and existing budgets/scopes. Children never receive this tool.",
@@ -18,6 +18,7 @@ export function createFleetTools(holder) {
       limit: Type.Optional(Type.Number()),
       fallbackModels: Type.Optional(Type.Array(Type.String())),
       effort: Type.Optional(Type.String()),
+      interrupt: Type.Optional(Type.Boolean({ description: 'For send: stop the current work and replace it with this instruction. Omit to send without interrupting.' })),
       tools: Type.Optional(Type.Array(Type.String())),
       controlLease: Type.Optional(Type.Object({
         parentGrantId: Type.String(),
@@ -39,7 +40,7 @@ export function createFleetTools(holder) {
     execute: async (_id, params) => toolResult(await executeAgentAction(requireController(holder), params)),
   });
 
-  const workflowTool = defineTool({
+  const workflowTool = defineZyraTool({
     name: "workflow",
     label: "Workflow runtime",
     description: "Run and control a durable sandboxed workflow. Workflow JavaScript has no Node, filesystem, shell, credential, or network access.",
@@ -64,13 +65,14 @@ async function executeAgentAction(controller, params) {
       if (!params.prompt) throw new Error("agent spawn requires prompt.");
       return controller.spawn({ ...params, goal: params.prompt });
     case "send":
+      if (params.interrupt) return controller.interruptAndSend(requiredId(params), requiredPrompt(params));
       return controller.send(requiredId(params), requiredPrompt(params));
     case "wait":
       return controller.wait(requiredId(params), { timeoutMs: params.timeoutMs });
     case "status":
       return controller.status(params.agentRunId);
     case "stop":
-      return controller.stop(requiredId(params));
+      return controller.stop(requiredId(params), 'Stopped by another agent.', { kind: 'stopped', source: 'agent', threadId: controller.rootThreadId });
     case "retry":
       return controller.retry(requiredId(params), params.prompt ? { goal: params.prompt } : {});
     case "resume":

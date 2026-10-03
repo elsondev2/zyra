@@ -405,16 +405,21 @@ export async function handleSetBrowserPreviewColorScheme(
     }
 }
 
-export async function handleOpenBrowserPreviewDevTools(event: IpcMainInvokeEvent, input: DevScopeBrowserGuestTargetInput) {
+// Main-owned popup shortcuts share the same recording/annotation/debugger guards.
+export function openBrowserPreviewDevTools(guest: WebContents, mode: 'docked' | 'popout' = 'docked'): void {
+    if (activeRecording?.guest.id === guest.id) throw new Error('Stop this tab’s recording before opening DevTools.')
+    if (activeAnnotations.has(guest.id)) throw new Error('Attach or cancel the annotation before opening DevTools.')
+    if (guest.isDevToolsOpened()) guest.devToolsWebContents?.focus()
+    else {
+        if (guest.debugger.isAttached()) guest.debugger.detach()
+        if (mode === 'popout') guest.openDevTools({ mode: 'detach', activate: true })
+        else guest.openDevTools({ mode: 'left', activate: true })
+    }
+}
+
+export async function handleOpenBrowserPreviewDevTools(event: IpcMainInvokeEvent, input: DevScopeBrowserGuestTargetInput & { mode?: 'docked' | 'popout' }) {
     try {
-        const guest = resolveGuest(event, input)
-        if (activeRecording?.guest.id === guest.id) throw new Error('Stop this tab’s recording before opening DevTools.')
-        if (activeAnnotations.has(guest.id)) throw new Error('Attach or cancel the annotation before opening DevTools.')
-        if (guest.isDevToolsOpened()) guest.devToolsWebContents?.focus()
-        else {
-            if (guest.debugger.isAttached()) guest.debugger.detach()
-            guest.openDevTools({ mode: 'detach', activate: true })
-        }
+        openBrowserPreviewDevTools(resolveGuest(event, input), input?.mode)
         return { success: true as const }
     } catch (error) {
         return { success: false as const, error: errorMessage(error, 'Could not open Browser DevTools.') }

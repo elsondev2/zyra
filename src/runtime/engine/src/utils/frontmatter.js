@@ -1,0 +1,31 @@
+// Generated from the maintained TypeScript in ../source by scripts/build-owned-runtime.mjs.
+import { parse } from "yaml";
+import { stripBom } from "./text.js";
+const normalizeNewlines = (value) => value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+const extractFrontmatter = (content) => {
+  const normalized = normalizeNewlines(stripBom(content));
+  if (!normalized.startsWith("---")) {
+    return { yamlString: null, body: normalized };
+  }
+  const endIndex = normalized.indexOf("\n---", 3);
+  if (endIndex === -1) {
+    return { yamlString: null, body: normalized };
+  }
+  return {
+    yamlString: normalized.slice(4, endIndex),
+    body: normalized.slice(endIndex + 4).trim()
+  };
+};
+const parseFrontmatter = (content) => {
+  const { yamlString, body } = extractFrontmatter(content);
+  if (!yamlString) {
+    return { frontmatter: {}, body };
+  }
+  const parsed = parse(yamlString);
+  return { frontmatter: parsed ?? {}, body };
+};
+const stripFrontmatter = (content) => parseFrontmatter(content).body;
+export {
+  parseFrontmatter,
+  stripFrontmatter
+};

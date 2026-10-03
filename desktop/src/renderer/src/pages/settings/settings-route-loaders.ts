@@ -3,11 +3,13 @@ import { findSettingsDestination, getSettingsCategoryEntry, SETTINGS_NAVIGATION_
 export const loadSettingsShell = () => import('./SettingsShell')
 export const loadSettingsOverview = () => import('./SettingsOverview')
 export const loadGeneralSettings = () => import('../Settings')
+export const loadKeyboardShortcutsSettings = () => import('./KeyboardShortcutsSettings')
 export const loadAppearanceSettings = () => import('./AppearanceSettings')
 export const loadAccountSettings = () => import('./AccountSettings')
 export const loadAssistantSettings = () => import('./AssistantSettings')
 export const loadPermissionsSettings = () => import('./PermissionsSettings')
 export const loadSkillsSettings = () => import('./SkillsSettings')
+export const loadPluginsSettings = () => import('./PluginsSettings')
 export const loadVoiceSettings = () => import('./VoiceSettings')
 export const loadConnectionsSettings = () => import('./ConnectionsSettings')
 export const loadBrowserControlSettings = () => import('./BrowserControlSettings')
@@ -25,6 +27,7 @@ export const loadAboutSettings = () => import('./AboutSettings')
 
 const destinationLoaders: Record<string, () => Promise<unknown>> = {
     general: loadGeneralSettings,
+    'keyboard-shortcuts': loadKeyboardShortcutsSettings,
     appearance: loadAppearanceSettings,
     'appearance-typography': loadAppearanceSettings,
     'appearance-layout': loadAppearanceSettings,
@@ -35,11 +38,15 @@ const destinationLoaders: Record<string, () => Promise<unknown>> = {
     account: loadProviderSettings,
     'provider-writing': loadProviderWritingSettings,
     assistant: loadAssistantSettings,
+    'chat-defaults': loadAssistantSettings,
     'chat-display': loadAssistantSettings,
     permissions: loadPermissionsSettings,
     archived: loadArchivedChatsSettings,
     skills: loadSkillsSettings,
+    plugins: loadPluginsSettings,
+    'skill-conflicts': loadSkillsSettings,
     voice: loadVoiceSettings,
+    'voice-history': loadVoiceSettings,
     'voice-lab': loadVoiceSettings,
     connections: loadConnectionsSettings,
     'device-chrome': loadConnectionsSettings,
@@ -47,13 +54,12 @@ const destinationLoaders: Record<string, () => Promise<unknown>> = {
     'browser-control': loadBrowserControlSettings,
     'browser-privacy': loadBrowserControlSettings,
     'browser-data': loadBrowserControlSettings,
+    'browser-extensions': loadBrowserControlSettings,
     'files-editor': loadFilesEditorSettings,
     'file-editor': loadFilesEditorSettings,
-    'file-run': loadFilesEditorSettings,
     'terminal-runtime': loadTerminalRuntimeSettings,
     projects: loadProjectsSettings,
     'project-discovery': loadProjectsSettings,
-    'project-presentation': loadProjectsSettings,
     'source-control': loadSourceControlSettings,
     'git-pull-requests': loadSourceControlSettings,
     'git-writing': loadSourceControlSettings,

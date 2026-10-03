@@ -154,7 +154,7 @@ await assert.rejects(() => broker.handleToolOperation(principal, {
     maxActions: 3,
     requestId: 'use-app:critical',
     steps: [{ type: 'click', role: 'button', name: 'Confirm purchase', sideEffect: 'none' }]
-}, undefined, { permissionMode: 'full-access' }), /canonical side-effect review/)
+}, undefined, { permissionMode: 'full-access' }), /found 0/, 'Full access still requires the named control to exist')
 assert.notEqual(broker.grants.list().find((entry) => entry.grantId === directAppAccess.grant.grantId)?.state, 'active', 'new exact app access never leaves an older Windows grant active for the same turn')
 assert.equal(windowsDriver.retainedTargetCount(), 0, 'a rejected embedded sequence revokes its otherwise unusable grant')
 

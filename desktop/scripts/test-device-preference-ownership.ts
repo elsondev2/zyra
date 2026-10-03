@@ -60,6 +60,12 @@ try {
     assert.equal(sanitizeDevicePreferenceValue('assistantChatDisplayMode', 'detailed'), 'detailed')
     assert.equal(sanitizeDevicePreferenceValue('assistantChatDisplayMode', 'dense'), undefined)
     assert.equal(sanitizeDevicePreferenceValue('assistantContextCompactionThresholdTokens', 500_000), 372_000, 'context limits clamp below the 400k model ceiling')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceInterfaceScale', 140), 130, 'interface scale clamps at the supported maximum')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceCodeScale', 75), 80, 'code scale clamps at the supported minimum')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceContrastScale', 125), 125, 'contrast scale persists supported values')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceAnimationSpeed', 'brisk'), 'brisk', 'animation speed persists supported values')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceAnimationSpeed', 'custom'), 'custom', 'custom motion mode persists')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceAnimationScale', 250), 200, 'custom motion rate clamps at the supported maximum')
 
     const allOwned = new Set([...SHARED_DEVICE_PREFERENCE_KEYS, ...SURFACE_DEVICE_PREFERENCE_KEYS])
     assert.equal(allOwned.size, SHARED_DEVICE_PREFERENCE_KEYS.length + SURFACE_DEVICE_PREFERENCE_KEYS.length, 'shared and surface preference keys must not overlap')

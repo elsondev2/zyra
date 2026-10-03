@@ -1,5 +1,14 @@
 # Third-party notices
 
+## Maintained runtime source
+
+The local agent engine, agent loop, provider transports, terminal components,
+protocol, client, and telemetry contracts under `src/runtime/` derive from
+MIT-licensed Pi, Copyright (c) 2025 Mario Zechner. Zyra maintains these modules
+in this repository and does not depend on Pi npm packages. Original license
+notices are included in each module's `LICENSE`, with imported versions in
+`src/runtime/provenance.json`.
+
 ## Packaged code and runtimes
 
 `THIRD_PARTY_LICENSES.txt` contains the generated production-package inventory and the license texts shipped for Zyra's JavaScript dependencies, Bun 1.3.9, and Node.js 22.22.0. The release check ties that file to both production lockfiles and rejects stale runtime versions.
@@ -12,7 +21,7 @@ Zyra can send explicitly enabled, allowlisted product events to a user-configure
 
 ## Provider logos from T3 Code
 
-The Claude and Gemini SVG marks are adapted from the MIT-licensed [T3 Code icon source](https://github.com/pingdotgg/t3code/blob/de37964db26bd3260d253f138bfde2ac60fe254e/apps/web/src/components/Icons.tsx). Copyright (c) 2026 T3 Tools Inc. The complete notice is retained with the assets in `desktop/src/renderer/src/assets/provider-logos/LICENSE.t3-code.txt`. Product trademarks remain with their owners.
+The Claude, Gemini, and OpenCode SVG marks are adapted from the MIT-licensed [T3 Code icon source](https://github.com/pingdotgg/t3code/blob/de37964db26bd3260d253f138bfde2ac60fe254e/apps/web/src/components/Icons.tsx). Copyright (c) 2026 T3 Tools Inc. The complete notice is retained with the assets in `desktop/src/renderer/src/assets/provider-logos/LICENSE.t3-code.txt`; the OpenCode mark is rendered by `desktop/src/renderer/src/components/ui/OpenCodeLogo.tsx` from the same source. Product trademarks remain with their owners.
 
 ## Pi product mark
 

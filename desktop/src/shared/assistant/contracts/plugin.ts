@@ -12,6 +12,15 @@ export type AssistantPluginContributionKind =
 export type AssistantPluginContributionSupport = 'supported' | 'planned' | 'unsupported'
 export type AssistantPluginScopeOwnerKind = 'global' | 'project'
 
+export interface AssistantPluginMcpConnectionStatus {
+    pluginId: string
+    name: string
+    server: string
+    kind: 'http' | 'stdio'
+    destination: string
+    state: 'connected' | 'needs-review' | 'not-connected'
+}
+
 export interface AssistantPluginAuthor {
     name: string
     email?: string
@@ -80,7 +89,13 @@ export interface AssistantPluginSource {
     updatedAt: string
 }
 
-export interface AssistantPluginRelease {
+/** Review cap: names and hashes of normalized descriptors; no plaintext credentials. */
+export interface AssistantPluginConnectionPins {
+    appMcpPath?: string | null
+    mcpServerPins?: Array<{ name: string; descriptorDigest: string }>
+}
+
+export interface AssistantPluginRelease extends AssistantPluginConnectionPins {
     id: string
     pluginId: string
     version: string
@@ -114,13 +129,14 @@ export interface AssistantPluginSet {
     updatedAt: string
 }
 
-export interface AssistantChatPluginScopeEntry {
+export interface AssistantChatPluginScopeEntry extends AssistantPluginConnectionPins {
     pluginId: string
     releaseId: string
     name: string
     version: string
     contentDigest: string
     skillsPath: string | null
+    mcpPath: string | null
     capabilityCeiling: string[]
 }
 
@@ -143,13 +159,41 @@ export interface AssistantPluginCatalog {
     releases: AssistantPluginRelease[]
     pluginSets: AssistantPluginSet[]
     chatScopes: AssistantChatPluginScope[]
+    appViews: {
+        enabled: boolean
+        displayMode: 'manual' | 'automatic'
+        pluginIds: string[]
+    }
+}
+
+export interface AssistantSetPluginAppViewSettingsInput {
+    pluginId?: string
+    enabled?: boolean
+    displayMode?: 'manual' | 'automatic'
+    expectedCatalogRevision?: number
+}
+
+export interface AssistantReadPluginAppViewInput {
+    threadId: string
+    pluginId: string
+    server: string
+    tool: string
+    uri: string
+}
+
+export interface AssistantCallPluginAppViewToolInput {
+    threadId: string
+    pluginId: string
+    server: string
+    tool: string
+    arguments: Record<string, unknown>
 }
 
 export interface AssistantPluginInspection {
     reviewId: string
     expiresAt: string
     manifest: AssistantPluginManifest
-    release: {
+    release: AssistantPluginConnectionPins & {
         name: string
         version: string
         contentDigest: string
@@ -251,4 +295,19 @@ export interface AssistantPluginSkillSource {
     pluginId: string
     releaseId: string
     contentDigest: string
+}
+
+/** Main/worker-only MCP source; never project packagePath into browser IPC. */
+export interface AssistantPluginMcpSource {
+    pluginId: string
+    releaseId: string
+    contentDigest: string
+    name: string
+    slug: string
+    packagePath: string
+    logo: string | null
+    servers: Array<
+        | { name: string; kind: 'http'; url: string; bearerTokenEnvVar?: string; oauthResource?: string; scopes?: string[]; oauth?: { clientId: string; clientSecret?: string; callbackPort?: number } }
+        | { name: string; kind: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+    >
 }

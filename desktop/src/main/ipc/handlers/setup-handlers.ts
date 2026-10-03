@@ -1,5 +1,5 @@
 import { getSharedProviderWorkerClient } from '../../setup/provider-worker-client'
-import type { ModelProviderInput } from '../../../shared/onboarding/contracts'
+import type { ModelHarnessConnectInput, ModelProviderInput } from '../../../shared/onboarding/contracts'
 import { BrowserWindow } from 'electron'
 import {
     ONBOARDING_IPC,
@@ -37,6 +37,7 @@ const PRE_ONBOARDING_SETUP_CHANNELS = new Set<string>([
     ONBOARDING_IPC.listModelProviders,
     ONBOARDING_IPC.getAuthStatus,
     ONBOARDING_IPC.connectChatGpt,
+    ONBOARDING_IPC.cancelChatGpt,
     ONBOARDING_IPC.connectApiKey,
     ONBOARDING_IPC.updateAppearance,
     ONBOARDING_IPC.commitStep,
@@ -136,6 +137,12 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
         await services.preferences.updateSharedFromMain({ assistantDefaultModel: connection.model })
         return { connection }
     }))
+    ipcMain.handle(ONBOARDING_IPC.detectHarness, () => result(async () => await getSharedProviderWorkerClient().providers.detectHarness()))
+    ipcMain.handle(ONBOARDING_IPC.connectHarness, (_event, input: ModelHarnessConnectInput) => result(async () => {
+        const connection = await getSharedProviderWorkerClient().providers.connectHarness(input ?? {})
+        await services.preferences.updateSharedFromMain({ assistantDefaultModel: connection.model })
+        return { connection }
+    }))
     ipcMain.handle(ONBOARDING_IPC.getAuthStatus, () => result(async () => ({
         status: await services.onboarding.getAuthStatus()
     })))
@@ -151,18 +158,21 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
             throw error
         }
     }))
+    ipcMain.handle(ONBOARDING_IPC.getChatGptDeviceCode, () => result(async () => ({ deviceCode: services.auth.getChatGptDeviceCode() })))
     ipcMain.handle(ONBOARDING_IPC.connectChatGpt, (_event, input?: AccountConnectionAnalyticsInput) => result(async () => {
         const action = input?.analyticsAction === 'replace' ? 'replace' : 'connect'
         services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: 'started' } })
         try {
-            const status = await services.onboarding.connectChatGpt()
+            const status = await services.onboarding.connectChatGpt(input?.signInMethod)
             services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: status.verified ? 'completed' : 'failed', ...(status.verified ? {} : { error_code: 'authorization_failed' }) } })
             return { status }
         } catch (error) {
-            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: 'failed', error_code: analyticsErrorCode(error) } })
+            const cancelled = error && typeof error === 'object' && 'code' in error && error.code === 'ZYRA_OAUTH_CANCELLED'
+            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: cancelled ? 'cancelled' : 'failed', ...(cancelled ? {} : { error_code: analyticsErrorCode(error) }) } })
             throw error
         }
     }))
+    ipcMain.handle(ONBOARDING_IPC.cancelChatGpt, () => result(async () => ({ cancelled: await services.onboarding.cancelChatGpt() })))
     ipcMain.handle(ONBOARDING_IPC.connectApiKey, (_event, apiKey: string, input?: AccountConnectionAnalyticsInput) => result(async () => {
         const action = input?.analyticsAction === 'replace' ? 'replace' : 'connect'
         services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'api', outcome: 'started' } })

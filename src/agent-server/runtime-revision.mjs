@@ -2,8 +2,22 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 export const RUNTIME_ACTIVATION_VERSION = 1;
+const pendingRevisions = new Map();
 /** Content fingerprint is portable across development and packaged runtime roots. */
 export async function readRuntimeRevision(root) {
+  const runtimeRoot = path.resolve(root);
+  const pending = pendingRevisions.get(runtimeRoot);
+  if (pending) return pending;
+  // Share concurrent connection checks only. The next check still reads fresh
+  // content, including source edits, additions and deletions in development.
+  const request = computeRuntimeRevision(runtimeRoot).finally(() => {
+    if (pendingRevisions.get(runtimeRoot) === request) pendingRevisions.delete(runtimeRoot);
+  });
+  pendingRevisions.set(runtimeRoot, request);
+  return request;
+}
+
+async function computeRuntimeRevision(root) {
   const files = [];
   async function collect(relative) {
     let entries;

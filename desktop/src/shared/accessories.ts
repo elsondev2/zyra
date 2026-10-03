@@ -12,7 +12,7 @@ export const ACCESSORIES_IPC = {
     changed: 'devscope:accessories:changed'
 } as const
 
-export type AccessoryKind = 'browser' | 'terminal' | 'files'
+export type AccessoryKind = 'browser' | 'terminal' | 'files' | 'devscope'
 
 export type AccessoryOpenInput = {
     kind: AccessoryKind

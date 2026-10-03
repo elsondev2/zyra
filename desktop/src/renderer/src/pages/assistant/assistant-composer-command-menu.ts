@@ -13,6 +13,7 @@ export type AssistantComposerCommandItem = {
     kind: 'command' | 'skill'
     scope: AssistantPromptResourceScope
     placement: 'start' | 'anywhere'
+    pluginName?: string
 }
 
 export type AssistantComposerSlashToken = {
@@ -81,6 +82,7 @@ export function buildAssistantComposerCommandItems(
         value: `/skill:${skill.name}`,
         label: `/skill:${skill.name}`,
         description: skill.description,
+        pluginName: skill.pluginId ? skill.sourceLabel?.toLowerCase().replace(/[^a-z0-9]+/gu, '-') : undefined,
         kind: 'skill' as const,
         scope: skill.scope,
         placement: 'anywhere' as const

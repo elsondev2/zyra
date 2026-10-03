@@ -265,6 +265,7 @@ export function useFilePreview(): UseFilePreviewReturn {
 
         const nextFile: PreviewFile = {
             name: file.name,
+            displayName: options?.displayName,
             path: file.path,
             type: previewTarget.type,
             language: 'language' in previewTarget ? previewTarget.language : undefined,

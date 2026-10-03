@@ -8,6 +8,7 @@ import {
 } from './assistant-composer-command-menu'
 import { useAssistantComposerMenuActiveScroll } from './assistant-composer-menu-scroll'
 import { AssistantComposerMenuHighlight } from './AssistantComposerMenuHighlight'
+import { PluginSkillIcon, shortSkillDescription } from '../plugins/plugin-presentation'
 
 export function AssistantComposerCommandMenu({
     menuId,
@@ -75,15 +76,15 @@ export function AssistantComposerCommandMenu({
                                 active ? 'text-sparkle-text' : 'text-sparkle-text-secondary hover:bg-white/[0.045]'
                             )}
                         >
-                            <ResourceIcon
+                            {item.kind === 'skill' && item.pluginName ? <PluginSkillIcon pluginName={item.pluginName} /> : <ResourceIcon
                                 size={14}
                                 strokeWidth={1.8}
                                 className={cn('shrink-0', item.kind === 'skill' ? 'text-[var(--accent-primary)]' : 'text-white/38')}
-                            />
+                            />}
                             <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-baseline gap-2">
                                     <span className="shrink-0 font-mono text-[12px] font-medium text-sparkle-text">{item.label}</span>
-                                    <span className="min-w-0 truncate text-[11.5px] text-sparkle-text-muted/75">{item.description}</span>
+                                    <span className="min-w-0 truncate text-[11.5px] text-sparkle-text-muted/75" title={item.description}>{item.kind === 'skill' ? shortSkillDescription(item.description) : item.description}</span>
                                 </div>
                             </div>
                             <span className="shrink-0 rounded-md bg-white/[0.045] px-1.5 py-0.5 text-[9px] font-medium text-white/38">

@@ -25,7 +25,8 @@ export function makePluginDirectoryFixture(): AssistantPluginCatalog {
             return { id: plugin.activeReleaseId!, pluginId: plugin.id, version: '1.0.0', contentDigest: `${i}`.repeat(64), packagePath: `C:/fixture/releases/${plugin.id}`, manifest, fileCount: 3, totalBytes: 2400, containsExecutableFiles: false, skills: [{ name: plugin.name, description: names[i][1], relativePath: `skills/${plugin.name}/SKILL.md`, disableModelInvocation: false }], installedAt: now }
         }),
         pluginSets: [{ ownerKind: 'global', ownerId: 'global', revision: 1, pluginIds: [], createdAt: now, updatedAt: now }],
-        chatScopes: []
+        chatScopes: [],
+        appViews: { enabled: false, displayMode: 'manual', pluginIds: [] }
     }
 }
 

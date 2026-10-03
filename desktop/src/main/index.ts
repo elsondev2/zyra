@@ -1,3 +1,5 @@
+import { KEYBINDING_DISPATCH_CHANNEL, configureShortcutOverrides, shortcutAccelerator, type AppNavigationCommand, type ShortcutPlatform } from '../shared/keybindings'
+import { prepareAppShortcutInput, registerKeybindingRecording } from './keybindings'
 import { assistantUtilityProvisionalUrl } from './assistant-utility-provisional-document'
 import { defaultThemeTokens, resolveDefaultAppearance } from '../shared/preferences/default-theme-tokens'
 import { browserRecordingCapture } from './browser-recording-capture'
@@ -8,10 +10,10 @@ import { browserRecordingCapture } from './browser-recording-capture'
 
 import { app, BrowserWindow, Menu, dialog, shell, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { initializeProtectedMedia } from './protected-media-service'
-import { isAbsolute, join } from 'path'
+import { dirname, isAbsolute, join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { writeFile } from 'node:fs/promises'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
@@ -21,7 +23,8 @@ import { configureProjectOpenAnalytics } from './ipc/handlers/project-details-ha
 import { configureAssistantService, disposeAssistantService, getAssistantService } from './assistant'
 import { AssistantUtilityWindowManager, type ResolvedUtilityChat, type UtilityWindowCreationOptions } from './assistant/assistant-utility-window-manager'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
-import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
+import { getCodexVoiceTranscriptionState } from './assistant/codex-voice-transcription'
+import { deleteVoiceHistory, getFailedVoiceRecording, listVoiceHistory, saveVoiceHistory, transcribeVoiceAndSave } from './assistant/voice-history'
 import { BrowserClientRuntime } from './browser-client-runtime'
 import { configureUpdateAnalytics, disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
@@ -36,6 +39,7 @@ import {
 } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../shared/platform-window-chrome'
+import { attachWindowStateEvents } from './window-state-events'
 import {
     BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL,
     type DevScopeBrowserOpenTabRequest
@@ -47,6 +51,7 @@ import { BrowserRecordingOverlayManager } from './browser-recording-overlay'
 import { NativeOverlayManager } from './native-overlay-manager'
 import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionService } from './browser-threat-protection-service'
 import { createDesktopSetupServices } from './setup'
+import { initializeDesktopStartup } from './setup/startup-initialization'
 import { resolveZyraRoot } from './zyra/zyra-root'
 import { registerInstalledDesktop } from './desktop-install-registration'
 import { dispatchDesktopTui, isDesktopTuiDispatch } from './desktop-tui-dispatcher'
@@ -61,6 +66,8 @@ import { BROWSER_LOCAL_FILE_SCHEME } from '../shared/browser-view'
 import type { AccessoryWindowState } from '../shared/accessories'
 import { configureRuntimeInstallation } from './assistant/runtime-activation'
 import { configureDesktopTerminalEnvironment, desktopNamespaceId } from './assistant/agent-server-namespace'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 app.enableSandbox()
 
@@ -149,6 +156,11 @@ async function readMainRendererOverlayAppearance(): Promise<Record<string, unkno
 
 const launchStartedAt = performance.now()
 const setupServices = createDesktopSetupServices(app.getPath('userData'))
+configureShortcutOverrides(() => setupServices.preferences.getKeyboardShortcuts())
+registerKeybindingRecording(
+    command => { if (setupServices.onboarding.isAccessAllowed()) sendAppMenuCommand(command) },
+    command => { if (setupServices.onboarding.isAccessAllowed()) sendMainRendererCommand(KEYBINDING_DISPATCH_CHANNEL, command) }
+)
 let startupThemeMode: unknown = 'system'
 async function refreshStartupTheme(): Promise<void> {
     try { startupThemeMode = (await setupServices.preferences.get({ surface: 'desktop' })).settings.appearanceThemeMode }
@@ -185,12 +197,18 @@ const WINDOWS_OVERLAY_APPEARANCE_KEYS = new Set([
     'accessibilityReduceMotion', 'compactMode'
 ])
 setupServices.preferences.subscribe((event) => {
+    if (event.changedKeys.includes('assistantMemoryEnabled')) {
+        void setupServices.preferences.getAssistantMemoryEnabled().then((enabled) => getAssistantService()?.setMemoryEnabled(enabled)).catch(() => undefined)
+    }
+    if (event.changedKeys.includes('keyboardShortcuts')) configureApplicationMenu(setupServices.onboarding.isAccessAllowed())
     if (event.changedKeys.includes('appearanceThemeMode')) void refreshStartupTheme()
+    if (event.changedKeys.includes('appearanceInterfaceScale')) void refreshInterfaceZoom()
     if (event.changedKeys.some((key) => WINDOWS_OVERLAY_APPEARANCE_KEYS.has(key))) {
         setTimeout(refreshWindowsControlOverlayAppearance, 50).unref?.()
         void refreshChromeBrowserAppearance().catch(() => undefined)
     }
 })
+void refreshInterfaceZoom()
 configureProjectOpenAnalytics((projectPath, outcome) => captureProjectOpenAnalytics(projectPath, outcome))
 configureUpdateAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_app_lifecycle', properties }))
 configureBrowserDownloadAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties }))
@@ -316,6 +334,10 @@ function getWindowChromeOptions(): Pick<Electron.BrowserWindowConstructorOptions
 }
 
 function sendAppMenuCommand(command: 'new-chat' | 'search' | 'settings' | 'reload' | 'about'): void {
+    sendMainRendererCommand('window:app-menu-command', command)
+}
+
+function sendMainRendererCommand(channel: 'window:app-menu-command' | typeof KEYBINDING_DISPATCH_CHANNEL, command: string | AppNavigationCommand): void {
     const openingWindow = !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()
     if (openingWindow) {
         mainWindow = createWindow(true)
@@ -326,7 +348,7 @@ function sendAppMenuCommand(command: 'new-chat' | 'search' | 'settings' | 'reloa
     if (!target.isVisible()) target.show()
     target.focus()
     const deliver = () => {
-        if (!target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send('window:app-menu-command', command)
+        if (!target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send(channel, command)
     }
     if (openingWindow || target.webContents.isLoadingMainFrame()) target.webContents.once('did-finish-load', deliver)
     else deliver()
@@ -373,7 +395,8 @@ function configureApplicationMenu(setupComplete = true): void {
                 { role: 'about' },
                 {
                     label: 'Settings…',
-                    accelerator: 'CommandOrControl+,',
+                    accelerator: shortcutAccelerator('app.settings', process.platform as ShortcutPlatform),
+                    registerAccelerator: false,
                     click: () => sendAppMenuCommand('settings')
                 },
                 { type: 'separator' },
@@ -391,7 +414,8 @@ function configureApplicationMenu(setupComplete = true): void {
             submenu: [
                 {
                     label: 'New Chat',
-                    accelerator: 'CommandOrControl+N',
+                    accelerator: shortcutAccelerator('app.newChat', process.platform as ShortcutPlatform),
+                    registerAccelerator: false,
                     click: () => sendAppMenuCommand('new-chat')
                 },
                 { type: 'separator' },
@@ -404,12 +428,13 @@ function configureApplicationMenu(setupComplete = true): void {
             submenu: [
                 {
                     label: 'Search',
-                    accelerator: 'CommandOrControl+K',
+                    accelerator: shortcutAccelerator('app.search', process.platform as ShortcutPlatform),
+                    registerAccelerator: false,
                     click: () => sendAppMenuCommand('search')
                 },
                 { type: 'separator' },
-                { role: 'reload' },
-                ...(is.dev ? [{ role: 'toggleDevTools' as const }] : []),
+                { label: 'Reload UI', accelerator: shortcutAccelerator('app.reload', process.platform as ShortcutPlatform), registerAccelerator: false, click: () => sendAppMenuCommand('reload') },
+                ...(is.dev ? [{ role: 'toggleDevTools' as const, accelerator: shortcutAccelerator('app.devtools', process.platform as ShortcutPlatform), registerAccelerator: false }] : []),
                 { type: 'separator' },
                 { role: 'resetZoom' },
                 { role: 'zoomIn' },
@@ -440,35 +465,26 @@ function configureApplicationMenu(setupComplete = true): void {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-function attachWindowStateEvents(window: BrowserWindow): void {
-    const publish = () => {
-        if (window.isDestroyed() || window.webContents.isDestroyed()) return
-        window.webContents.send('window:maximized-changed', window.isMaximized() || window.isFullScreen())
-        window.webContents.send('window:fullscreen-changed', window.isFullScreen())
-    }
-    window.on('maximize', publish)
-    window.on('unmaximize', publish)
-    window.on('enter-full-screen', publish)
-    window.on('leave-full-screen', publish)
-    window.webContents.on('did-finish-load', publish)
-}
-
-function isDevToolsShortcut(input: Electron.Input): boolean {
-    const key = input.key?.toLowerCase()
-    if (input.type !== 'keyDown' || key !== 'i') return false
-    return process.platform === 'darwin'
-        ? !!input.meta && !!input.alt
-        : !!input.control && !!input.shift
-}
+let interfaceZoomFactor = 1
 
 function lockWindowZoom(window: BrowserWindow): void {
     const { webContents } = window
 
-    // Keep the desktop app at a fixed 100% zoom so focus changes or shortcut
-    // noise cannot leave the whole UI in an inconsistent scaled state.
+    // Chromium page zoom adjusts the logical viewport, so fixed-height app
+    // shells reflow instead of CSS zoom enlarging and clipping them.
     webContents.setZoomLevel(0)
-    webContents.setZoomFactor(1)
+    webContents.setZoomFactor(interfaceZoomFactor)
     void webContents.setVisualZoomLevelLimits(1, 1).catch(() => {})
+}
+
+async function refreshInterfaceZoom(): Promise<void> {
+    try {
+        const value = Number((await setupServices.preferences.get({ surface: 'desktop' })).settings.appearanceInterfaceScale)
+        interfaceZoomFactor = Number.isFinite(value) ? Math.max(0.85, Math.min(1.3, value / 100)) : 1
+        for (const window of BrowserWindow.getAllWindows()) lockWindowZoom(window)
+    } catch (error) {
+        log.warn('[Appearance] could not load interface scale', error)
+    }
 }
 
 function isSafeBrowserWindowOpenUrl(url: string): boolean {
@@ -656,7 +672,7 @@ function extractShellLaunchTargetFromArgv(argv: string[]): ShellLaunchTarget | n
 
 function ensureIpcHandlersRegistered(targetWindow: BrowserWindow): void {
     if (hasRegisteredIpcHandlers) return
-    registerIpcHandlers(targetWindow, setupServices, () => mainWindow)
+    registerIpcHandlers(targetWindow, setupServices, () => mainWindow, browserViewManager)
     hasRegisteredIpcHandlers = true
 }
 
@@ -687,6 +703,9 @@ function isTrustedRendererLocation(value: string): boolean {
 function configureTrustedRendererWindow(window: BrowserWindow): void {
     registerTrustedIpcSender(window.webContents, isTrustedRendererLocation)
     nativeOverlayManager.registerOwner(window)
+    window.webContents.on('before-input-event', (_event, input) => {
+        prepareAppShortcutInput(window.webContents, input)
+    })
     window.webContents.on('will-navigate', (event, url) => {
         if (!isTrustedRendererLocation(url)) event.preventDefault()
     })
@@ -766,17 +785,6 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         return { action: 'deny' }
     })
 
-    window.webContents.on('before-input-event', (event, input) => {
-        if (!isDevToolsShortcut(input)) return
-
-        event.preventDefault()
-        if (window.webContents.isDevToolsOpened()) {
-            window.webContents.closeDevTools()
-        } else {
-            window.webContents.openDevTools({ mode: 'detach' })
-        }
-    })
-
     registerEditableContextMenu(window)
     attachWindowStateEvents(window)
     lockWindowZoom(window)
@@ -790,9 +798,9 @@ function createAccessoryShellWindow(state: AccessoryWindowState): BrowserWindow 
     const iconPath = getAppIconPath()
     const title = state.kind === 'browser'
         ? state.sessionMode === 'incognito' ? 'Zyra Incognito Browser' : 'Zyra Browser'
-        : state.kind === 'terminal' ? 'Zyra Terminal' : 'Zyra File Explorer'
+        : state.kind === 'terminal' ? 'Zyra Terminal' : state.kind === 'devscope' ? 'Zyra DevScope' : 'Zyra File Explorer'
     const window = new BrowserWindow({
-        width: state.kind === 'browser' ? 1200 : 1120,
+        width: state.kind === 'browser' || state.kind === 'devscope' ? 1200 : 1120,
         height: 800,
         minWidth: 720,
         minHeight: 480,
@@ -884,6 +892,7 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
 }
 
 async function resolveAssistantUtilityChat(canonicalChatId: string): Promise<ResolvedUtilityChat | null> {
+    if (!await getAssistantService().ensureCanonicalChatAvailable(canonicalChatId)) return null
     const snapshot = await getAssistantService().getSnapshot()
     for (const session of snapshot.sessions) {
         for (const thread of session.threads) {
@@ -1186,11 +1195,13 @@ app.whenReady().then(async () => {
     void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
-    await refreshStartupTheme()
-    await setupServices.analytics.initialize()
-    const initialOnboardingSnapshot = await setupServices.onboarding.initialize().catch((error) => {
-        log.error('[Onboarding] failed to hydrate mandatory setup state', error)
-        return null
+    const initialOnboardingSnapshot = await initializeDesktopStartup({
+        refreshTheme: refreshStartupTheme,
+        initializeAnalytics: () => setupServices.analytics.initialize(),
+        initializeOnboarding: () => setupServices.onboarding.initialize().catch((error) => {
+            log.error('[Onboarding] failed to hydrate mandatory setup state', error)
+            return null
+        })
     })
     if (initialOnboardingSnapshot?.record?.status === 'in-progress') {
         setupServices.analytics.capture({
@@ -1208,6 +1219,9 @@ app.whenReady().then(async () => {
     configureAssistantService({
         getDefaultProjectsFolder: () => setupServices.preferences.getConfiguredProjectsFolder(),
         getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults(),
+        getNewChatPreparationModel: async () => String(
+            (await setupServices.preferences.get({ surface: 'desktop' })).settings.assistantDefaultModel || ''
+        ) || null,
         getProjectDiscoveryRoots: () => setupServices.preferences.getProjectDiscoveryRoots(),
         openDesktopWorkspace: (request) => assistantUtilityWindowManager.openFromTui(request),
         cancelDesktopWorkspace: (requestId) => assistantUtilityWindowManager.cancelFromTui(requestId),
@@ -1217,6 +1231,7 @@ app.whenReady().then(async () => {
         getTitleGenerationModel: () => setupServices.preferences.getAssistantTitleModel(),
         getTitleAutomation: () => setupServices.preferences.getAssistantTitleAutomation(),
         getRuntimePolicy: () => setupServices.preferences.getAssistantRuntimePolicy(),
+        getAssistantMemoryEnabled: () => setupServices.preferences.getAssistantMemoryEnabled(),
         captureAnalytics: (input) => setupServices.analytics.capture(input)
     })
     configureApplicationMenu(setupServices.onboarding.isAccessAllowed())
@@ -1237,7 +1252,11 @@ app.whenReady().then(async () => {
             persistClipboardImage: persistAssistantClipboardImage,
             resolveClipboardAttachment: resolveAssistantClipboardAttachment,
             getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
-            transcribeVoice: transcribeVoiceWithCodex,
+            transcribeVoice: transcribeVoiceAndSave,
+            saveVoiceHistory: async input => { if (input.engine !== 'browser') throw new Error('Invalid voice history engine.'); await saveVoiceHistory(input) },
+            listVoiceHistory,
+            getFailedVoiceRecording,
+            deleteVoiceHistory,
             isOnboardingComplete: () => setupServices.onboarding.isAccessAllowed(),
             ...(is.dev ? { clientPort: 47_822 } : {})
         })

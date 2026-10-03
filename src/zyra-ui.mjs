@@ -144,7 +144,7 @@ export function createZyraUi(options = {}) {
   let activeRetryComponent = null;
   let activeRetryKind = null;
   let pendingAssistantCommit = null;
-  let assistantDividerPending = false;
+  let assistantMarkerPending = false;
   let isBusy = false;
   let suppressWorking = false;
   let activityLabel = "";
@@ -187,7 +187,7 @@ export function createZyraUi(options = {}) {
     activeRetryComponent = null;
     activeRetryKind = null;
     pendingAssistantCommit = null;
-    assistantDividerPending = false;
+    assistantMarkerPending = false;
     isBusy = false;
     suppressWorking = false;
     activityLabel = "";
@@ -228,9 +228,9 @@ export function createZyraUi(options = {}) {
     if (!activeAssistantComponent) {
       activeAssistantKey = `assistant-${assistantMessageIdentity(options.message) || Date.now()}`;
       activeAssistantComponent = new AssistantMessageComponent(activeAssistantKey, content, theme, {
-        showDivider: options.showDivider ?? assistantDividerPending,
+        showMarker: options.showMarker ?? assistantMarkerPending,
       });
-      assistantDividerPending = false;
+      assistantMarkerPending = false;
       if (inputActive) host.append(activeAssistantComponent);
     }
     activeAssistantComponent.setContent(content, options);
@@ -245,9 +245,9 @@ export function createZyraUi(options = {}) {
       if (id && committedAssistantIds.has(id) && committedAssistantKeys.has(key)) return;
       if (id) committedAssistantIds.add(id);
       committedAssistantKeys.add(key);
-      setAssistantComponentContent(content, { final: true, message, showDivider: options.showDivider });
+      setAssistantComponentContent(content, { final: true, message, showMarker: options.showMarker });
     } else {
-      pendingAssistantCommit = { id, key, content, showDivider: options.showDivider, historical: options.historical === true };
+      pendingAssistantCommit = { id, key, content, showMarker: options.showMarker, historical: options.historical === true };
     }
   };
 
@@ -259,7 +259,7 @@ export function createZyraUi(options = {}) {
     if (pending.id) committedAssistantIds.add(pending.id);
     committedAssistantKeys.add(pending.key);
     const component = new AssistantMessageComponent(`assistant-committed-${pending.id || Date.now()}`, pending.content, theme, {
-      showDivider: pending.showDivider === true,
+      showMarker: pending.showMarker === true,
       final: true,
     });
     if (pending.historical) host.append(component);
@@ -368,7 +368,7 @@ export function createZyraUi(options = {}) {
 
   const beginAssistant = (message, options = {}) => {
     suppressWorking = false;
-    assistantDividerPending = options.showDivider === true;
+    assistantMarkerPending = options.showMarker === true;
     setActivityLabel("thinking");
     assistantLifecycle.start(message);
     activeAssistantComponent = null;
@@ -405,7 +405,7 @@ export function createZyraUi(options = {}) {
     if (activeProgress) activeProgress.done = true;
     commitAssistant(message, finalContent, {
       historical: options.historical === true,
-      showDivider: options.showDivider ?? assistantDividerPending,
+      showMarker: options.showMarker ?? assistantMarkerPending,
     });
   };
 
@@ -687,7 +687,7 @@ export function createZyraUi(options = {}) {
         const content = extractUserMessageContent(event.message);
         appendUserMessage(content.text, { imageAttachments: content.imageAttachments });
       }
-      if (event.type === "message_start" && event.message?.role === "assistant") beginAssistant(event.message, { showDivider: false });
+      if (event.type === "message_start" && event.message?.role === "assistant") beginAssistant(event.message, { showMarker: false });
       if (event.type === "message_update" && event.message?.role === "assistant") {
         streamAssistantEvent(event);
         return;
@@ -703,7 +703,7 @@ export function createZyraUi(options = {}) {
       if (event.type === "message_end" && event.message?.role === "assistant") {
         finishAssistant(event.message, {
           historical: event.historical === true,
-          showDivider: event.historical !== true && isFinalAssistantResponse(event.message),
+          showMarker: isFinalAssistantResponse(event.message),
         });
         if (event.historical === true) {
           flushAssistantCommit();
@@ -971,8 +971,6 @@ function renderStartupBanner(status = {}, options = {}, width = 100) {
   const project = status.project ?? options.project ?? process.cwd();
   const model = status.model ?? options.model ?? "loading";
   const profile = status.profile ?? options.profile ?? "";
-  const thinking = status.thinking ?? options.thinking ?? "medium";
-  const themeName = status.terminalTheme ?? theme.name ?? "theme";
   const projectPath = formatHomePath(project);
   const logo = centeredBlock(zyraLogoRows, maxWidth, `${bold}${theme.primary}`, reset);
   const subtitle = compactJoin([shortModelName(model), profile]);
@@ -983,14 +981,7 @@ function renderStartupBanner(status = {}, options = {}, width = 100) {
     lines.push("");
   }
 
-  lines.push(
-    ...renderStartupSection("Context", contextBannerValues(status, projectPath), theme, maxWidth),
-    "",
-    ...renderStartupSection("Runtime", [compactJoin([model, thinking])], theme, maxWidth),
-    "",
-    ...renderStartupSection("Theme", [themeName], theme, maxWidth),
-    "",
-  );
+  lines.push(centerNearBlock(`${theme.muted}${truncate(projectPath, maxWidth)}${reset}`, maxWidth, logo.left, logo.width), "");
 
   return lines;
 }
@@ -1014,36 +1005,6 @@ function centerNearBlock(text, width, blockLeft, blockWidth) {
       ? blockLeft + Math.floor((blockWidth - valueWidth) / 2)
       : Math.floor((width - valueWidth) / 2);
   return `${" ".repeat(Math.max(0, left))}${value}`;
-}
-
-function renderStartupSection(label, values, theme, width) {
-  const bodyWidth = Math.max(1, width - 2);
-  const body = (Array.isArray(values) ? values : [values]).map((value) => String(value ?? "").trim()).filter(Boolean);
-  const sectionColor = theme.accent || theme.info || theme.primary || "";
-  const lines = [`${sectionColor}[${label}]${reset}`];
-  for (const value of body.length ? body : ["none"]) {
-    lines.push(`  ${theme.muted}${truncate(value, bodyWidth)}${reset}`);
-  }
-  return lines;
-}
-
-function contextBannerValues(status, projectPath) {
-  const memoryFiles = Array.isArray(status.projectMemory)
-    ? status.projectMemory.map((file) => String(file ?? "").trim()).filter(Boolean)
-    : [];
-  return uniqueCompact([...memoryFiles.slice(0, 2), projectPath]);
-}
-
-function uniqueCompact(values) {
-  const seen = new Set();
-  const result = [];
-  for (const value of values.map((item) => String(item ?? "").trim()).filter(Boolean)) {
-    const key = value.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(value);
-  }
-  return result;
 }
 
 function compactJoin(values) {

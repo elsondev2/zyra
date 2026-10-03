@@ -139,12 +139,50 @@ function isConservativelyReadOnlyCommand(command) {
   const normalized = String(command || "").trim()
     .replace(/^git\s+(?:-C\s+(?:"[^"]*"|'[^']*'|[^\s"']+)\s+)+/, "git ")
     .toLowerCase();
-  if (!normalized || /(?:^|[^<])>(?:>|&)?/.test(normalized) || /[;&|\r\n]|\$\(|`/.test(normalized)) return false;
-  return /^(?:git\s+(?:status|diff|log|show|branch(?:\s+--show-current)?|rev-parse|ls-files)\b|(?:rg|grep|find|ls|dir|cat|type|more|head|tail|where|which|pwd|echo)\b|(?:get-content|get-childitem|get-item|select-string|test-path)\b)/i.test(normalized);
+  if (!normalized || /[\r\n]|\$\(|`/.test(normalized)) return false;
+  let unquoted = "";
+  let quote = "";
+  for (let index = 0; index < normalized.length; index++) {
+    const character = normalized[index];
+    if (character === "\\" && quote !== "'" && index + 1 < normalized.length) {
+      unquoted += "  ";
+      index++;
+    } else if (character === quote) {
+      quote = "";
+      unquoted += " ";
+    } else if (!quote && (character === "'" || character === '"')) {
+      quote = character;
+      unquoted += " ";
+    } else {
+      unquoted += quote ? " " : character;
+    }
+  }
+  if (quote || /[;&><]/.test(unquoted) || /\|\|/.test(unquoted)) return false;
+  const readOnlyCommand = /^(?:git\s+(?:status|diff|log|show|branch(?:\s+--show-current)?|rev-parse|ls-files)\b|(?:rg|grep|find|ls|dir|cat|type|more|head|tail|where|which|pwd|echo)\b|(?:get-content|get-childitem|get-item|select-string|test-path)\b)/i;
+  const segments = [];
+  let start = 0;
+  for (let index = 0; index < unquoted.length; index++) {
+    if (unquoted[index] !== "|") continue;
+    segments.push(normalized.slice(start, index).trim());
+    start = index + 1;
+  }
+  segments.push(normalized.slice(start).trim());
+  return segments.every((segment) => readOnlyCommand.test(segment));
 }
 
 export function describeZyraToolPermission(event, options = {}) {
   return describeToolPermission(event, options);
+}
+
+function emailActionSummary(tool, value) {
+  if (tool === 'send_draft') return 'Send the saved email draft to its stored recipients.';
+  if (!['create_draft', 'update_draft', 'send_message'].includes(tool)) return '';
+  const args = asRecord(value);
+  // Counts only: no recipients, subject/body, attachment bytes or credentials
+  // enter the approval/reviewer log. Uploads must nevertheless be visible.
+  const count = key => Array.isArray(args[key]) ? Math.min(100, args[key].length) : 0;
+  const textSize = ['body', 'htmlBody'].reduce((size, key) => size + (typeof args[key] === 'string' ? args[key].length : 0), 0);
+  return `Email ${tool === 'send_message' ? 'send' : 'draft save'}: ${count('to')} To, ${count('cc')} Cc, ${count('bcc')} Bcc recipients; ${textSize} body characters. Attachment uploads: ${count('attachments')}.`;
 }
 
 function describeToolPermission(event, options, scopedRoots) {
@@ -152,6 +190,24 @@ function describeToolPermission(event, options, scopedRoots) {
   if (!toolName || toolName === FILESYSTEM_ACCESS_TOOL || isSeparatelySupervisedControlTool(toolName)) return null;
 
   const input = asRecord(event?.input);
+  if (toolName === 'plugin_mcp') {
+    const action = stringValue(input.action).slice(0, 24);
+    if (action === 'servers') return null;
+    const pluginId = stringValue(input.pluginId).slice(0, 128);
+    const server = stringValue(input.server).slice(0, 64);
+    const tool = stringValue(input.tool).slice(0, 128);
+    return {
+      requestType: 'command',
+      title: action === 'call' ? 'Use Plugin MCP tool' : 'Connect to Plugin MCP server',
+      detail: [[pluginId, server, tool].filter(Boolean).join(' / ') || 'List Chat Plugin MCP servers', action === 'call' ? emailActionSummary(tool, input.arguments) : ''].filter(Boolean).join('\n'),
+      toolName,
+      outsideProject: false,
+      scopeViolation: false,
+      readOnlyViolation: false,
+      grantKey: `plugin_mcp:${pluginId}:${server}:${action}:${tool}`,
+      grantLabel: `Allow ${pluginId || 'Plugin'} MCP ${tool || server || 'discovery'} for this chat`,
+    };
+  }
   const project = path.resolve(options.project || process.cwd());
   const explicitFilesystemScope = Array.isArray(asRecord(options.filesystemScope).roots);
   const roots = scopedRoots || normalizeFilesystemRoots(options, project);
@@ -239,38 +295,38 @@ export function createZyraPermissionGateExtension(options = {}) {
   };
   const handleToolCall = async (event) => {
     const permissionMode = getPermissionMode();
+    if (permissionMode === "full-access") {
+      consumeAccess(event);
+      return undefined;
+    }
     if (isLoadedSkillRead(event, options)) return undefined;
     const effectiveRoots = access?.currentRoots() || scopedRoots;
     const request = describeToolPermission(event, options, effectiveRoots);
     if (!request) { consumeAccess(event); return undefined; }
-    if (request.scopeViolation) {
+    if (permissionMode !== "full-access" && request.scopeViolation) {
       return {
         block: true,
-        reason: `${request.toolName || "This tool"} requested a path outside this chat's filesystem scope. Full access controls approvals; it does not add folders. ${access ? 'Call filesystem_access with operation inspect to see scope, then request the needed folder through approval and retry this same tool. Do not bypass a denial with Bash. ' : ''}For permanent access, associate the folder in Settings > Projects, then open Thread Details > Folder access and apply folder changes. Allowed folders: ${effectiveRoots?.map((root) => `${root.path} (${root.access})`).join("; ") || "project folder only"}.`,
+        reason: `${request.toolName || "This tool"} requested a path outside this chat's filesystem scope. Folder limits apply in the current permission mode. ${access ? 'Call filesystem_access with operation inspect to see scope, then request the needed folder through approval and retry this same tool. Do not bypass a denial with Bash. ' : ''}For permanent access, associate the folder in Settings > Projects, then open Thread Details > Folder access and apply folder changes. Allowed folders: ${effectiveRoots?.map((root) => `${root.path} (${root.access})`).join("; ") || "project folder only"}.`,
       };
     }
-    if (request.readOnlyViolation) {
+    if (permissionMode !== "full-access" && request.readOnlyViolation) {
       return {
         block: true,
         reason: `${request.toolName || "This tool"} requested a write inside a read-only Project folder.`,
       };
     }
     consumeAccess(event);
-    if (sessionGrants.has(request.grantKey)) return undefined;
+    if (sessionGrants.has(request.grantKey)
+      && (permissionMode !== "auto-review" || !isPotentiallyCriticalZyraToolPermission(request))) return undefined;
 
-    if (permissionMode === "full-access") {
-      if (!isPotentiallyCriticalZyraToolPermission(request)) return undefined;
-      if (!isDefinitelyCriticalZyraToolPermission(request)) {
-        const reviewed = await reviewZyraToolPermission(request, reviewPermission);
-        if (reviewed?.decision === "approve") return undefined;
-        if (reviewed?.decision === "deny") return reviewed.result;
-      }
-    } else if (permissionMode === "auto-review") {
-      if (!isDefinitelyCriticalZyraToolPermission(request)) {
-        const reviewed = await reviewZyraToolPermission(request, reviewPermission);
-        if (reviewed?.decision === "approve") return undefined;
-        if (reviewed?.decision === "deny") return reviewed.result;
-      }
+    let approvalRequest = request;
+    if (permissionMode === "auto-review") {
+      const reviewed = await reviewZyraToolPermission(request, reviewPermission);
+      if (reviewed.decision === "approve") return undefined;
+      approvalRequest = {
+        ...request,
+        detail: `${reviewed.reason}\n\n${request.detail}`,
+      };
     } else if (
       permissionMode === "edits-only"
       && request.requestType === "file-change"
@@ -287,7 +343,7 @@ export function createZyraPermissionGateExtension(options = {}) {
       };
     }
 
-    const decision = await requestPermission({ ...request, toolCallId: event?.toolCallId });
+    const decision = await requestPermission({ ...approvalRequest, toolCallId: event?.toolCallId });
     if (decision === "acceptForSession") {
       sessionGrants.add(request.grantKey);
       return undefined;
@@ -313,28 +369,20 @@ export function createZyraPermissionGateExtension(options = {}) {
 }
 
 async function reviewZyraToolPermission(request, reviewPermission) {
-  if (!reviewPermission) return null;
+  if (!reviewPermission) return { decision: "ask", reason: "Automatic review is unavailable." };
   try {
-    const review = normalizeReviewDecision(await reviewPermission(request));
-    if (review.decision !== "deny") return { decision: review.decision };
-    return {
-      decision: "deny",
-      result: {
-        block: true,
-        reason: review.reason || `Zyra's safety review declined ${request.toolName || "this tool"}.`,
-      },
-    };
-  } catch {
-    return null;
+    return normalizeReviewDecision(await reviewPermission(request));
+  } catch (error) {
+    return { decision: "ask", reason: `Automatic review failed: ${String(error?.message || "unknown error").slice(0, 300)}` };
   }
 }
 
 function normalizeReviewDecision(value) {
-  if (typeof value === "string") return { decision: normalizeReviewDecisionName(value), reason: "" };
+  if (typeof value === "string") return { decision: normalizeReviewDecisionName(value), reason: "Automatic review requires your confirmation." };
   const record = asRecord(value);
   return {
     decision: normalizeReviewDecisionName(record.decision),
-    reason: stringValue(record.reason).slice(0, 600),
+    reason: stringValue(record.reason).slice(0, 600) || "Automatic review requires your confirmation.",
   };
 }
 

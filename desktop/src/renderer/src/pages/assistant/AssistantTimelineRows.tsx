@@ -1,3 +1,4 @@
+// @refresh reset
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, Gauge, Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import type { AssistantActivity, AssistantMessage, AssistantPendingUserInput, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
@@ -10,6 +11,8 @@ import { getFileUrl } from '@/components/ui/file-preview/utils'
 import { ZyraLogoASCII } from '@/components/ui/ZyraLogo'
 import { cn } from '@/lib/utils'
 import { formatAssistantDateTime } from '@/lib/assistant/selectors'
+import { AssistantPeerReplyReceipt } from './AssistantPeerReplyReceipt'
+import { areAssistantPeerRepliesEqual, type AssistantPeerReply } from './assistant-peer-replies'
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import { AssistantFileAttachmentCard, AssistantPastedTextCard } from './AssistantAttachmentCards'
 import { AssistantQuestionResponse } from './AssistantQuestionResponse'
@@ -40,6 +43,7 @@ import { TimelineProposedPlan } from './AssistantTimelineProposedPlan'
 import { TimelineToolCallList } from './AssistantTimelineToolCalls'
 
 export { TimelineToolCallList }
+export { TimelineWorkingIndicator } from './AssistantTimelineWorkingIndicator'
 export { TimelineIssueList } from './AssistantTimelineIssueList'
 export { TimelineContextCompactionMarker } from './AssistantTimelineCompaction'
 export { TimelineProposedPlan } from './AssistantTimelineProposedPlan'
@@ -518,6 +522,7 @@ export const TimelineMessage = memo(({
     compactLiveNarration = false,
     inlineWorkNarration = false,
     questionResponse = null,
+    peerReply,
     onRequestDelete,
     onOpenFilePath = undefined,
     onOpenAttachmentPreview = undefined,
@@ -536,6 +541,7 @@ export const TimelineMessage = memo(({
     compactLiveNarration?: boolean
     inlineWorkNarration?: boolean
     questionResponse?: AssistantPendingUserInput | null
+    peerReply?: AssistantPeerReply
     onRequestDelete?: (message: AssistantMessage) => void
     onOpenFilePath?: (filePath: string) => Promise<void> | void
     onOpenAttachmentPreview?: (
@@ -568,8 +574,8 @@ export const TimelineMessage = memo(({
         streaming: Boolean(message.streaming) && !usesProviderNativeStreaming,
         mode: assistantTextStreamingMode
     })
-    const streamedMessageRef = useRef(Boolean(message.streaming))
-    if (message.streaming) streamedMessageRef.current = true
+    const streamedMessageRef = useRef(assistantTextPresentation.sourceStreaming)
+    if (assistantTextPresentation.sourceStreaming) streamedMessageRef.current = true
     const initialCompactNarration = useMemo(() => getSettledLiveNarration(message), [])
     const [compactNarration, setCompactNarration] = useState<CompactLiveNarrationSnapshot | null>(initialCompactNarration)
     const [outgoingCompactNarration, setOutgoingCompactNarration] = useState<CompactLiveNarrationSnapshot | null>(null)
@@ -657,10 +663,8 @@ export const TimelineMessage = memo(({
     ])
 
     if (isAssistant) {
-        const presentationActive = !usesProviderNativeStreaming && (
-            Boolean(message.streaming) || assistantTextPresentation.presenting
-        )
-        const assistantText = presentationActive ? (assistantTextPresentation.text || ' ') : (message.text || ' ')
+        const presentationActive = !usesProviderNativeStreaming && assistantTextPresentation.presenting
+        const assistantText = usesProviderNativeStreaming ? (message.text || ' ') : (assistantTextPresentation.text || ' ')
         const renderedAssistantText = stripProposedPlanBlocks(assistantText) || (presentationActive ? ' ' : '')
         const assistantCopyValue = renderedAssistantText.trim() ? renderedAssistantText : copyValue
         if (!renderedAssistantText.trim() && !presentationActive) return null
@@ -669,12 +673,15 @@ export const TimelineMessage = memo(({
         const showElapsed = settings.assistantShowActionStats && assistantElapsed
         const showCopy = isLastAssistantInTurn && assistantCopyValue.trim()
         const renderMessageFooter = (showTimestamp: boolean) => {
-            if (!showTimestamp && !showElapsed && !showCopy) return null
-            return <div
+            if (!showTimestamp && !showElapsed && !showCopy && !peerReply) return null
+            return <>
+            {peerReply && !peerReply.fallback ? <AssistantPeerReplyReceipt reply={peerReply} /> : null}
+            <div
                 className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sparkle-text-muted"
                 data-assistant-message-metadata={displayMode}
             >
                 {showTimestamp ? timestamp : null}
+                {peerReply?.fallback ? <AssistantPeerReplyReceipt reply={peerReply} /> : null}
                 {showElapsed ? <span className="text-sparkle-text">{showTimestamp ? '| ' : ''}{assistantElapsed}</span> : null}
                 {showCopy ? <button
                     type="button"
@@ -696,7 +703,7 @@ export const TimelineMessage = memo(({
                     {copied ? <Check size={11} /> : <Copy size={11} />}
                     <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button> : null}
-            </div>
+            </div></>
         }
 
         return (
@@ -970,6 +977,7 @@ export const TimelineMessage = memo(({
         && prev.assistantTextStreamingMode === next.assistantTextStreamingMode
         && prev.displayMode === next.displayMode
         && prev.questionResponse === next.questionResponse
+        && areAssistantPeerRepliesEqual(prev.peerReply, next.peerReply)
         && prev.onRequestDelete === next.onRequestDelete
         && prev.onOpenFilePath === next.onOpenFilePath
         && prev.onOpenAttachmentPreview === next.onOpenAttachmentPreview
@@ -978,42 +986,6 @@ export const TimelineMessage = memo(({
         && prev.onLinkNotice === next.onLinkNotice
         && areMessagesEqual(prev.message, next.message)
 })
-
-function formatWorkingIndicatorStatus(startedAt: string | null | undefined, label: string): string {
-    if (label === 'Connecting...') return label
-    const elapsed = startedAt ? formatWorkingTimer(startedAt, new Date().toISOString()) : null
-    return elapsed ? `Working for ${elapsed}` : label
-}
-
-export function TimelineWorkingIndicator({ startedAt, label = 'Working...' }: { startedAt?: string | null; label?: string }) {
-    const statusTextRef = useRef<HTMLSpanElement | null>(null)
-    const statusText = formatWorkingIndicatorStatus(startedAt, label)
-    useEffect(() => {
-        const updateStatusText = () => {
-            if (statusTextRef.current) {
-                statusTextRef.current.textContent = formatWorkingIndicatorStatus(startedAt, label)
-            }
-        }
-        updateStatusText()
-        if (!startedAt || label === 'Connecting...') return
-        const intervalId = window.setInterval(updateStatusText, 1000)
-        return () => window.clearInterval(intervalId)
-    }, [label, startedAt])
-    return (
-        <div className="max-w-4xl py-0.5" data-assistant-work-summary-shell="true">
-            <div className="inline-flex min-h-7 items-center gap-1 text-[11px] text-white/32">
-                <span data-assistant-working-dots="true" className="mr-0.5 inline-flex shrink-0 items-center gap-[3px]" aria-hidden="true">
-                    <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse" />
-                    <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse [animation-delay:200ms]" />
-                    <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse [animation-delay:400ms]" />
-                </span>
-                <span ref={statusTextRef} className="shrink-0 font-medium">{statusText}</span>
-                <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-white/20" />
-            </div>
-            <div className="h-px w-full bg-white/[0.07]" aria-hidden="true" />
-        </div>
-    )
-}
 
 export function TimelineEmptyState({
     projectLabel = null,

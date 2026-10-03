@@ -1,4 +1,5 @@
 import path from "node:path";
+import { ZYRA_MEMORY_WORKER_SYSTEM_PROMPT } from "./zyra-memory-harness-worker.mjs";
 import {
   buildZyraPhase2WorkerPrompt,
   buildZyraStage1WorkerPrompt,
@@ -40,6 +41,15 @@ export async function runMemoryConsolidation(runtime, options = {}, services = {
   const root = path.resolve(options.root ?? services.root ?? process.cwd());
   ensureZyraMemory(root);
   prepareZyraMemoryWorkspace(root);
+  const modelSelection = options.model
+    ? { model: options.model, thinking: options.thinking }
+    : await services.resolveModelSelection?.(runtime)
+      ?? { model: selectedRuntimeModel(runtime, services.defaultModel), thinking: options.thinking };
+  const workerOptions = {
+    ...options,
+    model: modelSelection.model ?? selectedRuntimeModel(runtime, services.defaultModel),
+    thinking: options.thinking ?? modelSelection.thinking ?? runtime?.thinkingState?.value ?? runtime?.thinking ?? "medium",
+  };
   const previousPrepared = preparedJobsFromStartup(runtime?.memoryStartup);
   const startup = options.skipStartup
     ? { claimed: 0, prepared: [], pruned: [] }
@@ -54,7 +64,6 @@ export async function runMemoryConsolidation(runtime, options = {}, services = {
     ...preparedJobsFromStartup(startup),
     ...(options.includeCurrent === false ? [] : [prepareZyraCurrentStage1Job(root, runtime, options.currentJobOptions)]),
   ]);
-
   const stage1 = {
     considered: prepared.length,
     succeeded: 0,
@@ -82,12 +91,12 @@ export async function runMemoryConsolidation(runtime, options = {}, services = {
     };
 
     try {
-      const rawOutput = await sampleStage1Memory(prep, runtime, options, services);
+      const rawOutput = await sampleStage1Memory(prep, runtime, workerOptions, services);
       const parsed = await parseMemoryWorkerOutput(
         rawOutput,
         ["rollout_summary", "rollout_slug", "raw_memory"],
         runtime,
-        options,
+        workerOptions,
         services,
       );
       const normalized = normalizeZyraStage1WorkerOutput(parsed);
@@ -116,7 +125,7 @@ export async function runMemoryConsolidation(runtime, options = {}, services = {
     }
   }
 
-  const phase2 = await runPhase2MemoryWorker(root, runtime, options, services);
+  const phase2 = await runPhase2MemoryWorker(root, runtime, workerOptions, services);
   return { root, startup, stage1, phase2 };
 }
 
@@ -172,6 +181,7 @@ async function sampleStage1Memory(prep, runtime, options, services) {
   }
   return runInternalZyraMemoryPrompt(runtime, prompt, {
     model: options.stage1Model ?? options.model,
+    thinking: options.stage1Thinking ?? options.thinking,
     signal: options.signal,
     source: "memory-stage1",
   }, services);
@@ -227,6 +237,7 @@ async function samplePhase2Memory(root, runtime, options, services) {
   }
   return runInternalZyraMemoryPrompt(runtime, prompt, {
     model: options.phase2Model ?? options.model,
+    thinking: options.phase2Thinking ?? options.thinking,
     signal: options.signal,
     source: "memory-phase2",
   }, services);
@@ -243,6 +254,7 @@ async function parseMemoryWorkerOutput(rawOutput, requiredKeys, runtime, options
       ? await options.repairSampler({ prompt, rawOutput, requiredKeys, error })
       : await runInternalZyraMemoryPrompt(runtime, prompt, {
         model: options.repairModel ?? options.model,
+        thinking: options.repairThinking ?? options.thinking,
         signal: options.signal,
         source: "memory-json-repair",
       }, services);
@@ -264,12 +276,27 @@ function buildMemoryJsonRepairPrompt(rawOutput, requiredKeys, error) {
 }
 
 async function runInternalZyraMemoryPrompt(runtime, prompt, options = {}, services = {}) {
-  if (typeof services.createWorkerSession !== "function") {
-    throw new Error("Memory worker session factory is not configured.");
+  const model = options.model ?? selectedRuntimeModel(runtime, services.defaultModel);
+  if (typeof services.runTextPrompt === "function") {
+    const result = await services.runTextPrompt({
+      runtime,
+      model,
+      prompt,
+      systemPrompt: ZYRA_MEMORY_WORKER_SYSTEM_PROMPT,
+      thinking: options.thinking,
+      signal: options.signal,
+      source: options.source ?? "memory-worker",
+    });
+    if (result !== undefined) {
+      if (typeof result !== "string") throw new Error("Memory text prompt service must return text.");
+      return result;
+    }
   }
+  if (typeof services.createWorkerSession !== "function") throw new Error("Memory worker session factory is not configured.");
   const worker = await services.createWorkerSession({
     runtime,
-    model: options.model ?? selectedRuntimeModel(runtime, services.defaultModel),
+    model,
+    thinking: options.thinking,
     source: options.source ?? "memory-worker",
   });
   const workerSession = worker?.session ?? worker;

@@ -34,6 +34,10 @@ assert.equal(recovered.length, 1, 'legacy cold canonical history restores missin
 assert.equal(recovered[0]!.responseMessageId, canonical.id)
 assert.deepEqual(recovered[0]!.answers, resolved.answers)
 assert.equal(mergeRecoveredUserInputReceipts([resolved], recovered).length, 1, 'recovery enriches rather than duplicates live receipts')
+const changedIdentity = mergeRecoveredUserInputReceipts([{ ...resolved, responseMessageId: null }], [{ ...resolved, requestId: 'recovered-request', responseMessageId: 'recovered-answer' }])
+assert.equal(changedIdentity.length, 1, 'recovery also matches the durable row ID when request and response IDs change')
+assert.equal(changedIdentity[0]!.id, resolved.id)
+assert.equal(changedIdentity[0]!.requestId, 'recovered-request')
 assert.equal(recoverCanonicalUserInputReceipts(entries.slice(2), [{ ...canonical, timelineSequence: 1 }]).length, 0, 'an authored answer-looking prompt without a question tool stays ordinary')
 const cancelled = structuredClone(entries)
 ;(cancelled[1]!.message.details as any).cancelled = true

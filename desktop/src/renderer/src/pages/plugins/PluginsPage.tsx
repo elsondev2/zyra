@@ -34,6 +34,7 @@ export default function PluginsPage() {
     const setStoreOpen = (open: boolean) => setParams((previous) => { const next = new URLSearchParams(previous); if (open) next.delete('view'); else next.set('view', 'manage'); return next })
     const [query, setQuery] = useState('')
     const [sourcesOpen, setSourcesOpen] = useState(false)
+    const [skillSourcesView, setSkillSourcesView] = useState<'sources' | 'conflicts'>('sources')
     const [selectedSkill, setSelectedSkill] = useState<DirectorySkill | null>(null)
     const { catalog, selectedPlugin, busy, loading, error, notice } = directory
     const selectedProjectName = directory.projects.find((project) => project.id === (selectedSession?.projectId || selectedSession?.chatScope?.projectId))?.name
@@ -50,14 +51,14 @@ export default function PluginsPage() {
         setParams((previous) => { const nextParams = new URLSearchParams(previous); nextParams.set('tab', next); return nextParams }, { replace: true })
         setQuery('')
         setSourcesOpen(false)
+        setSkillSourcesView('sources')
     }
     const refresh = () => { void directory.loadCatalog(); void resources.refresh() }
-    const openSources = () => { setSelectedSkill(null); setSourcesOpen(true) }
+    const openSources = () => { setSelectedSkill(null); setSkillSourcesView('sources'); setSourcesOpen(true) }
     const activeError = error || (tab === 'skills' ? resources.error : null)
     const openCreatedChat = (id: string) => navigate(buildAssistantChatRoute(id, null))
     const useInChat = (pluginId: string) => void directory.useInNewChat(pluginId, openCreatedChat)
     const installAvailable = desktopHost && directory.catalogInstallAvailable && !directory.downloadPending && !directory.inspection
-    const managedInspection = ['ready', 'installing'].includes(directory.download.phase) ? directory.download.download?.inspection : null
     const productOpen = params.has('plugin') || params.has('installed')
     const productInstallation = catalog?.plugins.find(plugin => params.has('installed') ? plugin.id === params.get('installed') : plugin.sourceId === `openai-catalog:${params.get('plugin')}` && plugin.name === params.get('plugin')) || null
     const productEntry = storeCatalog.entries.find(entry => entry.name === params.get('plugin') || productInstallation?.sourceId === `openai-catalog:${entry.name}` && productInstallation.name === entry.name) || null
@@ -77,8 +78,8 @@ export default function PluginsPage() {
     }, [productOpen])
 
     const installContent = <>
+        {directory.installationToast ? <div key={directory.installationToast.key} className="plugin-install-toast" role="status" aria-live="polite">{directory.installationToast.message}</div> : null}
         <PluginDownloadPanel state={directory.download} displayName={storeCatalog.entries.find(entry => entry.name === directory.download.name)?.displayName} onCancel={() => void directory.cancelDownload()} onRetry={() => { if (directory.download.name) void directory.beginCatalogInstall(directory.download.name) }} />
-        {managedInspection ? <AssistantPluginInstallDialog inline inspection={managedInspection} packageLabel="OpenAI catalog" installing={busy || directory.download.phase === 'installing'} error={null} onCancel={() => void directory.cancelDownload()} onInstall={() => void directory.installReviewedPlugin()} onInstallAndUse={() => void directory.installReviewedPlugin(openCreatedChat)} /> : null}
     </>
 
     return <section ref={scrollContainer} className="plugin-directory custom-scrollbar" data-testid="plugins-page">
@@ -86,7 +87,7 @@ export default function PluginsPage() {
             {!productOpen ? <Link to="/assistant" className="plugin-text-button plugin-back-link"><ArrowLeft size={15} />Back to Chat</Link> : null}
             {productOpen ? <>
                 {error ? <p className="plugin-notice" role="alert">{error}</p> : null}
-                {loading && !productEntry && !productInstallation ? <><DirectoryEmpty title="Loading Plugin…" />{installContent}</> : <PluginProductPage key={params.get('plugin') || params.get('installed')} installContent={installContent} entry={productEntry} installation={productInstallation} catalog={catalog} busy={busy} canInstall={installAvailable} onBack={() => setParams({})} onInstall={name => void directory.beginCatalogInstall(name)} onUseInChat={useInChat} onManage={directory.selectPlugin} />}
+                {loading && !productEntry && !productInstallation ? <><DirectoryEmpty title="Loading Plugin…" />{installContent}</> : <PluginProductPage key={params.get('plugin') || params.get('installed')} installContent={installContent} entry={productEntry} installation={productInstallation} catalog={catalog} busy={busy} canInstall={installAvailable} onBack={() => setParams({})} onInstall={name => void directory.beginCatalogInstall(name)} onUseInChat={useInChat} onManage={id => navigate(`/settings/assistant/plugins?plugin=${encodeURIComponent(id)}`)} />}
             </> : null}
             <div style={{ display: productOpen ? 'none' : undefined }}>
             {storeOpen ? <>
@@ -121,21 +122,24 @@ export default function PluginsPage() {
             {activeError || notice ? <p className="plugin-notice" role={activeError ? 'alert' : 'status'}>{activeError || notice}</p> : null}
             <div role="tabpanel" id={`directory-panel-${tab}`} aria-labelledby={`directory-tab-${tab}`} tabIndex={0}>
                 {!desktopHost ? <DirectoryEmpty title="Available in Zyra Desktop" description="Open Zyra Desktop to inspect and manage local Plugins and Skill folders." /> : sourcesOpen && tab === 'skills' ? <>
-                    <button type="button" className="plugin-text-button" onClick={() => { setSourcesOpen(false); void resources.refresh() }}><ArrowLeft size={15} />Back to Skills</button>
-                    <SkillsSettings key={selectedSession?.projectPath || 'global'} embedded onSaved={resources.refresh} />
+                    <button type="button" className="plugin-text-button" onClick={() => {
+                        if (skillSourcesView === 'conflicts') setSkillSourcesView('sources')
+                        else { setSourcesOpen(false); void resources.refresh() }
+                    }}><ArrowLeft size={15} />{skillSourcesView === 'conflicts' ? 'Back to sources' : 'Back to Skills'}</button>
+                    <SkillsSettings key={selectedSession?.projectPath || 'global'} embedded view={skillSourcesView} onOpenConflicts={() => setSkillSourcesView('conflicts')} onSaved={resources.refresh} />
                 </> : <>
                     {tab === 'skills' ? <div className="plugin-context-line"><p title={selectedProjectName}>{selectedProjectName ? `Sources for ${selectedProjectName}` : 'Personal and built-in sources'}</p><button type="button" className="plugin-text-button" onClick={openSources}><Settings2 size={14} />Manage sources</button></div> : null}
                     {activeError && !catalog ? <button type="button" className="plugin-button" onClick={refresh}>Try again</button> : loading && !catalog || tab === 'skills' && resources.loading ? <DirectoryEmpty title={`Loading ${tab === 'skills' ? 'Skills' : 'Plugins'}…`} /> : tab === 'plugins' ? (
                         visiblePlugins.length && catalog ? <PluginList plugins={visiblePlugins} catalog={catalog} busy={busy} onSelect={openInstalled} onToggle={(id, enabled) => void directory.updatePluginState(id, enabled)} /> : <DirectoryEmpty title={query ? 'No matching Plugins' : 'No Plugins installed'} description={query ? 'Try another name or description.' : 'Find a Plugin in the store.'} action={!query && directory.serviceAvailable ? <button type="button" className="plugin-button" disabled={busy} onClick={() => setStoreOpen(true)}>Browse store</button> : undefined} />
                     ) : tab === 'skills' ? (
                         visibleSkills.length ? <SkillList skills={visibleSkills} onSelect={(skill) => { if (skill.pluginId) openInstalled(skill.pluginId); else setSelectedSkill(skill) }} /> : !resources.error ? <DirectoryEmpty title={query ? 'No matching Skills' : 'No Skills found'} description={query ? 'Try another name or source.' : 'Choose a Skill source or install a Plugin with Skills.'} /> : null
-                    ) : visibleMcps.length ? <McpList contributions={visibleMcps} onSelect={openInstalled} /> : <DirectoryEmpty title={query ? 'No matching MCP contributions' : 'No MCP contributions installed'} description={query ? 'Try another Plugin name.' : 'Plugins with MCP configurations appear here. Connections are not available yet.'} />}
+                    ) : visibleMcps.length ? <McpList contributions={visibleMcps} onSelect={openInstalled} /> : <DirectoryEmpty title={query ? 'No matching MCP contributions' : 'No MCP contributions installed'} description={query ? 'Try another Plugin name.' : 'Install a Plugin with MCP servers to connect them here.'} />}
                 </>}
             </div>
             </>}
             </div>
         </div>
-        {catalog && selectedPlugin ? <AssistantPluginDetail catalog={catalog} plugin={selectedPlugin} projects={directory.projects} selectedSession={selectedSession} busy={busy} error={error} notice={notice} onClose={() => directory.selectPlugin(null)} onUseInChat={() => useInChat(selectedPlugin.id)} onToggleInstallation={(enabled) => void directory.updatePluginState(selectedPlugin.id, enabled)} onToggleSet={(id, enabled) => void directory.updatePluginSet(id, selectedPlugin.id, enabled)} onRefreshChat={() => void directory.refreshCurrentChat()} onRollback={(id) => void directory.rollbackPlugin(selectedPlugin.id, id)} /> : null}
+        {catalog && selectedPlugin ? <AssistantPluginDetail catalog={catalog} plugin={selectedPlugin} projects={directory.projects} selectedSession={selectedSession} busy={busy} error={error} notice={notice} onClose={() => directory.selectPlugin(null)} onUseInChat={() => useInChat(selectedPlugin.id)} onToggleInstallation={(enabled) => void directory.updatePluginState(selectedPlugin.id, enabled)} onToggleAppViews={(enabled) => void directory.updateAppViewSettings({ pluginId: selectedPlugin.id, enabled })} onToggleSet={(id, enabled) => void directory.updatePluginSet(id, selectedPlugin.id, enabled)} onRefreshChat={() => void directory.refreshCurrentChat()} onRollback={(id) => void directory.rollbackPlugin(selectedPlugin.id, id)} /> : null}
         {selectedSkill ? <PluginDialog title={selectedSkill.name} subtitle={`${selectedSkill.scope} · ${selectedSkill.source}`} onClose={() => setSelectedSkill(null)} footer={selectedSkill.scope !== 'Built-in' ? <button type="button" className="plugin-button" onClick={openSources}>Manage source folders</button> : undefined}>
             <p className="plugin-description">{selectedSkill.description || 'No description provided.'}</p>
             <p className="plugin-help mt-5">{selectedSkill.manualOnly ? 'Available by explicit invocation only.' : 'Available from the selected source for new Chats.'} Source changes apply to existing Chats after a reload.</p>

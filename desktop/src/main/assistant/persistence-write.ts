@@ -1,4 +1,5 @@
 import { encodeApprovalScope } from './approval-persistence'
+import { reconcileAssistantPersistedRequestIdentity } from './persistence-request-identity'
 import type { Database as SqlDatabase, SqlValue } from 'sql.js/dist/sql-asm.js'
 import type {
     AssistantActivity,
@@ -27,6 +28,7 @@ import {
 } from './persistence-activity-payload'
 import { upsertAssistantChatScope } from './assistant-project-persistence'
 import { sanitizeOptionalPath } from './utils'
+import { normalizeAssistantMessageReferenceId } from '../../shared/assistant/message-identity'
 
 export function upsertAssistantCanonicalTimelineProjection(db: SqlDatabase, input: {
     threadId: string
@@ -393,6 +395,18 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
 
 function deleteAssistantThreadRowsById(db: SqlDatabase, tableName: string, threadId: string, rowIds: string[]): void {
     if (rowIds.length === 0) return
+    if (tableName === 'assistant_messages') {
+        for (const oldId of rowIds) {
+            const canonicalId = normalizeAssistantMessageReferenceId(oldId)
+            if (!canonicalId || canonicalId === oldId) continue
+            // Preserve final-answer ownership and the existing search-index
+            // triggers before removing a legacy replay of the same response.
+            db.run(`UPDATE assistant_turns SET assistant_message_id = ?
+                WHERE thread_id = ? AND assistant_message_id = ?
+                  AND EXISTS (SELECT 1 FROM assistant_messages WHERE thread_id = ? AND id = ? AND role = 'assistant')`,
+            [canonicalId, threadId, oldId, threadId, canonicalId])
+        }
+    }
     const placeholders = rowIds.map(() => '?').join(', ')
     db.run(`DELETE FROM ${tableName} WHERE thread_id = ? AND id IN (${placeholders})`, [threadId, ...rowIds])
 }
@@ -474,7 +488,7 @@ function upsertAssistantTurn(db: SqlDatabase, threadId: string, model: string, t
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
-            model = excluded.model,
+            model = COALESCE(NULLIF(assistant_turns.model, ''), excluded.model),
             state = excluded.state,
             requested_at = excluded.requested_at,
             started_at = excluded.started_at,
@@ -492,12 +506,19 @@ function upsertAssistantTurn(db: SqlDatabase, threadId: string, model: string, t
         turn.requestedAt,
         turn.startedAt,
         turn.completedAt,
-        turn.assistantMessageId,
+        resolvePersistedAssistantMessageReference(db, threadId, turn.assistantMessageId),
         turn.effort || null,
         turn.serviceTier || null,
         jsonStringify(turn.usage),
         turn.completedAt || turn.startedAt || turn.requestedAt
     ])
+}
+
+function resolvePersistedAssistantMessageReference(db: SqlDatabase, threadId: string, reference: string | null): string | null {
+    const canonical = normalizeAssistantMessageReferenceId(reference)
+    if (!canonical || canonical === reference) return reference
+    return db.exec('SELECT id FROM assistant_messages WHERE thread_id = ? AND id = ? AND role = ? LIMIT 1', [threadId, canonical, 'assistant'])[0]?.values?.length
+        ? canonical : reference
 }
 
 function deleteAssistantTurns(db: SqlDatabase, turnIds: string[]): void {
@@ -581,14 +602,16 @@ function upsertAssistantProposedPlan(db: SqlDatabase, threadId: string, plan: As
 }
 
 function upsertAssistantPendingApproval(db: SqlDatabase, threadId: string, approval: AssistantPendingApproval): void {
+    reconcileAssistantPersistedRequestIdentity(db, 'assistant_pending_approvals', threadId, approval.id, approval.requestId)
     db.run(`
         INSERT INTO assistant_pending_approvals (
             id, thread_id, request_id, request_type, title, detail, command, paths_json, status, decision, turn_id, created_at, resolved_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(request_id) DO UPDATE SET
+        ON CONFLICT DO UPDATE SET
             id = excluded.id,
             thread_id = excluded.thread_id,
+            request_id = excluded.request_id,
             request_type = excluded.request_type,
             title = excluded.title,
             detail = excluded.detail,
@@ -617,14 +640,16 @@ function upsertAssistantPendingApproval(db: SqlDatabase, threadId: string, appro
 }
 
 function upsertAssistantPendingUserInput(db: SqlDatabase, threadId: string, input: AssistantPendingUserInput): void {
+    reconcileAssistantPersistedRequestIdentity(db, 'assistant_pending_user_inputs', threadId, input.id, input.requestId)
     db.run(`
         INSERT INTO assistant_pending_user_inputs (
             id, thread_id, request_id, questions_json, status, answers_json, response_message_id, turn_id, created_at, resolved_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(request_id) DO UPDATE SET
+        ON CONFLICT DO UPDATE SET
             id = excluded.id,
             thread_id = excluded.thread_id,
+            request_id = excluded.request_id,
             questions_json = excluded.questions_json,
             status = excluded.status,
             answers_json = excluded.answers_json,

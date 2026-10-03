@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import type { AssistantMessage, AssistantSessionTurnUsageEntry, AssistantThread } from '../src/shared/assistant/contracts'
 import { reconcileAssistantUserTurnIds } from '../src/shared/assistant/turn-reconciliation'
 import { preserveCanonicalUserReplayBoundaries, reconcileAssistantMessageReplays } from '../src/shared/assistant/message-reconciliation'
+import { resolveAssistantMessageReferenceId } from '../src/shared/assistant/message-identity'
 import { isAssistantTransportFailure } from '../src/shared/assistant/transport-failure'
 import { isCanonicalPresenceActive, resolveCanonicalPresenceAttention } from '../src/main/assistant/service-canonical-presence'
 import { ZyraAgentServerWorker } from '../src/main/assistant/zyra-agent-server-worker'
@@ -39,7 +40,7 @@ const delayedReplayMessages = reconcileAssistantMessageReplays([
         updatedAt: '2026-08-19T19:01:00.493Z'
     },
     {
-        id: 'assistant-message-user-pi-message:user:delayed',
+        id: 'assistant-message-user-zyra-message:user:delayed',
         role: 'user',
         text: 'same delayed prompt',
         turnId: 'canonical-turn-2',
@@ -47,7 +48,7 @@ const delayedReplayMessages = reconcileAssistantMessageReplays([
         updatedAt: '2026-08-19T19:02:03.300Z'
     }
 ] as AssistantMessage[])
-assert.deepEqual(delayedReplayMessages.map((message) => message.id), ['assistant-message-user-pi-message:user:delayed'], 'delayed canonical replay replaces its optimistic user boundary')
+assert.deepEqual(delayedReplayMessages.map((message) => message.id), ['assistant-message-user-zyra-message:user:delayed'], 'delayed canonical replay replaces its optimistic user boundary')
 const preservedBoundary = preserveCanonicalUserReplayBoundaries([
     {
         id: 'assistant-message-optimistic-delayed',
@@ -68,6 +69,48 @@ assert.deepEqual(repeatedPromptMessages.map((message) => message.id), [
     'assistant-message-user-pi-message:user:first',
     'assistant-message-user-pi-message:user:second'
 ], 'legitimate repeated prompts remain separate canonical turns')
+
+const replayImageText = (imagePath: string) => `Screenshot prompt\n\nAttached files (1):\n1. screenshot.png [IMAGE]\npath: ${imagePath}\nmime: image/png\nsize: 330091\norigin: Canonical Zyra transcript`
+const legacyImageReplay: AssistantMessage = {
+    id: 'assistant-message-user-pi-message:user:1789943312336', role: 'user',
+    text: replayImageText('C:/assistant/canonical-media/old.png'),
+    turnId: 'shared-turn:chat:pi-message:user:1789943312336',
+    createdAt: '2026-09-20T22:28:32.336Z', updatedAt: '2026-09-20T22:28:32.336Z'
+}
+const currentImageReplay: AssistantMessage = {
+    ...legacyImageReplay,
+    id: 'assistant-message-user-zyra-message:user:1789943312336',
+    text: replayImageText('C:/assistant/canonical-media/new.png'),
+    turnId: 'shared-turn:chat:zyra-message:user:1789943312336'
+}
+assert.deepEqual(
+    reconcileAssistantMessageReplays([legacyImageReplay, currentImageReplay]).map((message) => message.id),
+    [currentImageReplay.id],
+    'a legacy Pi projection and its Zyra projection render a screenshot prompt once'
+)
+assert.equal(
+    reconcileAssistantMessageReplays([{ ...legacyImageReplay, createdAt: '2026-09-20T22:29:00.000Z' }, currentImageReplay]).length,
+    1,
+    'replayed timestamps do not change the identity of a legacy canonical message'
+)
+
+const terminalGreeting = {
+    id: 'assistant-message-pi-message:assistant:1790723517628', role: 'assistant',
+    text: 'Synthetic final answer\n', turnId: 'local-turn',
+    createdAt: '2026-09-29T23:20:55.213Z', updatedAt: '2026-09-29T23:20:55.213Z'
+} as AssistantMessage
+const canonicalGreeting = {
+    ...terminalGreeting, id: 'assistant-message-zyra-message:assistant:1790723517628',
+    text: 'Synthetic final answer', turnId: 'canonical-turn',
+    createdAt: '2026-09-29T23:11:57.628Z', updatedAt: '2026-09-29T23:11:57.628Z'
+}
+for (const messages of [[terminalGreeting, canonicalGreeting], [canonicalGreeting, terminalGreeting]]) {
+    const result = reconcileAssistantMessageReplays(messages)
+    assert.deepEqual(result.map(message => message.id), [canonicalGreeting.id], 'terminal replay and canonical history survive refresh as one response despite rewritten timestamps and a trailing newline')
+    assert.equal(resolveAssistantMessageReferenceId(result, terminalGreeting.id), canonicalGreeting.id, 'legacy turn completion still resolves its final answer')
+    assert.equal(resolveAssistantMessageReferenceId(result, 'pi-message:assistant:1790723517628'), canonicalGreeting.id)
+}
+assert.equal(reconcileAssistantMessageReplays([canonicalGreeting, { ...canonicalGreeting, id: 'assistant-message-zyra-message:assistant:1790723517999' }]).length, 2, 'equal text in different actual responses remains separate')
 
 const usageEntry = {
     id: 'local-turn-2',
@@ -173,6 +216,7 @@ assert.equal(isCanonicalPresenceActive({ state: 'background' } as AssistantThrea
 assert.equal(isCanonicalPresenceActive({ state: 'ready' } as AssistantThread['canonicalPresence']), false)
 assert.equal(isAssistantTransportFailure(Object.assign(new Error('Zyra agent-server connection closed.'), { code: 'AGENT_SERVER_DISCONNECTED' })), true)
 assert.equal(isAssistantTransportFailure(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true)
+assert.equal(isAssistantTransportFailure(Object.assign(new Error('Agent-server request server.status timed out.'), { code: 'AGENT_SERVER_TIMEOUT' })), true)
 
 const detachEvents: unknown[] = []
 const worker = new ZyraAgentServerWorker({ detach() {} } as any, 'C:/workspace')
@@ -181,7 +225,7 @@ worker.onEvent((event) => detachEvents.push(event))
 worker.markRemoteDetached()
 assert.deepEqual(detachEvents, [{ type: 'server.transport.detached', sessionKey: 'canonical-chat' }], 'socket loss is observable before another user action is required')
 
-const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 const workerSource = readFileSync(new URL('../src/main/assistant/zyra-agent-server-worker.ts', import.meta.url), 'utf8')
 const serviceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
 assert.match(runtimeSource, /context\.connected && context\.worker\.isAlive\(\)/, 'a stale connected flag cannot suppress reattachment')

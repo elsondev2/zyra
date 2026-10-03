@@ -6,6 +6,7 @@ import { OnboardingService } from './onboarding-service'
 import { getSharedProviderWorkerClient } from './provider-worker-client'
 import { OpenAIConnectionService } from './openai-connection-service'
 import { DesktopAnalyticsService } from '../analytics/service'
+import { peekAssistantService } from '../assistant'
 
 export type DesktopSetupServices = {
     preferences: DevicePreferencesService
@@ -35,6 +36,9 @@ export function createDesktopSetupServices(userDataPath: string): DesktopSetupSe
         ),
         setAssistantDefaultModel: async (assistantDefaultModel) => {
             await preferences.updateSharedFromMain({ assistantDefaultModel })
+        },
+        onCredentialChanged: async (provider) => {
+            await peekAssistantService()?.refreshAuthProvider(provider)
         }
     })
     const onboarding = new OnboardingService(

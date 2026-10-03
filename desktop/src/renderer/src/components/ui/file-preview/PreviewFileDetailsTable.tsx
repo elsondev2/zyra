@@ -7,6 +7,7 @@ import { FileSystemEntryIcon } from './FileSystemEntryIcon'
 import { applyIconGridSelection, iconGridSelectionsEqual } from './previewIconGridSelection'
 import { PreviewTreeContextMenu, type PreviewTreeMenuAnchor } from './PreviewTreeContextMenu'
 import { usePreviewVirtualWindow } from './usePreviewVirtualWindow'
+import { handleFileSelectionShortcut } from './previewFileSelectionKeyboard'
 
 const DETAILS_ROW_HEIGHT = 34
 type SortColumn = 'name' | 'modified' | 'type' | 'size'
@@ -261,7 +262,7 @@ export function PreviewFileDetailsTable({
     }, [sortColumn])
 
     return (
-        <div className="flex min-h-0 min-w-[680px] flex-1 flex-col overflow-hidden" role="table" aria-label="Workspace details view" aria-colcount={4} aria-rowcount={sortedNodes.length}>
+        <div tabIndex={0} onPointerDown={(event) => { if (!(event.target as HTMLElement).closest('[data-explorer-details-row], button, input')) event.currentTarget.focus({ preventScroll: true }) }} onKeyDownCapture={(event) => handleFileSelectionShortcut(event, sortedNodes, selectedPathsRef.current, replaceSelection, getNodeActions, getSelectionActions)} className="flex min-h-0 min-w-[680px] flex-1 flex-col overflow-hidden" role="table" aria-label="Workspace details view" aria-colcount={4} aria-rowcount={sortedNodes.length}>
             <div role="row" className="grid h-8 shrink-0 grid-cols-[minmax(240px,1fr)_170px_130px_88px] items-center border-b border-white/[0.065] bg-[color-mix(in_srgb,var(--color-bg)_97%,black)] px-2 text-[8px] font-semibold text-sparkle-text-muted/55">
                 <DetailsHeader label="Name" column="name" activeColumn={sortColumn} direction={sortDirection} onSort={toggleSort} />
                 <DetailsHeader label="Date modified" column="modified" activeColumn={sortColumn} direction={sortDirection} onSort={toggleSort} />

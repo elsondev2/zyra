@@ -133,10 +133,9 @@ export function restoreAssistantInspectorWorkspaceState(
     const validBrowserTabIds = [...new Set(browserTabIds.filter((id) => id.startsWith('browser:')).slice(0, ASSISTANT_INSPECTOR_TAB_LIMIT))]
     if (!persisted) {
         const tabs: AssistantInspectorWorkspaceTab[] = [
-            SINGLETON_TABS.review,
             ...validBrowserTabIds.map((browserTabId): AssistantInspectorWorkspaceTab => ({ id: browserTabId, kind: 'browser', browserTabId }))
         ]
-        return { version: 1, activeTabId: 'review', tabs }
+        return { version: 1, activeTabId: tabs[0]?.id || '', tabs }
     }
 
     const validBrowserSet = new Set(validBrowserTabIds)
@@ -147,10 +146,9 @@ export function restoreAssistantInspectorWorkspaceState(
         tabs.push({ id: browserTabId, kind: 'browser', browserTabId })
         retainedIds.add(browserTabId)
     }
-    if (!tabs.length) tabs.push(SINGLETON_TABS.review)
     return {
         version: 1,
-        activeTabId: tabs.some((tab) => tab.id === persisted.activeTabId) ? persisted.activeTabId : tabs[0].id,
+        activeTabId: tabs.some((tab) => tab.id === persisted.activeTabId) ? persisted.activeTabId : (tabs[0]?.id || ''),
         tabs
     }
 }

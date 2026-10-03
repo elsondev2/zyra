@@ -1,5 +1,6 @@
 import { addUsage, normalizeUsage } from "../contracts.mjs";
 import { usageFromAssistantMessage } from "../usage-accounting.mjs";
+import { deliverThreadMessage } from '../../threads/delivery.mjs';
 
 export class ChildSessionHost {
   constructor(options = {}) {
@@ -35,7 +36,11 @@ export class ChildSessionHost {
     const abortListener = () => void session.abort?.();
     options.signal?.addEventListener("abort", abortListener, { once: true });
     try {
-      await this.executePrompt(session, prompt, "print");
+      if (options.delegation) {
+        this.reserveTurn();
+        await session.sendCustomMessage({ customType: 'zyra_thread_message', content: String(prompt), details: options.delegation, display: true }, { triggerTurn: true, deliverAs: 'followUp' });
+        this.assertCompletedTurn(session);
+      } else await this.executePrompt(session, prompt, "print");
       if (options.signal?.aborted) throw abortError(options.signal.reason);
       return this.resultSnapshot();
     } finally {
@@ -43,9 +48,16 @@ export class ChildSessionHost {
     }
   }
 
-  async send(message) {
+  async send(message, threadMessage) {
     const deliver = this.sendChain.then(async () => {
       const session = this.requireSession();
+      if (threadMessage) {
+        const streaming = session.isStreaming;
+        if (!streaming) this.reserveTurn();
+        await deliverThreadMessage(session, threadMessage);
+        if (!streaming) this.assertCompletedTurn(session);
+        return this.resultSnapshot(streaming ? 'follow-up-queued' : 'follow-up');
+      }
       if (session.isStreaming) {
         await session.steer(String(message));
         return this.resultSnapshot("steer");
@@ -65,7 +77,21 @@ export class ChildSessionHost {
       if (this.limitFailure) throw this.limitFailure;
       throw error;
     }
+    this.assertCompletedTurn(session);
+  }
+
+  assertCompletedTurn(session) {
     if (this.limitFailure) throw this.limitFailure;
+    // The session's retry loop resolves prompt() even when the final provider
+    // response is an error. Check the final response after retries settle so a
+    // failed request cannot become an empty (or stale) successful child result.
+    const latest = [...(session.messages ?? [])].reverse().find((entry) => entry?.role === "assistant");
+    if (latest?.stopReason === "error") {
+      const error = new Error(latest.errorMessage || "Child provider request failed.");
+      error.code = "CHILD_PROVIDER_ERROR";
+      throw error;
+    }
+    if (latest?.stopReason === "aborted") throw abortError(latest.errorMessage);
   }
 
   reserveTurn() {
@@ -106,6 +132,7 @@ export class ChildSessionHost {
     if (event?.type === "turn_start" && this.turns >= this.maxTurns && !this.limitFailure && !this.abortingForLimit) {
       this.limitFailure = maxTurnsError(this.maxTurns);
       this.abortingForLimit = true;
+      this.onEvent({ type: 'zyra_agent_interruption', interruption: { kind: 'stopped', source: 'system', reason: 'turn-limit' } });
       void Promise.resolve(this.sessionResult?.session?.abort?.()).finally(() => { this.abortingForLimit = false; });
     }
     if (event?.type === "turn_end") this.turns += 1;

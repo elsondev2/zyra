@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { deriveAssistantConversationSurfaceMode } from '../src/renderer/src/pages/assistant/assistant-conversation-surface-mode'
+import { deriveAssistantConversationSurfaceMode, isAssistantComposerTurnActive } from '../src/renderer/src/pages/assistant/assistant-conversation-surface-mode'
 import { clearMentionIndex, getOrCreateMentionIndex } from '../src/renderer/src/pages/assistant/assistant-composer-mentions'
 import { resolveAssistantProjectLabel } from '../src/renderer/src/pages/assistant/assistant-project-label'
 import { buildAssistantProjectChoices, getAssistantProjectIconSourcePath } from '../src/renderer/src/pages/assistant/assistant-project-choices'
+import { getNewChatProjectUnavailableReason, getOptimisticProjectWorkingRoot, runLatestProjectSave } from '../src/renderer/src/pages/assistant/assistant-new-chat-project-selection'
+import { runAssistantStoreAction } from '../src/renderer/src/lib/assistant/assistant-store-action-runner'
 import type { AssistantProject } from '../src/shared/assistant/contracts'
 
 const managedId = 'project_0123456789abcdef0123456789abcdef'
+assert.equal(isAssistantComposerTurnActive({ newChatHandoffActive: false, selectedSessionIsDraft: true, isThreadWorking: true, optimisticPromptSending: false, optimisticPromptAwaitingUserMessage: false }), false, 'provider or setup activity without a turn cannot make a draft chat look busy')
+assert.equal(isAssistantComposerTurnActive({ newChatHandoffActive: false, selectedSessionIsDraft: true, isThreadWorking: false, optimisticPromptSending: true, optimisticPromptAwaitingUserMessage: false }), true, 'sending the first prompt shows work immediately')
+assert.equal(isAssistantComposerTurnActive({ newChatHandoffActive: false, selectedSessionIsDraft: true, isThreadWorking: false, optimisticPromptSending: false, optimisticPromptAwaitingUserMessage: true }), true, 'work remains visible while the first user message enters the canonical chat')
+assert.equal(isAssistantComposerTurnActive({ newChatHandoffActive: false, selectedSessionIsDraft: false, isThreadWorking: true, optimisticPromptSending: false, optimisticPromptAwaitingUserMessage: false }), true, 'an established running turn keeps the working state')
+assert.equal(isAssistantComposerTurnActive({ newChatHandoffActive: true, selectedSessionIsDraft: false, isThreadWorking: true, optimisticPromptSending: true, optimisticPromptAwaitingUserMessage: true }), false, 'new chat handoff cannot display the previous chat turn')
 assert.equal(resolveAssistantProjectLabel('Website', managedId, `C:/managed/${managedId}`), 'Website')
 assert.equal(resolveAssistantProjectLabel(null, managedId, `C:/managed/${managedId}`), '', 'loading a catalog must not flash a managed identifier')
 assert.equal(resolveAssistantProjectLabel(null, null, `C:/managed/${managedId}`), '', 'legacy managed paths must not leak identifiers either')
@@ -22,6 +29,49 @@ const notes = makeProject('notes', 'Notes')
 const separateSameName = makeProject('website-other', 'Website', ['C:/fixture/other'])
 const archived = { ...makeProject('archive', 'Archive'), archived: true }
 const projects = [website, notes, separateSameName, archived]
+const projectAvailability = { hasSession: true, isDraft: true, projectLocked: false, commandPending: false, catalogLoading: false }
+assert.equal(getNewChatProjectUnavailableReason(projectAvailability), null)
+assert.match(getNewChatProjectUnavailableReason({ ...projectAvailability, projectLocked: true }) || '', /active chat work/u)
+assert.match(getNewChatProjectUnavailableReason({ ...projectAvailability, catalogLoading: true }) || '', /still loading/u)
+assert.equal(getOptimisticProjectWorkingRoot(website), website.folders[0].path)
+assert.equal(getOptimisticProjectWorkingRoot({ ...website, folders: [{ ...website.folders[0], available: false }, { ...website.folders[1], access: 'read-only' }] }), website.homePath)
+let latestProjectRequest = { id: 'A' }
+let finishFirstSave!: (result: { success: false; error: string }) => void
+const savedProjectRequests: string[] = []
+const settledProjectRequests: string[] = []
+const rapidSwitch = runLatestProjectSave({
+    getLatest: () => latestProjectRequest,
+    save: (selection) => {
+        savedProjectRequests.push(selection.id)
+        return selection.id === 'A'
+            ? new Promise<{ success: false; error: string }>((resolve) => { finishFirstSave = resolve })
+            : Promise.resolve({ success: true as const })
+    },
+    settle: (selection) => { settledProjectRequests.push(selection.id) }
+})
+latestProjectRequest = { id: 'B' }
+latestProjectRequest = { id: 'C' }
+finishFirstSave({ success: false, error: 'The superseded save failed.' })
+await rapidSwitch
+assert.deepEqual(savedProjectRequests, ['A', 'C'], 'rapid Project choices save only the in-flight and latest requests')
+assert.deepEqual(settledProjectRequests, ['C'], 'an outdated failure cannot roll back the latest Project choice')
+let finishProjectChange!: (result: { success: true }) => void
+const pendingChanges: Array<Record<string, unknown>> = []
+const projectChange = runAssistantStoreAction(
+    (update) => { if (typeof update === 'object') pendingChanges.push(update) },
+    () => new Promise<{ success: true }>((resolve) => { finishProjectChange = resolve }),
+    { markCommandPending: false, reportError: false }
+)
+assert.deepEqual(pendingChanges, [{ error: null }], 'project scope save does not raise the global command-pending flag')
+finishProjectChange({ success: true })
+assert.deepEqual(await projectChange, { success: true })
+assert.deepEqual(pendingChanges, [{ error: null }], 'finishing a project scope save cannot clear another command-pending action')
+assert.deepEqual(await runAssistantStoreAction(
+    (update) => { if (typeof update === 'object') pendingChanges.push(update) },
+    async () => ({ success: false as const, error: 'Superseded save failed.' }),
+    { markCommandPending: false, reportError: false }
+), { success: false, error: 'Superseded save failed.' })
+assert.deepEqual(pendingChanges, [{ error: null }, { error: null }], 'a superseded Project failure stays local to the latest-selection queue')
 const unchangedProjects = JSON.stringify(projects)
 assert.deepEqual(buildAssistantProjectChoices(projects), [
     { projectId: website.id, label: website.name, iconSourcePath: website.folders[0].path },
@@ -74,12 +124,15 @@ assert.equal(
 
 const paneSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantConversationPane.tsx'), 'utf8')
 const composerPaneSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantConversationComposerPane.tsx'), 'utf8')
+const composerSectionsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantComposerSections.tsx'), 'utf8')
 const placementMotionSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/useAssistantComposerPlacementMotion.ts'), 'utf8')
 const projectChipSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantNewChatProjectChip.tsx'), 'utf8')
 const projectCatalogSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/useAssistantProjectCatalog.ts'), 'utf8')
 const composerSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/AssistantComposerView.tsx'), 'utf8')
 assert.match(paneSource, /\{!composerIsCentered \? \([\s\S]{0,160}<AssistantConversationTimelinePane/u, 'the hidden timeline must leave layout so it cannot push the centered composer downward')
 assert.match(paneSource, /newChatPrompt=\{emptyComposerPrompt\}/u, 'the centered New Chat surface must receive its contextual greeting')
+assert.match(paneSource, /thinking=\{composerTurnActive\}/u, 'setup commands must not drive the composer working indicator')
+assert.match(composerSectionsSource, /modelsLoading \? 'Loading models\.\.\.'/u, 'model catalog refresh has its own status instead of appearing as chat work')
 assert.match(composerPaneSource, /useAssistantComposerPlacementMotion\(props\.paneRef, placement\)/u, 'the composer should animate between centered and docked geometry')
 assert.match(composerPaneSource, /\{placement === 'center' \? \(/u, 'the greeting leaves layout before the bottom composer inset is measured')
 assert.doesNotMatch(composerPaneSource, /transition-\[grid-template-rows,margin,opacity,transform\]/u, 'the greeting must not feed a height animation back into the virtual timeline')
@@ -95,9 +148,13 @@ assert.match(projectChipSource, /projectPath=\{project\.iconSourcePath\}/u, 'Pro
 assert.match(projectChipSource, /projectPath=\{iconSourcePath\}/u, 'the collapsed chip uses Project identity, not the current Working root')
 assert.match(projectChipSource, /aria-checked=\{project\.projectId === props\.projectId\}/u, 'selection follows Project identity even with a different Working root')
 assert.match(projectChipSource, /props\.onSelectProject\(projectId\)/u, 'a picker selection sends only a Project ID')
+assert.match(projectChipSource, /props\.onUnavailable\?\.\(props\.unavailableReason\)/u, 'clicking an unavailable Project chip reports the reason')
 assert.doesNotMatch(projectChipSource, /workingRoot|project\.path/u)
 assert.match(paneSource, /buildAssistantProjectChoices\(projectCatalogState\.catalog\.projects\)/u, 'production and fixtures use the same catalog projection')
-assert.match(paneSource, /setSessionProjectResult\(session\.id, \{ projectId \}\)/u, 'Project selection retains the backend Working-root policy')
+assert.match(paneSource, /setSessionProjectResult\(sessionId, \{ projectId: selection\.projectId \}\)/u, 'Project selection retains the backend Working-root policy')
+assert.match(paneSource, /pendingProjectSelectionsRef\.current\.set\(session\.id, selection\)/u, 'Project selection previews the pending Project immediately')
+assert.match(paneSource, /await runLatestProjectSave\(/u, 'New Chat uses the latest-selection save sequence')
+assert.match(paneSource, /pendingProjectSelectionsRef\.current\.delete\(sessionId\)[\s\S]*Could not update Project/u, 'failed final Project saves restore the canonical selection and show a toast')
 assert.match(paneSource, /resolveAssistantProjectLabel\(displayProjectName, displayProjectId, displayProjectPath\)/u, 'the greeting uses the durable Project name instead of its managed directory ID')
 assert.match(projectCatalogSource, /assistant\.listProjects\(\)/u, 'New Chat Project choices come from the durable catalog even when no Chat references a folder')
 assert.match(paneSource, /handleCreateNewChatProject[\s\S]*await requestProjectCreation\(\)/u, 'the new-project action starts with the setup modal, not an OS folder picker')

@@ -11,6 +11,7 @@ import { app, BrowserWindow, webContents } from 'electron'
 import log from 'electron-log'
 import { BROWSER_DOWNLOADS_ACTION_CHANNEL, BROWSER_DOWNLOADS_FOLDER_ACTION_CHANNEL, BROWSER_DOWNLOADS_FOLDER_LIST_CHANNEL, BROWSER_DOWNLOADS_LIST_CHANNEL, BROWSER_DOWNLOADS_PREVIEW_CHANNEL } from '../../shared/browser-downloads'
 import { BROWSER_PAGE_ICON_CHANNEL } from '../../shared/browser-favicon'
+import { BROWSER_EXTENSIONS_IPC } from '../../shared/browser-extensions'
 import { getTerminalCommandStatus, installTerminalCommand, removeTerminalCommand } from '../terminal-command-service'
 import {
     handleGetFileSystemRoots,
@@ -27,7 +28,7 @@ import {
     handleTestGeminiConnection,
     handleTestGroqConnection
 } from './handlers/settings-ai-handlers'
-import { handleMemoryGetOverview, handleMemoryGetJobStatus } from './handlers/memory-handlers'
+import { handleMemoryGetOverview, handleMemoryGetJobStatus, handleMemoryGetModelPreference, handleMemorySetModelPreference } from './handlers/memory-handlers'
 import {
     handleAssistantApprovePendingPlaygroundLabRequest,
     handleAssistantArchiveSession,
@@ -51,6 +52,9 @@ import {
     handleAssistantGetHistoryPage,
     handleAssistantGetHistoryAroundMessage,
     handleAssistantGetPluginCatalog,
+    handleAssistantGetPluginMcpConnections,
+    handleAssistantConnectPluginMcp,
+    handleAssistantDisconnectPluginMcp,
     handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
@@ -58,6 +62,10 @@ import {
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
     handleAssistantGetVoiceTranscriptionState,
+    handleAssistantGetFailedVoiceRecording,
+    handleAssistantDeleteVoiceHistory,
+    handleAssistantListVoiceHistory,
+    handleAssistantSaveVoiceHistory,
     handleAssistantGetTurnDetail,
     handleAssistantGetSnapshot,
     handleAssistantGetStatus,
@@ -86,6 +94,9 @@ import {
     handleAssistantSendRealtimeVoiceMessage,
     handleAssistantSetPluginSet,
     handleAssistantSetPluginState,
+    handleAssistantSetPluginAppViewSettings,
+    handleAssistantReadPluginAppView,
+    handleAssistantCallPluginAppViewTool,
     handleAssistantStartRealtimeVoice,
     handleAssistantStopRealtimeVoice,
     handleAssistantSubscribeRealtimeVoice,
@@ -111,6 +122,7 @@ import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../../s
 import { peekAssistantService } from '../assistant'
 import {
     handleCopyToClipboard,
+    handleDiscoverLocalGitHubProjects,
     handleGetUserHomePath,
     handleIndexAllFolders,
     handleOpenFile,
@@ -171,6 +183,7 @@ import {
     handleListBrowserDownloadsFolder,
     handleGetBrowserBackgroundProviderStatus,
     handleGetBrowserHistory,
+    handleGetBrowserBookmarks,
     handleGetBrowserRemoteBackgrounds,
     handleGetBrowserLinkPreview,
     handleGetBrowserPreviewConfig,
@@ -179,12 +192,16 @@ import {
     handleOpenBrowserPreviewExternal,
     handleProceedBrowserThreatWarning,
     handleRecordBrowserHistory,
+    handleSaveBrowserBookmark,
+    handleRemoveBrowserBookmark,
     handleScanExternalBrowserHistoryProfiles,
     handleSetBrowserAdBlockEnabled,
     handleDismissBrowserThreatWarning,
     handleTrackBrowserRemoteBackground,
     handleValidateBrowserUnsplashAccessKey
 } from './handlers/browser-preview-handlers'
+import { handleApproveBrowserExtensionFromWebStore, handleDiscardBrowserExtensionFromWebStore, handleInstallBrowserExtension, handleInspectBrowserExtensionFromWebStore, handleListBrowserExtensions, handleRemoveBrowserExtension, handleReloadBrowserExtension, handleSetBrowserExtensionEnabled } from './handlers/browser-extension-handlers'
+import { getBrowserExtensionManager } from '../browser-extension-manager'
 import {
     handleCancelBrowserPreviewAnnotation,
     handleCaptureBrowserPreviewScreenshot,
@@ -277,6 +294,7 @@ import {
     handleUnstageFiles
 } from './handlers/git-write-handlers'
 import { createAgentControlHandlers } from './handlers/agent-control-handlers'
+import type { BrowserViewManager } from '../browser-view-manager'
 import { AGENT_CONTROL_IPC } from '../../shared/agent-control/protocol'
 import {
     UPDATE_CHECK_CHANNEL,
@@ -308,7 +326,7 @@ const ipcMain = createOnboardingGatedIpcMain(trustedIpcMain, {
     blockedResult: onboardingRequiredError
 })
 
-export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: DesktopSetupServices, getMainWindow: () => BrowserWindow | null = () => mainWindow): void {
+export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: DesktopSetupServices, getMainWindow: () => BrowserWindow | null = () => mainWindow, browserViews?: Pick<BrowserViewManager, 'executeHiddenControlRequest'>): void {
     log.info('Registering IPC handlers...')
     const mobileAccess = new MobileAccessManager(app.getPath('userData'), getAssistantService, async () => {
         const value = (await setupServices.preferences.get({ surface: 'desktop' })).settings.projectIconOverrides
@@ -353,7 +371,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
             ? handler(...args)
             : onboardingRequiredError()
     )
-    const controlHandlers = createAgentControlHandlers(mainWindow, getMainWindow)
+    const controlHandlers = createAgentControlHandlers(mainWindow, getMainWindow, browserViews)
     ipcMain.handle(AGENT_CONTROL_IPC.getState, controlHandlers.getState)
     ipcMain.handle(AGENT_CONTROL_IPC.bindBrowserTab, controlHandlers.bindBrowserTab)
     ipcMain.handle(AGENT_CONTROL_IPC.acknowledgeBrowserSurfaceRequest, controlHandlers.acknowledgeBrowserSurfaceRequest)
@@ -395,6 +413,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:getAiDebugLogs', handleGetAiDebugLogs)
     ipcMain.handle('devscope:clearAiDebugLogs', handleClearAiDebugLogs)
     ipcMain.handle('zyra:memory:getOverview', handleMemoryGetOverview)
+    ipcMain.handle('zyra:memory:getModelPreference', handleMemoryGetModelPreference)
+    ipcMain.handle('zyra:memory:setModelPreference', (_event, preference) => handleMemorySetModelPreference(preference))
     ipcMain.handle(RUNTIME_ACTIVATION_GET, () => readRuntimeActivation())
     subscribeRuntimeActivation(state => {
         for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(RUNTIME_ACTIVATION_CHANGED, state)
@@ -415,6 +435,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.listModels, requireCompletedSetup(handleAssistantListModels))
     ipcMain.handle(ASSISTANT_IPC.listProjects, requireCompletedSetup(handleAssistantListProjects))
     ipcMain.handle(ASSISTANT_IPC.getPluginCatalog, requireCompletedSetup(handleAssistantGetPluginCatalog))
+    ipcMain.handle(ASSISTANT_IPC.getPluginMcpConnections, requireCompletedSetup(handleAssistantGetPluginMcpConnections))
+    ipcMain.handle(ASSISTANT_IPC.connectPluginMcp, requireCompletedSetup(handleAssistantConnectPluginMcp))
+    ipcMain.handle(ASSISTANT_IPC.disconnectPluginMcp, requireCompletedSetup(handleAssistantDisconnectPluginMcp))
     ipcMain.handle(ASSISTANT_IPC.startPluginDownload, requireCompletedSetup(handleAssistantStartPluginDownload))
     ipcMain.handle(ASSISTANT_IPC.getPluginDownload, requireCompletedSetup(handleAssistantGetPluginDownload))
     ipcMain.handle(ASSISTANT_IPC.cancelPluginDownload, requireCompletedSetup(handleAssistantCancelPluginDownload))
@@ -424,6 +447,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.setPluginSet, requireCompletedSetup(handleAssistantSetPluginSet))
     ipcMain.handle(ASSISTANT_IPC.refreshChatPluginScope, requireCompletedSetup(handleAssistantRefreshChatPluginScope))
     ipcMain.handle(ASSISTANT_IPC.setPluginState, requireCompletedSetup(handleAssistantSetPluginState))
+    ipcMain.handle(ASSISTANT_IPC.setPluginAppViewSettings, requireCompletedSetup(handleAssistantSetPluginAppViewSettings))
+    ipcMain.handle(ASSISTANT_IPC.readPluginAppView, requireCompletedSetup(handleAssistantReadPluginAppView))
+    ipcMain.handle(ASSISTANT_IPC.callPluginAppViewTool, requireCompletedSetup(handleAssistantCallPluginAppViewTool))
     ipcMain.handle(ASSISTANT_IPC.rollbackPlugin, requireCompletedSetup(handleAssistantRollbackPlugin))
     ipcMain.handle(ASSISTANT_IPC.createProject, requireCompletedSetup(handleAssistantCreateProject))
     ipcMain.handle(ASSISTANT_IPC.associateProjectFolder, requireCompletedSetup(handleAssistantAssociateProjectFolder))
@@ -476,12 +502,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.stopRealtimeVoice, requireCompletedSetup(handleAssistantStopRealtimeVoice))
     ipcMain.handle(ASSISTANT_IPC.getVoiceTranscriptionState, requireCompletedSetup(handleAssistantGetVoiceTranscriptionState))
     ipcMain.handle(ASSISTANT_IPC.transcribeVoice, requireCompletedSetup(handleAssistantTranscribeVoice))
+    ipcMain.handle(ASSISTANT_IPC.saveVoiceHistory, requireCompletedSetup(handleAssistantSaveVoiceHistory))
+    ipcMain.handle(ASSISTANT_IPC.listVoiceHistory, requireCompletedSetup(handleAssistantListVoiceHistory))
+    ipcMain.handle(ASSISTANT_IPC.getFailedVoiceRecording, requireCompletedSetup(handleAssistantGetFailedVoiceRecording))
+    ipcMain.handle(ASSISTANT_IPC.deleteVoiceHistory, requireCompletedSetup(handleAssistantDeleteVoiceHistory))
 
     ipcMain.handle('devscope:selectFolder', handleSelectFolder)
     ipcMain.handle('devscope:selectMarkdownFile', handleSelectMarkdownFile)
     ipcMain.handle('devscope:selectProjectIconFile', handleSelectProjectIconFile)
     ipcMain.handle('devscope:getUserHomePath', handleGetUserHomePath)
     ipcMain.handle('devscope:scanProjects', handleScanProjects)
+    ipcMain.handle('devscope:discoverLocalGitHubProjects', handleDiscoverLocalGitHubProjects)
     ipcMain.handle('devscope:indexAllFolders', handleIndexAllFolders)
     ipcMain.handle('devscope:searchIndexedPaths', handleSearchIndexedPaths)
     ipcMain.handle('devscope:openInExplorer', handleOpenInExplorer)
@@ -498,6 +529,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:previewTerminal:clear', handleClearPreviewTerminal)
     ipcMain.handle('devscope:previewTerminal:close', handleClosePreviewTerminal)
     ipcMain.handle('devscope:browserPreview:getConfig', handleGetBrowserPreviewConfig)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.list, handleListBrowserExtensions)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.install, handleInstallBrowserExtension)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.inspectWebStore, handleInspectBrowserExtensionFromWebStore)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.approveWebStore, handleApproveBrowserExtensionFromWebStore)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.discardWebStore, handleDiscardBrowserExtensionFromWebStore)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.setEnabled, handleSetBrowserExtensionEnabled)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.remove, handleRemoveBrowserExtension)
+    ipcMain.handle(BROWSER_EXTENSIONS_IPC.reload, handleReloadBrowserExtension)
+    void getBrowserExtensionManager().loadEnabled().catch(error => log.warn('[BrowserExtensions] Startup load failed', error))
     ipcMain.handle('devscope:browserPreview:checkThreatNavigation', handleCheckBrowserThreatNavigation)
     ipcMain.handle('devscope:browserPreview:proceedThreatWarning', handleProceedBrowserThreatWarning)
     ipcMain.handle('devscope:browserPreview:dismissThreatWarning', handleDismissBrowserThreatWarning)
@@ -508,6 +548,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(BROWSER_DOWNLOADS_FOLDER_ACTION_CHANNEL, handleBrowserDownloadsFolderAction)
     ipcMain.handle(BROWSER_PAGE_ICON_CHANNEL, handleGetBrowserPageIcon)
     ipcMain.handle('devscope:browserPreview:getHistory', handleGetBrowserHistory)
+    ipcMain.handle('devscope:browserPreview:getBookmarks', handleGetBrowserBookmarks)
+    ipcMain.handle('devscope:browserPreview:saveBookmark', handleSaveBrowserBookmark)
+    ipcMain.handle('devscope:browserPreview:removeBookmark', handleRemoveBrowserBookmark)
     ipcMain.handle('devscope:browserPreview:getSearchSuggestions', handleGetBrowserSearchSuggestions)
     ipcMain.handle('devscope:browserPreview:scanExternalHistory', handleScanExternalBrowserHistoryProfiles)
     ipcMain.handle('devscope:browserPreview:importExternalHistory', handleImportExternalBrowserHistory)

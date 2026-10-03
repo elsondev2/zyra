@@ -126,7 +126,11 @@ app.whenReady().then(async () => {
     await waitFor(() => liveGuest.executeJavaScript(`document.querySelector('#synthetic-media').currentTime > 0.05`), 'Synthetic media clock did not advance')
     const mediaTimeBeforeTransfer = await liveGuest.executeJavaScript(`document.querySelector('#synthetic-media').currentTime`)
     await liveGuest.executeJavaScript(`document.querySelector('#form-state').value = 'kept'; globalThis.__tearOffState = { value: 73 }; history.pushState({ token: 91 }, '', '#preserved')`)
-    await normalWindow.webContents.executeJavaScript(`window.accessoryNative.syncBrowserTabs({ workspaceId: ${JSON.stringify(opened.state.id)}, activeTabId: ${JSON.stringify(normalTabId)}, tabs: [{ id: ${JSON.stringify(normalTabId)}, sessionMode: 'normal', url: ${JSON.stringify(request.url)}, title: 'Stateful tab', faviconUrl: null }] })`)
+    const originalTab = { id: normalTabId, sessionMode: 'normal', url: request.url, title: 'Stateful tab', faviconUrl: null }
+    const manyTabs = [originalTab, ...Array.from({ length: 12 }, (_, index) => ({ ...originalTab, id: `${normalTabId}:extra:${index}`, url: '', title: `New tab ${index}` }))]
+    const acceptedMany = await normalWindow.webContents.executeJavaScript(`window.accessoryNative.syncBrowserTabs(${JSON.stringify({ workspaceId: opened.state.id, activeTabId: normalTabId, tabs: manyTabs })})`)
+    assert.equal(acceptedMany.state.browserTabs.length, 13, 'the main process preserves more than eight Browser tabs without truncating the sync')
+    await normalWindow.webContents.executeJavaScript(`window.accessoryNative.syncBrowserTabs(${JSON.stringify({ workspaceId: opened.state.id, activeTabId: normalTabId, tabs: [originalTab] })})`)
     const beginRollback = normalWindow.webContents.executeJavaScript(`window.accessoryNative.beginBrowserTabTearOff(${JSON.stringify({ workspaceId: opened.state.id, tabId: normalTabId, screenPoint: { x: 420, y: 160 }, grabOffset: { x: 120, y: 16 } })})`)
     await waitFor(() => windows.size === 2, 'Rollback tear-off destination was not created')
     const rollbackEntry = [...windows.entries()].find(([id]) => id !== opened.state.id)!

@@ -254,7 +254,7 @@ try {
 
   const bridgeSource = readFileSync(new URL('../src/zyra-ui-bridge.mjs', import.meta.url), 'utf8')
   const sdkSource = readFileSync(new URL('../src/zyra-sdk.mjs', import.meta.url), 'utf8')
-  const desktopRuntimeSource = readFileSync(new URL('../desktop/src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+  const desktopRuntimeSource = readFileSync(new URL('../desktop/src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
   assert.match(bridgeSource, /handlePrompt[\s\S]*sdk\.runZyraPrompt\(runtime, payload\.prompt/u, 'the app-server bridge sends Desktop prompts through Zyra prompt expansion')
   assert.match(sdkSource, /runZyraPrompt[\s\S]{0,180}expandZyraPromptResource\(runtime, prompt\)/u, 'Pi-backed prompts expand custom commands and explicit skills before provider dispatch')
   assert.match(desktopRuntimeSource, /async sendPrompt\([\s\S]*worker\.request\('prompt'/u, 'Desktop direct and attached worker routes use the same prompt bridge')

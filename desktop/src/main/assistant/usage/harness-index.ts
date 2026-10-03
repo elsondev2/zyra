@@ -13,7 +13,7 @@ export function harnessRoots(home: string, env: NodeJS.ProcessEnv = process.env)
     return [
         { id: 'codex', paths: [join(codex,'sessions'), join(codex,'archived_sessions')] },
         { id: 'claude', paths: [join(env.CLAUDE_CONFIG_DIR || join(home,'.claude'),'projects')] },
-        { id: 'pi', paths: [join(env.PI_CODING_AGENT_DIR || join(home,'.pi','agent'),'sessions')] },
+        { id: 'pi', paths: [join(env.ZYRA_CODING_AGENT_DIR || join(home,'.pi','agent'),'sessions')] },
         { id: 'opencode', paths: [join(oc,'storage','message')], database: join(oc,'opencode.db') },
         { id: 'devscope', paths: [join(home,'.dvs.pi','agent','sessions')] },
         { id: 'zyra-cli', paths: [join(home,'.zyra','sessions')] }
@@ -43,7 +43,7 @@ export class HarnessIndex {
     async load() {
         if (this.loaded) return
         this.loaded = true
-        try { const saved = JSON.parse(await readFile(this.cachePath,'utf8')); if (saved.version === 2) this.cache = saved.files || {} } catch { /* A cache is disposable; original logs remain authoritative. */ }
+        try { const saved = JSON.parse(await readFile(this.cachePath,'utf8')); if (saved.version === 3) this.cache = saved.files || {} } catch { /* A cache is disposable; original logs remain authoritative. */ }
     }
     records(): UsageEntry[] {
         const records: Record<string, UsageEntry> = {}
@@ -82,7 +82,7 @@ export class HarnessIndex {
         }
         await mkdir(dirname(this.cachePath),{recursive:true})
         const temporary = this.cachePath + '.tmp'
-        await writeFile(temporary,JSON.stringify({version:2,files:this.cache}),{mode:0o600})
+        await writeFile(temporary,JSON.stringify({version:3,files:this.cache}),{mode:0o600})
         await rename(temporary,this.cachePath)
     }
     private async scanFile(path: string, harness: UsageHarness) {

@@ -70,7 +70,7 @@ async function readCodexVoiceCredentials(): Promise<CodexVoiceCredentials> {
         return { accessToken, accountId }
     } catch (error) {
         if (error instanceof CodexVoiceAuthError) throw error
-        throw new CodexVoiceAuthError('unavailable', 'Zyra could not read the ChatGPT account connected through Pi.')
+        throw new CodexVoiceAuthError('unavailable', 'Zyra could not read the ChatGPT account connected through Zyra.')
     }
 }
 
@@ -90,7 +90,7 @@ export async function getCodexVoiceTranscriptionState(): Promise<AssistantVoiceT
             status: 'ready',
             available: true,
             signedIn: true,
-            message: 'Ready to transcribe with the ChatGPT account connected through Pi.'
+            message: 'Ready to transcribe with the ChatGPT account connected through Zyra.'
         }
     } catch (error) {
         if (error instanceof CodexVoiceAuthError) {
@@ -248,7 +248,10 @@ async function fetchCodexVoiceFromDesktopSession(input: string | URL | Request, 
             credentials: 'include'
         })
     } catch (error) {
-        if (error instanceof Error && !/Cannot find module|Unknown built-in module/u.test(error.message)) throw error
+        // Electron's session transport can fail before an HTTP response is
+        // available (notably on some proxy and Windows network setups). The
+        // bearer token also works with Node's fetch, so retry that transport.
+        if (init?.signal?.aborted) throw error
         return await fetch(input, init)
     }
 }
@@ -403,6 +406,25 @@ export async function transcribeCodexVoiceWithDependencies(
         payload = asRecord(JSON.parse(raw))
     } catch {
         throw new Error('ChatGPT returned an invalid transcription response.')
+    }
+    const errorValue = asRecord(payload?.['error'])
+    const detailValue = asRecord(payload?.['detail'])
+    const serverError = readNonEmptyString(payload?.['detail'])
+        || readNonEmptyString(detailValue?.['message'])
+        || readNonEmptyString(payload?.['error'])
+        || readNonEmptyString(errorValue?.['message'])
+    if (serverError) {
+        if (/no active organization found/i.test(serverError)) {
+            throw new Error('ChatGPT transcription is unavailable for this account because no active organization was found.')
+        }
+        if (/error in asr api/i.test(serverError)) {
+            throw new Error('ChatGPT could not process this recording. Try again or play the saved recording in Voice history.')
+        }
+        throw new Error(`ChatGPT transcription failed: ${serverError.slice(0, 180)}`)
+    }
+    const returnedTranscript = payload?.['text'] ?? payload?.['transcript']
+    if (typeof returnedTranscript === 'string' && !returnedTranscript.trim()) {
+        throw new Error('No speech was detected. Try a longer recording.')
     }
     const text = readNonEmptyString(payload?.['text']) || readNonEmptyString(payload?.['transcript'])
     if (!text || text.length > CODEX_VOICE_MAX_TRANSCRIPT_CHARS) {

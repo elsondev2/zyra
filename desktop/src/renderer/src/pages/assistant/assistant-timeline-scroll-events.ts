@@ -1,4 +1,5 @@
 export const ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT = 'assistant:timeline-disclosure-toggle'
+export const ASSISTANT_TIMELINE_FOLLOW_END_EVENT = 'assistant:timeline-follow-end'
 export const DOMINANT_MESSAGE_VIEWPORT_RATIO = 0.24
 export const USER_MESSAGE_VISIBLE_RATIO = 0.3
 

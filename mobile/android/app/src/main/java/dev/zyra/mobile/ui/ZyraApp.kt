@@ -44,11 +44,6 @@ import kotlinx.coroutines.delay
     val root = state.page == "chats" || (state.page == "machines" && state.machine == null)
     val pageRoute = (if (state.page in setOf("limits", "usage")) "usage-limits" else state.page) + if (state.detail != null) ":detail" else ""
     val floatingHeader = state.page == "chat" && state.detail == null
-    val statusNow by produceState(System.currentTimeMillis(), state.machine?.id) {
-        while (true) { value = System.currentTimeMillis(); delay(15000) }
-    }
-    val runtimeLabel = listOfNotNull(state.runtimeStatus.installation?.label,
-        if (state.connection == ConnectionState.Connected) state.runtimeStatus.syncLabel(statusNow) else connectionLabel(state.connection)).joinToString(" · ")
     val layoutDirection = LocalLayoutDirection.current
     BackHandler(!setup && (!root || state.detail != null)) { vm.back() }
     MediaDialog(vm)
@@ -73,10 +68,6 @@ import kotlinx.coroutines.delay
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         if (state.page == "chat") PermissionStatus(state.session.config.runtimeMode) { permissions = true }
                         if (state.page == "chats") AppIcon(R.drawable.ic_chevron_down, "Choose machine", Modifier.size(12.dp))
-                    }
-                    if (state.machine != null && (state.page == "chat" || state.machineFilter == state.machine?.id)) {
-                        Text(runtimeLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

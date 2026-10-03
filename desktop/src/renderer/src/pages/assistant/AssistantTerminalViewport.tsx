@@ -1,3 +1,5 @@
+import { resolveShortcut } from '@shared/keybindings'
+import { isShortcutRecording, keyboardInput, shortcutPlatform } from '@/lib/keybindings'
 import { memo, useEffect, useRef } from 'react'
 import type { DevScopePreviewTerminalSessionSummary } from '@shared/contracts/devscope-api'
 import type { ITheme, Terminal as XtermTerminal } from 'xterm'
@@ -30,6 +32,8 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     onSplitHorizontal,
     onSplitVertical,
     onCloseTerminal,
+    onClearTerminal,
+    onRestartTerminal,
     onError
 }: {
     session: DevScopePreviewTerminalSessionSummary
@@ -48,6 +52,8 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     onSplitHorizontal: () => void
     onSplitVertical: () => void
     onCloseTerminal: () => void
+    onClearTerminal: () => void
+    onRestartTerminal: () => void
     onError: (message: string) => void
 }) {
     const hostRef = useRef<HTMLDivElement | null>(null)
@@ -57,11 +63,11 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     const activeRef = useRef(active)
     const visibleRef = useRef(visible)
     const themeRef = useRef(theme)
-    const actionRefs = useRef({ onNewTerminal, onSplitHorizontal, onSplitVertical, onCloseTerminal })
+    const actionRefs = useRef({ onNewTerminal, onSplitHorizontal, onSplitVertical, onCloseTerminal, onClearTerminal, onRestartTerminal })
     activeRef.current = active
     visibleRef.current = visible
     themeRef.current = theme
-    actionRefs.current = { onNewTerminal, onSplitHorizontal, onSplitVertical, onCloseTerminal }
+    actionRefs.current = { onNewTerminal, onSplitHorizontal, onSplitVertical, onCloseTerminal, onClearTerminal, onRestartTerminal }
 
     useEffect(() => {
         const host = hostRef.current
@@ -72,6 +78,15 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
         let inputDisposable: { dispose: () => void } | null = null
         let titleDisposable: { dispose: () => void } | null = null
         let syncFrame = 0
+        // Guard browser input at its source. onData also carries automatic terminal
+        // protocol replies, which must reach their own PTY even without focus.
+        const inputEvents = ['keydown', 'keypress', 'keyup', 'paste', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend']
+        const guardInput = (event: Event) => {
+            if (activeRef.current && visibleRef.current && host.contains(document.activeElement)) return
+            event.preventDefault()
+            event.stopImmediatePropagation()
+        }
+        for (const type of inputEvents) host.addEventListener(type, guardInput, true)
         // Output can arrive before the lazy xterm runtime resolves. Retain it in order.
         const pendingEvents: Parameters<Parameters<typeof window.devscope.onPreviewTerminalEvent>[0]>[0][] = []
         let pendingChars = 0
@@ -123,31 +138,22 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             for (const event of pendingEvents.splice(0)) applyEvent(terminal, event)
 
             terminal.attachCustomKeyEventHandler((event) => {
-                const primary = event.ctrlKey || event.metaKey
-                if (primary && event.shiftKey && event.code === 'Backquote') {
-                    event.preventDefault()
-                    actionRefs.current.onNewTerminal()
-                    return false
-                }
-                if (primary && event.shiftKey && event.code === 'Digit5') {
-                    event.preventDefault()
-                    actionRefs.current.onSplitHorizontal()
-                    return false
-                }
-                if (primary && event.altKey && event.code === 'Digit5') {
-                    event.preventDefault()
-                    actionRefs.current.onSplitVertical()
-                    return false
-                }
-                if (primary && event.shiftKey && event.code === 'KeyW') {
-                    event.preventDefault()
-                    actionRefs.current.onCloseTerminal()
-                    return false
-                }
-                return true
+                if (isShortcutRecording()) return false
+                const command = resolveShortcut(keyboardInput(event), shortcutPlatform(), 'terminal')
+                const action = command === 'terminal.new' ? actionRefs.current.onNewTerminal
+                    : command === 'terminal.splitHorizontal' ? actionRefs.current.onSplitHorizontal
+                    : command === 'terminal.splitVertical' ? actionRefs.current.onSplitVertical
+                    : command === 'terminal.close' ? actionRefs.current.onCloseTerminal
+                    : command === 'terminal.clear' ? actionRefs.current.onClearTerminal
+                    : command === 'terminal.restart' ? actionRefs.current.onRestartTerminal : null
+                if (!action) return true
+                event.preventDefault()
+                action()
+                return false
             })
 
             inputDisposable = terminal.onData((data) => {
+                if (disposed || !host.isConnected) return
                 void window.devscope.writePreviewTerminal({
                     sessionId: session.sessionId,
                     data,
@@ -171,9 +177,8 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             resizeObserver = new ResizeObserver(syncSize)
             resizeObserver.observe(host)
             syncSize()
-            if (activeRef.current && visibleRef.current) {
-                window.requestAnimationFrame(() => terminal.focus())
-            }
+            // Runtime loading can finish after focus has moved to another pane or control.
+            if (activeRef.current && visibleRef.current && host.contains(document.activeElement)) terminal.focus()
         }).catch((error: unknown) => {
             if (!disposed) onError(error instanceof Error ? error.message : 'Failed to load terminal runtime.')
         })
@@ -195,6 +200,7 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
 
         return () => {
             disposed = true
+            for (const type of inputEvents) host.removeEventListener(type, guardInput, true)
             unsubscribe()
             window.cancelAnimationFrame(syncFrame)
             resizeObserver?.disconnect()
@@ -212,7 +218,6 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
         if (!terminal || !fitAddon || !visible) return
         const frame = window.requestAnimationFrame(() => {
             fitTerminalSafely(fitAddon)
-            if (active) terminal.focus()
             void window.devscope.resizePreviewTerminal({
                 sessionId: session.sessionId,
                 cols: terminal.cols,
@@ -221,7 +226,20 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             }).catch(() => undefined)
         })
         return () => window.cancelAnimationFrame(frame)
-    }, [active, focusRequestId, session.sessionId, visible, workspaceCapability])
+    }, [session.sessionId, visible, workspaceCapability])
+
+    useEffect(() => {
+        if (!active || !visible) return
+        const host = hostRef.current
+        if (!host) return
+        // Claim focus immediately, even when the terminal runtime is still loading.
+        if (terminalRef.current) terminalRef.current.focus()
+        else host.focus({ preventScroll: true })
+    }, [active, focusRequestId, visible])
+
+    useEffect(() => {
+        if (!active || !visible) terminalRef.current?.blur()
+    }, [active, visible])
 
     useEffect(() => {
         const terminal = terminalRef.current
@@ -244,6 +262,7 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     return (
         <div
             ref={hostRef}
+            tabIndex={-1}
             className="h-full min-h-0 w-full overflow-hidden bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]"
             onMouseDown={onActivate}
         />

@@ -23,6 +23,7 @@ export type AssistantQueuedComposerSessionState = {
     latestTurnState: string | null
     pendingApprovalCount: number
     pendingUserInputCount: number
+    compacting?: boolean
 }
 
 function removeQueuedDispatchById(
@@ -61,6 +62,7 @@ function cloneContextFiles(contextFiles: ComposerContextFile[]): ComposerContext
 
 export function isAssistantQueuedComposerSessionBusy(sessionState: AssistantQueuedComposerSessionState | null | undefined): boolean {
     if (!sessionState) return false
+    if (sessionState.compacting) return true
     if (sessionState.pendingApprovalCount > 0 || sessionState.pendingUserInputCount > 0) return true
     if (sessionState.latestTurnState === 'running') return true
     return sessionState.threadState === 'starting'
@@ -80,6 +82,7 @@ export function resolveAssistantForceInterruptAttempt(input: {
     activeTurnId: string | null
 }): { key: string; turnId: string | undefined } | null {
     if (input.previewOnly || input.dispatchMode !== 'force') return null
+    if (input.sessionState?.compacting) return null
     const selectedBusy = input.sessionId === input.selectedSessionId
         && (input.commandPending || input.isThreadWorking)
     if (!selectedBusy && !isAssistantQueuedComposerSessionBusy(input.sessionState)) return null
@@ -106,6 +109,7 @@ export function useAssistantQueuedComposer(args: {
     activeTurnId: string | null
     busyMessageMode: AssistantBusyMessageMode
     onSendingChange?: (sending: boolean) => void
+    canDispatchPrompt?: (sessionId: string) => boolean
     dispatchPrompt: (
         sessionId: string,
         prompt: string,
@@ -123,6 +127,7 @@ export function useAssistantQueuedComposer(args: {
         activeTurnId,
         busyMessageMode,
         onSendingChange,
+        canDispatchPrompt,
         dispatchPrompt,
         interruptTurn
     } = args
@@ -132,18 +137,21 @@ export function useAssistantQueuedComposer(args: {
     const [sendingComposerPrompt, setSendingComposerPrompt] = useState(false)
     const queueDrainSessionIdsRef = useRef<Set<string>>(new Set())
     const forceInterruptAttemptKeyBySessionIdRef = useRef<Map<string, string>>(new Map())
+    const forceInterruptInFlightSessionIdsRef = useRef(new Set<string>())
 
     const queuedComposerMessages = selectedSessionId ? (queuedComposerMessagesBySessionId[selectedSessionId] || []) : []
     const queuedComposerMessageCount = queuedComposerMessages.length
+    const selectedCompacting = sessionStates.find(state => state.sessionId === selectedSessionId)?.compacting === true
     const queuedComposerMessageItems = useMemo<AssistantQueuedComposerMessage[]>(() => (
         queuedComposerMessages.map((entry) => ({
             id: entry.id,
             prompt: entry.prompt,
             contextFiles: entry.contextFiles.map((file) => ({ ...file })),
             dispatchMode: entry.options.dispatchMode === 'force' ? 'force' : 'queue',
-            status: pausedQueueMessageIdBySessionId[selectedSessionId || ''] === entry.id ? 'paused' : 'queued'
+            status: pausedQueueMessageIdBySessionId[selectedSessionId || ''] === entry.id ? 'paused'
+                : selectedCompacting ? 'compacting' : 'queued'
         }))
-    ), [pausedQueueMessageIdBySessionId, queuedComposerMessages, selectedSessionId])
+    ), [pausedQueueMessageIdBySessionId, queuedComposerMessages, selectedSessionId, selectedCompacting])
 
     const handleDispatchPrompt = useCallback(async (
         sessionId: string,
@@ -151,6 +159,7 @@ export function useAssistantQueuedComposer(args: {
         contextFiles: ComposerContextFile[],
         options: AssistantComposerSendOptions
     ) => {
+        if (canDispatchPrompt && !canDispatchPrompt(sessionId)) return false
         setSendingComposerPrompt(true)
         onSendingChange?.(true)
         try {
@@ -159,7 +168,7 @@ export function useAssistantQueuedComposer(args: {
             setSendingComposerPrompt(false)
             onSendingChange?.(false)
         }
-    }, [dispatchPrompt, onSendingChange])
+    }, [canDispatchPrompt, dispatchPrompt, onSendingChange])
 
     const enqueuePreviewPrompt = useCallback((
         command: AssistantQueuePreviewCommand,
@@ -291,27 +300,26 @@ export function useAssistantQueuedComposer(args: {
         const previewCommand = parseDevAssistantQueuePreviewCommand(prompt)
         if (previewCommand) return enqueuePreviewPrompt(previewCommand, contextFiles, options)
 
-        if (isAssistantBusy) {
-            const dispatchMode = options.dispatchMode === 'force' || options.dispatchMode === 'queue'
+        if (isAssistantBusy || selectedCompacting) {
+            const dispatchMode = selectedCompacting ? 'queue' : options.dispatchMode === 'force' || options.dispatchMode === 'queue'
                 ? options.dispatchMode
                 : busyMessageMode
             return enqueueBusyPrompt(dispatchMode, prompt, contextFiles, options)
         }
         return handleDispatchPrompt(selectedSessionId, prompt, contextFiles, options)
-    }, [busyMessageMode, enqueueBusyPrompt, enqueuePreviewPrompt, handleDispatchPrompt, isAssistantBusy, selectedSessionId])
+    }, [busyMessageMode, enqueueBusyPrompt, enqueuePreviewPrompt, handleDispatchPrompt, isAssistantBusy, selectedSessionId, selectedCompacting])
 
     const handleForceQueuedMessage = useCallback(async (messageId: string) => {
         if (!selectedSessionId) return
 
-        let hasTargetMessage = false
-        let targetIsPreviewOnly = false
+        const target = queuedComposerMessagesBySessionId[selectedSessionId]?.find(entry => entry.id === messageId)
+        if (!target) return
+        const targetIsPreviewOnly = Boolean(target.previewOnly)
         setQueuedComposerMessagesBySessionId((current) => {
             const existing = current[selectedSessionId] || []
             const targetIndex = existing.findIndex((entry) => entry.id === messageId)
             if (targetIndex === -1) return current
 
-            hasTargetMessage = true
-            targetIsPreviewOnly = Boolean(existing[targetIndex]?.previewOnly)
             const nextQueuedMessages: PendingComposerDispatch[] = existing.map((entry, index) => (
                 targetIsPreviewOnly
                     ? entry.id === messageId
@@ -340,14 +348,17 @@ export function useAssistantQueuedComposer(args: {
             }
         })
 
-        if (!hasTargetMessage || targetIsPreviewOnly) return
+        if (targetIsPreviewOnly) return
+
+        // An explicit retry gets one new attempt; ordinary rerenders do not.
+        forceInterruptAttemptKeyBySessionIdRef.current.delete(selectedSessionId)
 
         setPausedQueueMessageIdBySessionId((current) => ({
             ...current,
             [selectedSessionId]: null
         }))
 
-    }, [selectedSessionId])
+    }, [queuedComposerMessagesBySessionId, selectedSessionId])
 
     const handleDeleteQueuedMessage = useCallback((messageId: string) => {
         if (!selectedSessionId) return
@@ -392,6 +403,8 @@ export function useAssistantQueuedComposer(args: {
             const forceMessage = queuedMessages.find((entry) => !entry.previewOnly && entry.options.dispatchMode === 'force')
             if (!forceMessage) continue
             forceQueuedSessionIds.add(sessionId)
+            if (forceInterruptInFlightSessionIdsRef.current.has(sessionId)
+                || pausedQueueMessageIdBySessionId[sessionId] === forceMessage.id) continue
             const attempt = resolveAssistantForceInterruptAttempt({
                 messageId: forceMessage.id,
                 dispatchMode: forceMessage.options.dispatchMode,
@@ -405,11 +418,10 @@ export function useAssistantQueuedComposer(args: {
             })
             if (!attempt || forceInterruptAttemptKeyBySessionIdRef.current.get(sessionId) === attempt.key) continue
             forceInterruptAttemptKeyBySessionIdRef.current.set(sessionId, attempt.key)
+            forceInterruptInFlightSessionIdsRef.current.add(sessionId)
             void interruptTurn(attempt.turnId, sessionId).catch(() => {
-                if (forceInterruptAttemptKeyBySessionIdRef.current.get(sessionId) === attempt.key) {
-                    forceInterruptAttemptKeyBySessionIdRef.current.delete(sessionId)
-                }
-            })
+                setPausedQueueMessageIdBySessionId(current => ({ ...current, [sessionId]: forceMessage.id }))
+            }).finally(() => { forceInterruptInFlightSessionIdsRef.current.delete(sessionId) })
         }
 
         for (const sessionId of forceInterruptAttemptKeyBySessionIdRef.current.keys()) {
@@ -420,6 +432,7 @@ export function useAssistantQueuedComposer(args: {
         commandPending,
         interruptTurn,
         isThreadWorking,
+        pausedQueueMessageIdBySessionId,
         queuedComposerMessagesBySessionId,
         selectedSessionId,
         sessionStates

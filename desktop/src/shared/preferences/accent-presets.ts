@@ -20,5 +20,8 @@ export const ACCENT_COLORS: AccentColor[] = [
     { name: 'Violet', primary: '#7c3aed', secondary: '#a78bfa' },
     { name: 'Amber', primary: '#f59e0b', secondary: '#fbbf24' },
     { name: 'Lime', primary: '#84cc16', secondary: '#a3e635' },
-    { name: 'Sky', primary: '#0ea5e9', secondary: '#38bdf8' }
+    { name: 'Sky', primary: '#0ea5e9', secondary: '#38bdf8' },
+    { name: 'Magenta', primary: '#c026d3', secondary: '#e879f9' },
+    { name: 'Slate', primary: '#64748b', secondary: '#94a3b8' },
+    { name: 'Copper', primary: '#c2410c', secondary: '#fb923c' }
 ]

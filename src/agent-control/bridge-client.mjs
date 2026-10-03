@@ -44,7 +44,7 @@ export class AgentControlBridgeClient {
       const abort = () => cancel(new ControlContractError("Control request was cancelled.", "CONTROL_CANCELLED"));
       const timer = setTimeout(() => cancel(new ControlContractError("Control request timed out.", "CONTROL_TIMEOUT")), timeoutMs);
       timer.unref?.();
-      this.pending.set(requestId, { resolve, reject, timer, signal: options.signal, abort });
+      this.pending.set(requestId, { resolve, reject, timer, signal: options.signal, abort, cancel });
       if (options.signal?.aborted) {
         abort();
         return;
@@ -78,14 +78,15 @@ export class AgentControlBridgeClient {
     return true;
   }
 
+  cancelPending(reason = "Control requests cancelled.", code = "CONTROL_CANCELLED") {
+    for (const pending of [...this.pending.values()]) {
+      pending.cancel(new ControlContractError(reason, code));
+    }
+  }
+
   dispose(reason = "Control bridge disposed.") {
     if (this.disposed) return;
     this.disposed = true;
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.signal?.removeEventListener?.("abort", pending.abort);
-      pending.reject(new ControlContractError(reason, "CONTROL_BRIDGE_DISPOSED"));
-    }
-    this.pending.clear();
+    this.cancelPending(reason, "CONTROL_BRIDGE_DISPOSED");
   }
 }

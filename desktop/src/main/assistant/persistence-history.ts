@@ -1,4 +1,5 @@
 import { decodeApprovalScope } from './approval-persistence'
+import { normalizeAssistantMessageReferenceId } from '../../shared/assistant/message-identity'
 import type { Database as SqlDatabase, SqlValue } from 'sql.js/dist/sql-asm.js'
 import type {
     AssistantActivity,
@@ -455,12 +456,33 @@ export function readAssistantHistoryAroundMessage(
     input: AssistantGetHistoryAroundMessageInput
 ): AssistantHistoryAroundMessageResult {
     const threadId = String(input.threadId || '').trim()
-    const messageId = String(input.messageId || '').trim()
-    if (!threadId || !messageId) throw new Error('Assistant thread and message ids are required.')
+    const requestedMessageId = String(input.messageId || '').trim()
+    if (!threadId || !requestedMessageId) throw new Error('Assistant thread and message ids are required.')
+    if (requestedMessageId.startsWith('zyra-thread-message:')) {
+        const activity = readAssistantActivity(db, threadId, requestedMessageId)
+        if (!activity || activity.kind !== 'thread-message') throw new Error('Assistant thread message was not found.')
+        const targetKey = getAssistantTimelineOrderKey('activity', activity)
+        // Use the next indexed record as the upper cursor. This keeps the normal
+        // bounded page reader centered on the receipt even in long legacy tasks.
+        const nextKeys = (['assistant_messages', 'assistant_activities', 'assistant_proposed_plans'] as const).flatMap((table, index) => {
+            const rank = index === 0 ? ASSISTANT_TIMELINE_KIND_RANK.message : index === 1 ? ASSISTANT_TIMELINE_KIND_RANK.activity : ASSISTANT_TIMELINE_KIND_RANK.plan
+            const row = db.exec(`SELECT id, timeline_sequence, created_at FROM ${table} WHERE thread_id = ? AND (created_at, COALESCE(timeline_sequence, -1), ?, id) > (?, ?, ?, ?) ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC LIMIT 1`, [threadId, rank, ...tupleValues(targetKey)])[0]?.values?.[0]
+            return row ? [{ ...historyBoundaryKey(row), kindRank: rank }] : []
+        }).sort(compareAssistantTimelineOrderKeys)
+        const upper = nextKeys[0] || null
+        const page = readAssistantHistoryPage(db, { threadId, before: upper ? encodeAssistantHistoryCursor(threadId, upper) : undefined, turnLimit: input.turnLimit })
+        if (page.activities.some(item => item.id === activity.id)) return { messageId: activity.id, page }
+        return { messageId: activity.id, page: {
+            threadId, messages: [], activities: [activity], proposedPlans: [],
+            pageInfo: { oldestCursor: encodeAssistantHistoryCursor(threadId, targetKey), newestCursor: upper ? encodeAssistantHistoryCursor(threadId, upper) : null,
+                hasOlder: hasRecordBefore(db, threadId, targetKey), hasNewer: Boolean(upper), turnCount: 1 }
+        } }
+    }
+    const canonicalMessageId = normalizeAssistantMessageReferenceId(requestedMessageId) || requestedMessageId
     const targetRow = db.exec(`
         SELECT id, timeline_sequence, created_at
         FROM assistant_messages
-        WHERE thread_id = ? AND id = ? AND streaming = 0
+        WHERE thread_id = ? AND id IN (?, ?) AND streaming = 0
           AND length(text) <= ${ASSISTANT_CHAT_SEARCH_MAX_INDEXED_MESSAGE_CHARACTERS}
           AND (
             role = 'user'
@@ -473,9 +495,11 @@ export function readAssistantHistoryAroundMessage(
               )
             )
           )
+        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
         LIMIT 1
-    `, [threadId, messageId])[0]?.values?.[0]
+    `, [threadId, canonicalMessageId, requestedMessageId, canonicalMessageId])[0]?.values?.[0]
     if (!targetRow) throw new Error('Assistant search message was not found.')
+    const messageId = String(targetRow[0])
     const targetKey = historyBoundaryKey(targetRow)
     const boundaryRow = db.exec(`
         SELECT id, timeline_sequence, created_at

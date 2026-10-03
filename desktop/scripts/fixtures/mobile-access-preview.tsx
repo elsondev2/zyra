@@ -5,7 +5,7 @@ import '../../src/renderer/src/index.css'
 import { MobileConnectionSettings } from '../../src/renderer/src/pages/settings/MobileConnectionSettings'
 import type { MobileAccessState, MobileAccessApi } from '../../src/shared/mobile-access'
 let state: MobileAccessState = { config: { enabled: true, address: '192.168.1.10', projects: ['C:/Projects'] }, running: true, addresses: [{ name: 'Wi-Fi', address: '192.168.1.10' }, { name: 'Ethernet', address: '192.168.2.10' }], devices: [{ id: 'phone-a', name: 'My Android', createdAt: 1 }, { id: 'phone-b', name: 'Work phone', createdAt: 1 }] }
-const projects = ['Website', 'Research', 'Desktop', 'Android', 'Notes', 'Website', ...Array.from({ length: 16 }, (_, i) => 'Project ' + (i + 1))].map((name, i) => ({ name, paths: ['C:/Projects/' + i + '/' + name, 'C:/Projects/' + i + '/worktree'] }))
+const projects = ['Website', 'Research', 'Desktop', 'Android', 'Notes', 'Website', ...Array.from({ length: 16 }, (_, i) => 'Project ' + (i + 1))].map((name, i) => ({ name, paths: ['C:/Projects/' + i + '/' + name, 'C:/Projects/' + i + '/worktree'], iconPath: 'C:/Projects/' + i + '/worktree', folders: [{ path: 'C:/Projects/' + i + '/worktree', label: 'Work files' }] }))
 const api: MobileAccessApi = { getState: async () => structuredClone(state), getProjects: async () => projects,
  configure: async config => { state = { ...state, config, running: config.enabled }; return structuredClone(state) },
  setDeviceAccess: async (id, access) => { state = { ...state, devices: state.devices.map(device => device.id === id ? { ...device, ...access } : device) }; return structuredClone(state) },

@@ -5,20 +5,20 @@ import { addProjectDraftFolder, projectCreationCandidate, projectCreationInput, 
 export function useProjectCreationForm(options: ProjectCreationOptions, onCreated: (project: AssistantProject) => void) {
     const [name, setName] = useState(options.name || '')
     const [folders, setFolders] = useState(options.folderPaths || [])
-    const [folderDraft, setFolderDraft] = useState('')
     const [error, setError] = useState<string | null>(null)
     const [busy, setBusy] = useState<'browse' | 'create' | null>(null)
     const operation = useRef(false)
 
-    const addFolder = (path: string) => {
+    const addFolders = (paths: string[]) => {
         try {
-            setFolders(addProjectDraftFolder(folders, path))
-            setFolderDraft('')
+            setFolders(paths.reduce(addProjectDraftFolder, folders))
             setError(null)
         } catch (error) {
             setError(error instanceof Error ? error.message : 'Could not add folder.')
         }
     }
+
+    const addFolder = (path: string) => addFolders([path])
 
     const browse = async () => {
         if (operation.current) return
@@ -39,11 +39,6 @@ export function useProjectCreationForm(options: ProjectCreationOptions, onCreate
 
     const submit = async () => {
         if (operation.current) return
-        // Do not silently discard a path the user has typed but not yet added.
-        if (folderDraft.trim()) {
-            setError('Add the folder path to the list, or clear it before creating the Project.')
-            return
-        }
         operation.current = true
         setBusy('create')
         setError(null)
@@ -61,7 +56,7 @@ export function useProjectCreationForm(options: ProjectCreationOptions, onCreate
     }
 
     return {
-        name, setName, folders, folderDraft, setFolderDraft, error, busy, addFolder, browse, submit,
+        name, setName, folders, error, setError, busy, addFolder, addFolders, browse, submit,
         removeFolder: (path: string) => { setFolders((current) => current.filter((entry) => entry !== path)); setError(null) }
     }
 }

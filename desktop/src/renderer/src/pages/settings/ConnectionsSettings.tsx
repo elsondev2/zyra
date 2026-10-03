@@ -5,9 +5,9 @@ import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { ChromeBrowserConnectionSettings } from './ChromeBrowserConnectionSettings'
 import { MobileConnectionSettings } from './MobileConnectionSettings'
 import { SettingsPageTabs } from './SettingsPageTabs'
+import { SettingsHoverActionButton } from './SettingsHoverActionButton'
 import { createSettingsRowTargetId } from './settings-search'
 import {
-    SettingsButton,
     SettingsNotice,
     SettingsPageContainer,
     SettingsRow,
@@ -46,7 +46,7 @@ export default function ConnectionsSettings({ view = 'device' }: { view?: Connec
     )
 }
 
-function ThisDeviceSettings({ desktopHost }: { desktopHost: boolean }) {
+export function ThisDeviceSettings({ desktopHost }: { desktopHost: boolean }) {
     const [actionStatus, setActionStatus] = useState<ConnectionActionStatus | null>(null)
 
     useEffect(() => {
@@ -94,8 +94,8 @@ function ThisDeviceSettings({ desktopHost }: { desktopHost: boolean }) {
                 statusTitle={actionStatus?.detail}
                 control={(
                     <>
-                        <SettingsButton variant="ghost" onClick={() => void copyLocalBrowserLink()}><Copy size={12} />Copy link</SettingsButton>
-                        {desktopHost ? <SettingsButton onClick={() => void openLocalBrowserClient()}><ExternalLink size={12} />Open</SettingsButton> : null}
+                        <SettingsHoverActionButton label="Copy link" icon={<Copy size={13} />} variant="ghost" onClick={() => void copyLocalBrowserLink()} />
+                        {desktopHost ? <SettingsHoverActionButton label="Open" accessibleLabel="Open Zyra in your browser" icon={<ExternalLink size={13} />} onClick={() => void openLocalBrowserClient()} /> : null}
                     </>
                 )}
             />

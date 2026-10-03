@@ -248,10 +248,7 @@ export function AssistantThreadDetailsWorkspace({
     const model = formatAssistantModelLabel(composerState.model || selection.threadModel || 'No model')
     const effort = SIDEBAR_EFFORT_LABELS[(composerState.effort || selection.latestTurnEffort || selection.threadEffort || 'high') as keyof typeof SIDEBAR_EFFORT_LABELS] || 'High'
     const speed = composerState.fastModeEnabled || selection.latestTurnServiceTier === 'fast' ? 'Fast' : selection.latestTurnServiceTier === 'flex' ? 'Flex' : 'Standard'
-    const titleActionDisabled = selection.commandPending
-        || selection.titleGenerating
-        || ['starting', 'running', 'waiting'].includes(selection.threadState)
-        || selection.latestTurnState === 'running'
+    const titleActionDisabled = selection.commandPending || selection.titleGenerating
     return (
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label="Thread Details" data-testid="assistant-thread-details-workspace">
             <header className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[0.07] px-3">
@@ -283,7 +280,7 @@ export function AssistantThreadDetailsWorkspace({
                     ) : (
                         <>
                             <button type="button" onClick={() => { setEditingTitle(true); setTitleDraft(selection.sessionTitle); setTitleError(null) }} disabled={selection.commandPending || selection.titleGenerating} className="inline-flex size-5 shrink-0 items-center justify-center text-sparkle-text-muted/45 opacity-70 transition-colors hover:text-sparkle-text disabled:opacity-25" title="Rename title" aria-label="Rename title"><Pencil size={9} /></button>
-                            <button type="button" onClick={() => void regenerateTitle()} disabled={titleActionDisabled} className="inline-flex size-5 shrink-0 items-center justify-center text-sparkle-text-muted/45 opacity-70 transition-colors hover:text-sparkle-text disabled:opacity-25" title={titleActionDisabled && !selection.titleGenerating ? 'Available after the current turn finishes' : 'Regenerate title'} aria-label="Regenerate title"><RefreshCw size={10} className={selection.titleGenerating ? 'animate-spin motion-reduce:animate-none' : ''} /></button>
+                            <button type="button" onClick={() => void regenerateTitle()} disabled={titleActionDisabled} className="inline-flex size-5 shrink-0 items-center justify-center text-sparkle-text-muted/45 opacity-70 transition-colors hover:text-sparkle-text disabled:opacity-25" title="Regenerate title" aria-label="Regenerate title"><RefreshCw size={10} className={selection.titleGenerating ? 'animate-spin motion-reduce:animate-none' : ''} /></button>
                         </>
                     )}
                 </div>

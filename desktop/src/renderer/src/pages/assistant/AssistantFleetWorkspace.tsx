@@ -16,6 +16,7 @@ interface AssistantFleetWorkspaceProps {
     snapshot: FleetSnapshot | null
     selectedAgentRunId: string | null
     selectedWorkflowRunId: string | null
+    selectionRequestId?: number
     onSelectAgent: (agentRunId: string | null) => void
     onSelectWorkflow: (workflowRunId: string | null) => void
     onAgentAction?: (action: AssistantAgentAction, agentRunId: string) => void
@@ -25,7 +26,7 @@ interface AssistantFleetWorkspaceProps {
 }
 
 export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
-    const [tab, setTab] = useState<'agents' | 'workflows'>(props.stateCapsule?.section || 'agents')
+    const [tab, setTab] = useState<'agents' | 'workflows'>(props.selectedAgentRunId ? 'agents' : props.selectedWorkflowRunId ? 'workflows' : props.stateCapsule?.section || 'agents')
     const [agentPage, setAgentPage] = useState(props.stateCapsule?.agentPage || 0)
     const [workflowPage, setWorkflowPage] = useState(props.stateCapsule?.workflowPage || 0)
     const pendingHydrationRef = useRef(props.stateCapsule)
@@ -46,6 +47,11 @@ export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
         setAgentPage(props.stateCapsule.agentPage || 0)
         setWorkflowPage(props.stateCapsule.workflowPage || 0)
     }, [props.stateCapsule])
+
+    useEffect(() => {
+        if (props.selectedAgentRunId) setTab('agents')
+        else if (props.selectedWorkflowRunId) setTab('workflows')
+    }, [props.selectedAgentRunId, props.selectedWorkflowRunId, props.selectionRequestId])
 
     useEffect(() => {
         const pendingHydration = pendingHydrationRef.current

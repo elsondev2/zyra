@@ -87,6 +87,10 @@ export function buildProjectDetailsContentProps(props: any) {
         unstagedFiles: props.unstagedFiles,
         unpushedCommits: props.unpushedCommits,
         onBrowseFolder: () => {
+            if (props.accessoryMode) {
+                props.setActiveTab('files')
+                return
+            }
             const encodedPath = encodeURIComponent(props.projectRootPath)
             props.navigate(`/folder-browse/${encodedPath}`)
         },

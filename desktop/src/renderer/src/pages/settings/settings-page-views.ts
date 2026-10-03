@@ -14,27 +14,27 @@ export const SETTINGS_PAGE_VIEWS = {
     ],
     chats: [
         { id: 'assistant', label: 'Behavior', to: '/settings/assistant/defaults' },
-        { id: 'chat-display', label: 'Display', to: '/settings/assistant/display' },
-        { id: 'archived', label: 'Archived', to: '/settings/assistant/archived' }
+        { id: 'chat-defaults', label: 'Defaults', to: '/settings/assistant/chat-defaults' },
+        { id: 'chat-display', label: 'Display', to: '/settings/assistant/display' }
     ],
     voice: [
         { id: 'voice', label: 'Dictation', to: '/settings/assistant/voice' },
+        { id: 'voice-history', label: 'History', to: '/settings/assistant/voice/history' },
         { id: 'voice-lab', label: 'Voice conversation', to: '/settings/assistant/voice/conversation' }
     ],
     projects: [
         { id: 'projects', label: 'Catalog', to: '/settings/workspace/projects' },
-        { id: 'project-discovery', label: 'Discovery & indexing', to: '/settings/workspace/projects/discovery' },
-        { id: 'project-presentation', label: 'Presentation', to: '/settings/workspace/projects/presentation' }
+        { id: 'project-discovery', label: 'Find projects', to: '/settings/workspace/projects/discovery' }
     ],
     files: [
         { id: 'files-editor', label: 'Preview', to: '/settings/workspace/files' },
-        { id: 'file-editor', label: 'Editor', to: '/settings/workspace/files/editor' },
-        { id: 'file-run', label: 'Run & output', to: '/settings/workspace/files/run' }
+        { id: 'file-editor', label: 'Editor', to: '/settings/workspace/files/editor' }
     ],
     browser: [
         { id: 'browser-control', label: 'Browsing', to: '/settings/workspace/browser' },
         { id: 'browser-privacy', label: 'Privacy', to: '/settings/workspace/browser/privacy' },
-        { id: 'browser-data', label: 'Site data', to: '/settings/workspace/browser/data' }
+        { id: 'browser-data', label: 'Site data', to: '/settings/workspace/browser/data' },
+        { id: 'browser-extensions', label: 'Extensions', to: '/settings/workspace/browser/extensions' }
     ],
     git: [
         { id: 'source-control', label: 'Git defaults', to: '/settings/workspace/source-control' },

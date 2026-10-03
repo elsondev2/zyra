@@ -9,7 +9,7 @@ export async function createZyraSession({ project }) {
     project, profile: 'default', webSearch: false, webFetch: false, streaming: false,
     session: {
       model, state: { model, messages: [] }, autoCompactionEnabled: true,
-      modelRegistry: { authStorage: { modelRuntime: { refresh: async () => ({ errors: new Map() }) } } },
+      modelRegistry: { authStorage: { refreshAuthProvider: async () => ({ errors: new Map() }), modelRuntime: { refresh: async () => ({ errors: new Map() }) } } },
       sessionManager: {
         getEntries: () => [], getSessionId: () => 'fixture-streaming', getSessionFile: () => undefined,
         getSessionName: () => 'Synthetic streaming check', getCwd: () => project,

@@ -3,6 +3,21 @@ function unavailablePrompt() {
 }
 
 /**
+ * Keeps Pi's manual-code fallback open while the local browser callback is in
+ * flight. Rejecting this prompt immediately cancels Pi's callback listener
+ * before the browser has a chance to return the authorization code.
+ */
+export function waitForAutomaticBrowserCallback(prompt = {}) {
+  return new Promise((_resolve, reject) => {
+    const signal = prompt?.signal;
+    if (!signal) return;
+    const abort = () => reject(signal.reason instanceof Error ? signal.reason : new Error("Browser sign-in was cancelled."));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/**
  * Complete Pi's OAuth callback contract for Zyra's browser-first login flows.
  * Callers may still provide onSelect to opt into another provider-supported method.
  */

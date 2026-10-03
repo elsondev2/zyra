@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { AgentBridgeWorker } from "../src/agent-server/bridge-worker.mjs";
-import { createZyraPiRuntime } from "../src/pi-runtime.mjs";
+import { createZyraRuntime } from "../src/zyra-runtime.mjs";
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "zyra-pi-auth-sync-"));
 const authPath = path.join(directory, "auth.json");
@@ -16,8 +16,8 @@ const options = {
 };
 
 try {
-  const server = await createZyraPiRuntime(options);
-  const client = await createZyraPiRuntime(options);
+  const server = await createZyraRuntime(options);
+  const client = await createZyraRuntime(options);
   assert.equal(server.authStorage.hasAuth("openai"), false);
 
   const apiKey = "sk-zyra-offline-auth-sync-fixture";
@@ -25,19 +25,19 @@ try {
   assert.equal(client.authStorage.hasAuth("openai"), true);
   assert.equal(server.authStorage.hasAuth("openai"), false, "an existing server snapshot stays stale until explicitly refreshed");
 
-  const added = await server.modelRuntime.refresh({ allowNetwork: false, providers: ["openai"] });
+  const added = await server.authStorage.refreshAuthProvider("openai");
   assert.equal(added.errors.size, 0);
   assert.equal(server.authStorage.hasAuth("openai"), true);
   assert.equal(await server.authStorage.getApiKey("openai"), apiKey);
 
   await client.authStorage.logout("openai");
-  const removed = await server.modelRuntime.refresh({ allowNetwork: false, providers: ["openai"] });
+  const removed = await server.authStorage.refreshAuthProvider("openai");
   assert.equal(removed.errors.size, 0);
   assert.equal(server.authStorage.hasAuth("openai"), false);
 
-  const previousPiDirectory = process.env.PI_CODING_AGENT_DIR;
+  const previousPiDirectory = process.env.ZYRA_CODING_AGENT_DIR;
   const previousStateDirectory = process.env.ZYRA_STATE_DIR;
-  process.env.PI_CODING_AGENT_DIR = directory;
+  process.env.ZYRA_CODING_AGENT_DIR = directory;
   process.env.ZYRA_STATE_DIR = path.join(directory, "state");
   const utilityWorker = new AgentBridgeWorker({ root: path.resolve(import.meta.dirname, ".."), cwd: directory });
   try {
@@ -50,7 +50,7 @@ try {
     );
   } finally {
     utilityWorker.dispose();
-    restoreEnvironment("PI_CODING_AGENT_DIR", previousPiDirectory);
+    restoreEnvironment("ZYRA_CODING_AGENT_DIR", previousPiDirectory);
     restoreEnvironment("ZYRA_STATE_DIR", previousStateDirectory);
   }
 } finally {

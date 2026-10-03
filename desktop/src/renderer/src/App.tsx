@@ -1,4 +1,6 @@
+import { appShortcut } from './lib/keybindings'
 import { AppMenuCommandHost } from './components/layout/AppMenuCommandHost'
+import { ShortcutHints } from './components/layout/ShortcutHints'
 import { isBrowserExtension } from './lib/browser-extension'
 import { ExtensionSidebarHeader } from './components/layout/ExtensionSidebarHeader'
 import { RuntimeActivationNotice } from './components/updates/RuntimeActivationNotice'
@@ -11,6 +13,7 @@ import QuickOpenWindow from './pages/QuickOpenWindow'
 import TitleBar from './components/layout/TitleBar'
 import { AppBootSkeleton, AppRouteSkeleton } from './components/ui/AppRouteSkeleton'
 import { SettingsProvider, useSettings } from './lib/settings'
+import { ZYRA_THEME_CHANGED_EVENT } from './lib/theme-events'
 import { CommandPaletteProvider } from './lib/commandPalette'
 import CommandPalette from './components/CommandPalette'
 import LinkHoverStatus from './components/ui/LinkHoverStatus'
@@ -34,12 +37,14 @@ import {
     loadDiagnosticsSettings,
     loadFilesEditorSettings,
     loadGeneralSettings,
+    loadKeyboardShortcutsSettings,
     loadMemorySettings,
     loadProjectsSettings,
     loadProviderSettings,
     loadProviderWritingSettings,
     loadSettingsShell,
     loadSkillsSettings,
+    loadPluginsSettings,
     loadSourceControlSettings,
     loadTerminalRuntimeSettings,
     loadVoiceSettings
@@ -53,6 +58,7 @@ const PluginWorkspace = lazy(() => import('./pages/plugins/PluginWorkspace'))
 const AccessoryWindowPage = lazy(() => import('./pages/accessories/AccessoryWindowPage'))
 const SettingsShell = lazy(loadSettingsShell)
 const GeneralSettings = lazy(loadGeneralSettings)
+const KeyboardShortcutsSettings = lazy(loadKeyboardShortcutsSettings)
 const AppearanceSettings = lazy(loadAppearanceSettings)
 const VoiceSettings = lazy(loadVoiceSettings)
 const ConnectionsSettings = lazy(loadConnectionsSettings)
@@ -61,6 +67,7 @@ const FilesEditorSettings = lazy(loadFilesEditorSettings)
 const TerminalRuntimeSettings = lazy(loadTerminalRuntimeSettings)
 const AssistantSettings = lazy(loadAssistantSettings)
 const SkillsSettings = lazy(loadSkillsSettings)
+const PluginsSettings = lazy(loadPluginsSettings)
 const ProvidersSettings = lazy(loadProviderSettings)
 const ProviderWritingSettings = lazy(loadProviderWritingSettings)
 const GitSettings = lazy(loadSourceControlSettings)
@@ -157,6 +164,7 @@ function MainContent() {
                         <Route path="workspace" element={<SettingsCategoryRedirect categoryId="workspace" />} />
                         <Route path="data" element={<SettingsCategoryRedirect categoryId="data" />} />
                         <Route path="app/general" element={<GeneralSettings />} />
+                        <Route path="app/keyboard-shortcuts" element={<KeyboardShortcutsSettings />} />
                         <Route path="app/appearance" element={<AppearanceSettings />} />
                         <Route path="app/appearance/typography" element={<AppearanceSettings view="typography" />} />
                         <Route path="app/appearance/layout" element={<AppearanceSettings view="layout" />} />
@@ -174,24 +182,29 @@ function MainContent() {
                         <Route path="account/devices/chrome" element={<ConnectionsSettings view="chrome" />} />
                         <Route path="account/devices/mobile" element={<ConnectionsSettings view="mobile" />} />
                         <Route path="assistant/defaults" element={<AssistantSettings />} />
+                        <Route path="assistant/chat-defaults" element={<AssistantSettings view="defaults" />} />
                         <Route path="assistant/display" element={<AssistantSettings view="display" />} />
                         <Route path="assistant/archived" element={<ArchivedChatsSettings />} />
                         <Route path="assistant/permissions" element={<SettingsRedirect to="/settings/assistant/defaults" />} />
                         <Route path="assistant/skills" element={<SkillsSettings />} />
+                        <Route path="assistant/plugins" element={<PluginsSettings />} />
+                        <Route path="assistant/skills/conflicts" element={<SkillsSettings view="conflicts" />} />
                         <Route path="assistant/voice" element={<VoiceSettings />} />
+                        <Route path="assistant/voice/history" element={<VoiceSettings view="history" />} />
                         <Route path="assistant/voice/conversation" element={<VoiceSettings view="conversation" />} />
                         <Route path="assistant/memory" element={<MemorySettings />} />
                         <Route path="assistant/memory/inspect" element={<MemorySettings view="inspect" />} />
                         <Route path="workspace/browser" element={<BrowserControlSettings />} />
                         <Route path="workspace/browser/privacy" element={<BrowserControlSettings view="privacy" />} />
                         <Route path="workspace/browser/data" element={<BrowserControlSettings view="data" />} />
+                        <Route path="workspace/browser/extensions" element={<BrowserControlSettings view="extensions" />} />
                         <Route path="workspace/files" element={<FilesEditorSettings />} />
                         <Route path="workspace/files/editor" element={<FilesEditorSettings view="editor" />} />
-                        <Route path="workspace/files/run" element={<FilesEditorSettings view="run" />} />
+                        <Route path="workspace/files/run" element={<Navigate to="/settings/workspace/files" replace />} />
                         <Route path="workspace/terminal" element={<TerminalRuntimeSettings />} />
                         <Route path="workspace/projects" element={<ProjectsSettings />} />
                         <Route path="workspace/projects/discovery" element={<ProjectsSettings view="discovery" />} />
-                        <Route path="workspace/projects/presentation" element={<ProjectsSettings view="presentation" />} />
+                        <Route path="workspace/projects/presentation" element={<Navigate to="/settings/workspace/projects" replace />} />
                         <Route path="workspace/source-control" element={<GitSettings />} />
                         <Route path="workspace/source-control/pull-requests" element={<GitSettings view="pull-requests" />} />
                         <Route path="workspace/source-control/writing" element={<GitSettings view="writing" />} />
@@ -280,8 +293,7 @@ function DevLoadingPreviewOverlay() {
         if (!import.meta.env.DEV) return
 
         const handleKeyDown = (event: KeyboardEvent) => {
-            const isModifier = event.ctrlKey || event.metaKey
-            if (!isModifier || !event.shiftKey || event.key.toLowerCase() !== 'l') return
+            if (appShortcut(event) !== 'app.loadingPreview') return
             event.preventDefault()
             setVisible((current) => !current)
         }
@@ -323,6 +335,7 @@ function NormalDesktopApp() {
                         <AssistantTitleBarProvider>
                             <ProjectCreationProvider>
                                 <AppMenuCommandHost />
+                                <ShortcutHints />
                                 <AppContent />
                                 <CommandPalette />
                                 <UpdatePromptCenter />
@@ -338,7 +351,7 @@ function NormalDesktopApp() {
 
 function AppSurface() {
     if (/^#\/accessories(?:[/?]|$)/.test(window.location.hash)) {
-        return <SettingsProvider><HashRouter><Suspense fallback={<div className="flex h-screen items-center justify-center bg-sparkle-bg text-sm text-sparkle-text-secondary">Opening Accessories…</div>}><AccessoryWindowPage /></Suspense></HashRouter></SettingsProvider>
+        return <SettingsProvider><TerminalContextProvider><HashRouter><Suspense fallback={<div className="flex h-screen items-center justify-center bg-sparkle-bg text-sm text-sparkle-text-secondary">Opening Accessories…</div>}><AccessoryWindowPage /></Suspense></HashRouter></TerminalContextProvider></SettingsProvider>
     }
     if (isQuickPreviewRoute(window.location.hash)) return <QuickOpenWindow />
     const assistantUtilityWindow = /^#\/assistant-utility(?:[/?]|$)/.test(window.location.hash)
@@ -373,6 +386,12 @@ function AppSurface() {
 }
 
 function App() {
+    useEffect(() => {
+        if (typeof window.devscope.browserView?.refreshTheme !== 'function') return
+        const refreshBrowserTheme = () => window.devscope.browserView.refreshTheme()
+        window.addEventListener(ZYRA_THEME_CHANGED_EVENT, refreshBrowserTheme)
+        return () => window.removeEventListener(ZYRA_THEME_CHANGED_EVENT, refreshBrowserTheme)
+    }, [])
     return <><AppSurface /><AssistantBrowserRecordingHost /><DesktopLinkHost /></>
 }
 

@@ -1,5 +1,5 @@
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
-import { createContext, useContext, useEffect, useRef } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { Undo2, X } from 'lucide-react'
@@ -13,7 +13,7 @@ import { SettingsPageFrame } from './SettingsPageFrame'
 
 const SettingsSearchSectionContext = createContext<string | null>(null)
 
-export function SettingsPageContainer({ children, className, title, navigation, backTo, backLabel, showSettingsBack = false }: {
+export function SettingsPageContainer({ children, className, title, navigation, backTo, backLabel, showSettingsBack = false, fillViewport = false }: {
     children: ReactNode
     className?: string
     title?: string
@@ -22,12 +22,13 @@ export function SettingsPageContainer({ children, className, title, navigation, 
     backTo?: string
     backLabel?: string
     showSettingsBack?: boolean
+    fillViewport?: boolean
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null)
     const inRouter = useInRouterContext()
     const showBackLink = backTo && (showSettingsBack || !backTo.startsWith('/settings'))
     return (
-        <SettingsPageFrame containerRef={containerRef} className={className}>
+        <SettingsPageFrame containerRef={containerRef} className={className} fillViewport={fillViewport}>
                 {title ? (
                     <header className="px-0.5">
                         {inRouter ? <SettingsBackLink fallback={showBackLink ? backTo : undefined} fallbackLabel={backLabel} /> : null}
@@ -35,18 +36,21 @@ export function SettingsPageContainer({ children, className, title, navigation, 
                     </header>
                 ) : null}
                 {inRouter ? navigation || <SettingsSectionNavigation containerRef={containerRef} /> : null}
-                <div className="flex min-w-0 flex-col gap-8" data-settings-page-content="true">{children}</div>
+                <div className={cn('flex min-w-0 flex-col gap-8', fillViewport && 'min-h-0 flex-1')} data-settings-page-content="true">{children}</div>
         </SettingsPageFrame>
     )
 }
 
-export function SettingsSection({ title, searchSection, icon, headerAction, children, className }: {
+export function SettingsSection({ title, searchSection, icon, titleAction, headerAction, children, className, bodyClassName, hideHeader = false }: {
     title: string
     searchSection?: string
     icon?: ReactNode
+    titleAction?: ReactNode
     headerAction?: ReactNode
     children: ReactNode
     className?: string
+    bodyClassName?: string
+    hideHeader?: boolean
 }) {
     const searchTargetId = createSettingsSectionTargetId(title)
     return (
@@ -55,12 +59,14 @@ export function SettingsSection({ title, searchSection, icon, headerAction, chil
             data-settings-search-target={searchTargetId}
             tabIndex={-1}
         >
-            <div className="flex min-h-7 items-center justify-between gap-4 px-1">
-                <h2 className="flex min-w-0 items-center gap-2 text-[14px] font-medium tracking-[-0.01em] text-[var(--settings-text-secondary)]">{icon}{title}</h2>
-                <div className="flex min-h-7 items-center justify-end">{headerAction}</div>
-            </div>
+            {!hideHeader ? (
+                <div className="flex min-h-7 items-center justify-between gap-4 px-1">
+                    <h2 className="flex min-w-0 items-center gap-2 text-[14px] font-medium tracking-[-0.01em] text-[var(--settings-text-secondary)]">{icon}{title}{titleAction}</h2>
+                    <div className="flex min-h-7 items-center justify-end">{headerAction}</div>
+                </div>
+            ) : null}
             <SettingsSearchSectionContext.Provider value={searchSection || title}>
-                <div className="zyra-settings-section-body relative overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]">{children}</div>
+                <div className={cn('zyra-settings-section-body relative overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]', bodyClassName)}>{children}</div>
             </SettingsSearchSectionContext.Provider>
         </section>
     )
@@ -170,6 +176,88 @@ export function SettingsInput(props: InputHTMLAttributes<HTMLInputElement>) {
     )
 }
 
+export function SettingsSlider({ value, min, max, step = 1, unit, label, onChange }: {
+    value: number
+    min: number
+    max: number
+    step?: number
+    unit?: string
+    label: string
+    onChange: (value: number) => void
+}) {
+    const fill = max === min ? 100 : ((value - min) / (max - min)) * 100
+    const [draft, setDraft] = useState(String(value))
+    const [editing, setEditing] = useState(false)
+    const inputRef = useRef<HTMLInputElement | null>(null)
+
+    useEffect(() => setDraft(String(value)), [value])
+    useEffect(() => {
+        if (!editing) return
+        inputRef.current?.focus()
+        inputRef.current?.select()
+    }, [editing])
+
+    const commit = (candidate: number) => {
+        if (!Number.isFinite(candidate)) {
+            setDraft(String(value))
+            setEditing(false)
+            return
+        }
+        const next = Math.max(min, Math.min(max, Math.round(candidate / step) * step))
+        setDraft(String(next))
+        setEditing(false)
+        if (next !== value) onChange(next)
+    }
+
+    return (
+        <div className="flex w-full shrink-0 items-center gap-2.5 sm:w-44">
+            <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(event) => {
+                    const next = Math.max(min, Math.min(max, Number(event.target.value)))
+                    if (Number.isFinite(next) && next !== value) onChange(next)
+                }}
+                aria-label={label}
+                aria-valuetext={unit ? `${value}${unit}` : String(value)}
+                className="zyra-settings-slider min-w-0 flex-1"
+                style={{ ['--slider-fill' as string]: `${fill}%` }}
+            />
+            <div className="relative w-14 shrink-0 text-right text-xs tabular-nums text-[var(--settings-text-secondary)]">
+                {!editing ? (
+                    <button type="button" onClick={() => setEditing(true)} aria-label={`Edit ${label}`} title={`Edit ${label}`} className="h-7 w-full rounded px-0 text-right outline-none hover:bg-[var(--settings-control-hover)] focus-visible:bg-[var(--settings-control)] focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]">{value}{unit}</button>
+                ) : null}
+                {editing ? (
+                    <div className="flex h-7 items-center justify-end gap-1">
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            inputMode="numeric"
+                            value={draft}
+                            onChange={(event) => setDraft(event.target.value)}
+                            onBlur={() => commit(Number(draft.trim()))}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter') event.currentTarget.blur()
+                                if (event.key === 'Escape') {
+                                    setDraft(String(value))
+                                    setEditing(false)
+                                    event.currentTarget.blur()
+                                }
+                            }}
+                            aria-label={`${label} value`}
+                            className="h-7 w-10 rounded border border-[var(--accent-primary)] bg-[var(--settings-control)] py-0 pr-1 text-right text-xs tabular-nums text-[var(--settings-text)] outline-none"
+                        />
+                        {unit ? <span aria-hidden="true" className="text-[10px] text-[var(--settings-text-faint)]">{unit}</span> : null}
+                    </div>
+                ) : null}
+            </div>
+        </div>
+    )
+}
+
 export function SettingsTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
     return (
         <textarea
@@ -196,9 +284,10 @@ export function SettingsButton({ variant = 'outline', ...props }: ButtonHTMLAttr
     )
 }
 
-export function SettingsDialog({ open, title, description, descriptionMode = 'text', headerAction, children, footer, className, contentClassName, onClose }: {
+export function SettingsDialog({ open, title, titleIcon, description, descriptionMode = 'text', headerAction, children, footer, className, contentClassName, onClose }: {
     open: boolean
     title: string
+    titleIcon?: ReactNode
     description?: string
     descriptionMode?: 'text' | 'info'
     headerAction?: ReactNode
@@ -235,7 +324,7 @@ export function SettingsDialog({ open, title, description, descriptionMode = 'te
             >
                 <header className={cn('flex shrink-0 gap-4 border-b border-[var(--settings-divider)] px-4 py-3', descriptionMode === 'info' ? 'items-center' : 'items-start')}>
                     <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2"><h2 id="settings-dialog-title" className="text-[14px] font-semibold tracking-[-0.01em]">{title}</h2>{description && descriptionMode === 'info' ? <SettingsInfoTooltip label={`About ${title}`}>{description}</SettingsInfoTooltip> : null}</div>
+                        <div className="flex items-center gap-2">{titleIcon ? <span className="inline-flex size-5 shrink-0 items-center justify-center">{titleIcon}</span> : null}<h2 id="settings-dialog-title" className="text-[14px] font-semibold tracking-[-0.01em]">{title}</h2>{description && descriptionMode === 'info' ? <SettingsInfoTooltip label={`About ${title}`}>{description}</SettingsInfoTooltip> : null}</div>
                         {description && descriptionMode === 'text' ? <p id="settings-dialog-description" className="mt-1 text-[12px] leading-5 text-[var(--settings-text-secondary)]">{description}</p> : null}
                     </div>
                     {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}

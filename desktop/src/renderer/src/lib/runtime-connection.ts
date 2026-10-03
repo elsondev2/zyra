@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
-import { runtimeConnectionPresentation, type RuntimeActivationStatus } from '@shared/runtime-activation'
+import type { RuntimeActivationStatus } from '@shared/runtime-activation'
+import { presentRuntimeConnection } from './runtime-connection-presentation'
 
 let status: RuntimeActivationStatus = { phase: 'idle', connection: 'unknown' }
 const listeners = new Set<() => void>()
@@ -28,5 +29,5 @@ function subscribe(listener: () => void) {
 }
 export function useRuntimeConnection() {
     const state = useSyncExternalStore(subscribe, () => status, () => status)
-    return { state, ...runtimeConnectionPresentation(state) }
+    return { state, ...presentRuntimeConnection(state) }
 }

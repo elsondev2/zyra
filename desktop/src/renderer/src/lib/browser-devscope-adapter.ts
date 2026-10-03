@@ -702,6 +702,7 @@ function createAsyncUnavailableProxy(label: string): Record<string, unknown> {
 
 function createBrowserDevscopeAdapter(): DevScopeApi {
     let previewMode = getBrowserPreviewMode()
+    let previewMemoryModelPreference = 'auto'
     const liveAssistant = previewMode === 'empty' ? createBrowserAssistantBridgeAdapter() : null
     let runningCommandCount = getBrowserPreviewRunningCommandCount()
     let snapshot = createBrowserPreviewSnapshot(previewMode, runningCommandCount)
@@ -787,7 +788,9 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                 : ok({ snapshot: completedPreviewOnboarding }),
             getAuthStatus: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             getConnectionsStatus: () => unavailable('OpenAI account changes require Zyra Desktop.'),
+            getChatGptDeviceCode: () => unavailable('ChatGPT device-code sign-in requires Zyra Desktop.'),
             connectChatGpt: () => unavailable('OpenAI setup requires Zyra Desktop.'),
+            cancelChatGpt: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             connectApiKey: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             disconnectOpenAI: () => unavailable('OpenAI account changes require Zyra Desktop.'),
             updateAppearance: () => unavailable('Setup changes require Zyra Desktop.'),
@@ -964,6 +967,10 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             onRealtimeVoiceEvent: () => noopUnsubscribe,
             getVoiceTranscriptionState: () => ok({ state: browserVoiceTranscriptionState }),
             transcribeVoice: () => unavailable('ChatGPT transcription requires the Zyra desktop bridge.'),
+            saveVoiceHistory: () => unavailable('Voice history requires the Zyra desktop bridge.'),
+            listVoiceHistory: () => unavailable('Voice history requires the Zyra desktop bridge.'),
+            getFailedVoiceRecording: () => unavailable('Voice history requires the Zyra desktop bridge.'),
+            deleteVoiceHistory: () => unavailable('Voice history requires the Zyra desktop bridge.'),
             onEvent: (_callback: (event: AssistantEventStreamPayload) => void) => noopUnsubscribe
         },
         agentControl: createAsyncUnavailableProxy('agent control'),
@@ -978,6 +985,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         },
         agentscope: createAsyncUnavailableProxy('agentscope'),
         memory: {
+            getJobStatus: () => ok({ status: { phase: 'offline', queued: 0, lastSuccessAt: null, lastCheckedAt: null, lastError: null } }),
             getOverview: () => ok({
                 overview: {
                     rootPath: '',
@@ -989,7 +997,12 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                     memoryLayers: [],
                     recommendedPrompts: []
                 }
-            })
+            }),
+            getModelPreference: () => ok({ preference: previewMemoryModelPreference }),
+            setModelPreference: (preference: string) => {
+                previewMemoryModelPreference = preference
+                return ok({ preference })
+            }
         },
         setStartupSettings: () => ok(),
         getStartupSettings: () => ok({ openAtLogin: false, openAsHidden: false, disabledReason: 'Browser preview' }),
@@ -1005,6 +1018,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         selectProjectIconFile: () => ok({ cancelled: true }),
         getUserHomePath: () => ok({ path: '' }),
         scanProjects: () => ok({ projects: [], folders: [], files: [], cached: false }),
+        discoverLocalGitHubProjects: () => unavailable('GitHub project discovery requires Zyra Desktop.'),
         indexAllFolders: () => ok({ indexed: 0 }),
         searchIndexedPaths: () => ok({ results: [] }),
         openInExplorer: () => unavailable('Explorer actions require the Zyra desktop bridge.'),

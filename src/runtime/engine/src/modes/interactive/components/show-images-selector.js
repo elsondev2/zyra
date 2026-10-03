@@ -1,0 +1,35 @@
+// Generated from the maintained TypeScript in ../source by scripts/build-owned-runtime.mjs.
+import { Container, SelectList } from "../../../../../terminal/src/index.js";
+import { getSelectListTheme } from "../theme/theme.js";
+import { DynamicBorder } from "./dynamic-border.js";
+const SHOW_IMAGES_SELECT_LIST_LAYOUT = {
+  minPrimaryColumnWidth: 12,
+  maxPrimaryColumnWidth: 32
+};
+class ShowImagesSelectorComponent extends Container {
+  selectList;
+  constructor(currentValue, onSelect, onCancel) {
+    super();
+    const items = [
+      { value: "yes", label: "Yes", description: "Show images inline in terminal" },
+      { value: "no", label: "No", description: "Show text placeholder instead" }
+    ];
+    this.addChild(new DynamicBorder());
+    this.selectList = new SelectList(items, 5, getSelectListTheme(), SHOW_IMAGES_SELECT_LIST_LAYOUT);
+    this.selectList.setSelectedIndex(currentValue ? 0 : 1);
+    this.selectList.onSelect = (item) => {
+      onSelect(item.value === "yes");
+    };
+    this.selectList.onCancel = () => {
+      onCancel();
+    };
+    this.addChild(this.selectList);
+    this.addChild(new DynamicBorder());
+  }
+  getSelectList() {
+    return this.selectList;
+  }
+}
+export {
+  ShowImagesSelectorComponent
+};

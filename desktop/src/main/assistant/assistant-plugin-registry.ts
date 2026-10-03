@@ -8,10 +8,12 @@ import type {
     AssistantInstallInspectedPluginInput,
     AssistantPluginCatalog,
     AssistantPluginInspection,
+    AssistantPluginMcpSource,
     AssistantPluginScopeDiff,
     AssistantPluginSkillSource,
     AssistantRefreshChatPluginScopeInput,
-    AssistantSetPluginSetInput
+    AssistantSetPluginSetInput,
+    AssistantSetPluginAppViewSettingsInput
 } from '../../shared/assistant/contracts'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 import { AssistantPluginAcquisitions, type PluginDownloader } from './assistant-plugin-acquisitions'
@@ -45,8 +47,12 @@ type CorePluginRegistry = {
     refreshChatScope(input: { sessionId: string; projectId?: string | null; inherit?: boolean; expectedCatalogRevision?: number }): Promise<{ scope: AssistantChatPluginScope; diff: AssistantPluginScopeDiff }>
     removeChatScope(sessionId: string): Promise<boolean>
     getChatScope(sessionId: string): Promise<AssistantChatPluginScope | null>
+    ensureAvailableChatScope(input: { sessionId: string; projectId?: string | null }): Promise<AssistantChatPluginScope>
     getChatSkillSources(sessionId: string, options?: { verify?: boolean }): Promise<AssistantPluginSkillSource[]>
+    getChatMcpSources(sessionId: string, options?: { verify?: boolean }): Promise<AssistantPluginMcpSource[]>
+    getInstalledMcpSource(pluginId: string): Promise<AssistantPluginMcpSource | null>
     setPluginState(pluginId: string, state: 'active' | 'disabled', expectedCatalogRevision?: number): Promise<unknown>
+    setAppViewSettings(input: AssistantSetPluginAppViewSettingsInput): Promise<unknown>
     rollbackPlugin(input: { pluginId: string; releaseId: string; approved: true; expectedCatalogRevision?: number }): Promise<unknown>
 }
 
@@ -233,13 +239,31 @@ export class AssistantPluginRegistry {
         return this.registry().then((registry) => registry.getChatScope(sessionId))
     }
 
+    async ensureAvailableChatScope(sessionId: string, projectId?: string | null): Promise<AssistantChatPluginScope> {
+        return (await this.registry()).ensureAvailableChatScope({ sessionId, projectId })
+    }
+
     async getChatSkillSources(sessionId: string): Promise<AssistantPluginSkillSource[]> {
         return this.registry().then((registry) => registry.getChatSkillSources(sessionId))
+    }
+
+    async getChatMcpSources(sessionId: string): Promise<AssistantPluginMcpSource[]> {
+        return this.registry().then((registry) => registry.getChatMcpSources(sessionId))
+    }
+
+    async getInstalledMcpSource(pluginId: string): Promise<AssistantPluginMcpSource | null> {
+        return this.registry().then((registry) => registry.getInstalledMcpSource(pluginId))
     }
 
     async setPluginState(pluginId: string, state: 'active' | 'disabled', expectedCatalogRevision?: number): Promise<{ success: true; catalog: AssistantPluginCatalog }> {
         const registry = await this.registry()
         await registry.setPluginState(pluginId, state, expectedCatalogRevision)
+        return { success: true, catalog: await registry.getCatalog() }
+    }
+
+    async setAppViewSettings(input: AssistantSetPluginAppViewSettingsInput): Promise<{ success: true; catalog: AssistantPluginCatalog }> {
+        const registry = await this.registry()
+        await registry.setAppViewSettings(input)
         return { success: true, catalog: await registry.getCatalog() }
     }
 

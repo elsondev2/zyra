@@ -12,6 +12,10 @@ const render = async (mode: 'minimal' | 'detailed', running: boolean, outcome: '
     await act(async () => { root.render(<TimelineTurnWorkSummary key={`${mode}:${hasWork}`} displayMode={mode} startedAt="2026-01-01T00:00:00Z" completedAt={running ? null : '2026-01-01T00:00:05Z'} running={running} outcome={outcome} hasWork={hasWork} renderChildren={() => <div data-final-action="true">Last action evidence</div>} />); await wait() })
 }
 async function run() {
+    for (const label of ['Stopped by another agent', 'Interrupted by another agent']) {
+        await act(async () => { root.render(<TimelineTurnWorkSummary startedAt="2026-01-01T00:00:00Z" completedAt="2026-01-01T00:00:05Z" outcome="interrupted" interruptionLabel={label} hasWork renderChildren={() => <div>Prior work</div>} />); await wait() })
+        assert(marker()?.textContent === label && marker()?.getAttribute('aria-label') === label, 'Interruption cause stays visible on a collapsed work block')
+    }
     for (const mode of ['minimal', 'detailed'] as const) {
         await render(mode, true, null)
         assert(!marker(), 'running work cannot be marked interrupted')

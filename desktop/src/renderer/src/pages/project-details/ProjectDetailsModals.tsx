@@ -1,8 +1,9 @@
 import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, AlertTriangle, CheckCircle2, Command, ExternalLink, HelpCircle, Loader2, Package, Play, Search, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, MoreHorizontal, Package, Search, X } from 'lucide-react'
 import { ProjectAuthorMismatchModal } from './ProjectAuthorMismatchModal'
 import { ProjectScriptCatalogModal } from './ProjectScriptCatalogModal'
+import { PackageLogo } from './PackageLogo'
 
 export const ScriptCatalogModal = ProjectScriptCatalogModal
 export const AuthorMismatchModal = ProjectAuthorMismatchModal
@@ -18,6 +19,7 @@ type DependencyInstallStatus = {
     missingSample?: string[]
     reason?: string
 }
+type PackageScope = 'all' | 'runtime' | 'dev'
 
 export function DependenciesModal({
     projectName,
@@ -37,113 +39,43 @@ export function DependenciesModal({
     onClose: () => void
 }) {
     const [search, setSearch] = useState('')
+    const [scope, setScope] = useState<PackageScope>('all')
     const [installing, setInstalling] = useState(false)
-    const [installFeedbackTone, setInstallFeedbackTone] = useState<'idle' | 'progress' | 'success' | 'error'>('idle')
-    const [installFeedbackMessage, setInstallFeedbackMessage] = useState<string>('')
-    const listRef = useRef<HTMLDivElement | null>(null)
+    const [feedback, setFeedback] = useState<{ tone: 'success' | 'error' | 'progress'; message: string } | null>(null)
+    const [menuOpen, setMenuOpen] = useState(false)
+    const menuRef = useRef<HTMLDivElement>(null)
+    const listRef = useRef<HTMLDivElement>(null)
     const deferredSearch = useDeferredValue(search)
-    const searchValue = deferredSearch.toLowerCase()
-    const allDependencies = useMemo(() => {
-        const runtime = Object.entries(dependencies || {}).map(([name, version]) => ({
-            name,
-            version,
-            scope: 'dependency' as const
-        }))
-        const dev = Object.entries(devDependencies || {}).map(([name, version]) => ({
-            name,
-            version,
-            scope: 'devDependency' as const
-        }))
-        return [...runtime, ...dev].sort((left, right) => left.name.localeCompare(right.name))
-    }, [dependencies, devDependencies])
-
+    const allPackages = useMemo(() => [
+        ...Object.entries(dependencies || {}).map(([name, version]) => ({ name, version, scope: 'runtime' as const })),
+        ...Object.entries(devDependencies || {}).map(([name, version]) => ({ name, version, scope: 'dev' as const }))
+    ].sort((a, b) => a.name.localeCompare(b.name)), [dependencies, devDependencies])
     const runtimeCount = Object.keys(dependencies || {}).length
     const devCount = Object.keys(devDependencies || {}).length
-
-    const filtered = useMemo(() => allDependencies.filter(({ name }) =>
-        name.toLowerCase().includes(searchValue)
-    ), [allDependencies, searchValue])
-
-    const missingDependencySet = useMemo(() => (
-        new Set((dependencyInstallStatus?.missingDependencies || []).map((name) => name.toLowerCase()))
-    ), [dependencyInstallStatus?.missingDependencies])
-
-    const installLabel = dependencyInstallStatus?.installed === true
-        ? 'All Installed'
-        : dependencyInstallStatus?.installed === false
-            ? 'Missing Packages'
-            : 'Status Unknown'
-
-    const installDetail = dependencyInstallStatus
-        ? dependencyInstallStatus.installed === true
-            ? `${dependencyInstallStatus.installedPackages}/${dependencyInstallStatus.totalPackages} packages found`
-            : dependencyInstallStatus.installed === false
-                ? `Missing ${dependencyInstallStatus.missingPackages} of ${dependencyInstallStatus.totalPackages}`
-                : (dependencyInstallStatus.reason || 'Install status could not be verified')
-        : 'Install status could not be verified'
-
-    const installIndicator = dependencyInstallStatus?.installed === true
-        ? <CheckCircle2 size={13} className="text-emerald-300" />
-        : dependencyInstallStatus?.installed === false
-            ? <AlertTriangle size={13} className="text-amber-300" />
-            : <HelpCircle size={13} className="text-white/50" />
-
-    const installBadgeClass = dependencyInstallStatus?.installed === true
-        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-        : dependencyInstallStatus?.installed === false
-            ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-            : 'border-white/10 bg-white/5 text-white/60'
-
-    const totalTracked = dependencyInstallStatus?.totalPackages ?? allDependencies.length
-    const installedTracked = dependencyInstallStatus?.installedPackages ?? (
-        dependencyInstallStatus?.installed === false
-            ? Math.max(0, allDependencies.length - (dependencyInstallStatus?.missingPackages || 0))
-            : allDependencies.length
-    )
-    const installPercent = totalTracked > 0 ? Math.round((installedTracked / totalTracked) * 100) : 100
-    const missingCount = dependencyInstallStatus?.missingPackages || 0
-    const hasMissingDependencies = missingCount > 0
-    const canInstallDependencies = Boolean(projectPath && projectPath.trim().length > 0)
-    const progressTone = dependencyInstallStatus?.installed === true
-        ? 'bg-emerald-500'
-        : dependencyInstallStatus?.installed === false
-            ? 'bg-amber-500'
-            : 'bg-white/40'
+    const missing = useMemo(() => new Set((dependencyInstallStatus?.missingDependencies || []).map(name => name.toLocaleLowerCase())), [dependencyInstallStatus?.missingDependencies])
+    const visible = useMemo(() => {
+        const needle = deferredSearch.trim().toLocaleLowerCase()
+        return allPackages.filter(item => (scope === 'all' || item.scope === scope) && (!needle || `${item.name} ${item.version}`.toLocaleLowerCase().includes(needle)))
+    }, [allPackages, deferredSearch, scope])
+    const missingCount = dependencyInstallStatus?.missingPackages ?? 0
+    const canInstall = Boolean(projectPath?.trim())
 
     const runInstall = async (mode: 'missing' | 'all') => {
-        const targetPath = String(projectPath || '').trim()
+        const targetPath = projectPath?.trim()
         if (!targetPath || installing) return
-
+        setMenuOpen(false)
         setInstalling(true)
-        setInstallFeedbackTone('progress')
-        setInstallFeedbackMessage(
-            mode === 'missing'
-                ? 'Installing missing packages in background...'
-                : 'Installing project dependencies in background...'
-        )
-
+        setFeedback({ tone: 'progress', message: mode === 'missing' ? 'Installing missing packages…' : 'Installing project dependencies…' })
         try {
             const result = await window.devscope.installProjectDependencies(targetPath, { onlyMissing: mode === 'missing' })
             if (!result?.success) {
-                setInstallFeedbackTone('error')
-                setInstallFeedbackMessage(result?.error || 'Dependency installation failed.')
-                if (onDependenciesUpdated) {
-                    await onDependenciesUpdated()
-                }
-                return
+                setFeedback({ tone: 'error', message: result?.error || 'Dependency installation failed.' })
+            } else {
+                setFeedback({ tone: 'success', message: result.message || 'Dependencies installed.' })
             }
-
-            const manager = String(result.manager || '').trim()
-            const installedMessage = result.message || `Dependencies installed${manager ? ` via ${manager}` : ''}.`
-            setInstallFeedbackTone('success')
-            setInstallFeedbackMessage(installedMessage)
-
-            if (onDependenciesUpdated) {
-                await onDependenciesUpdated()
-            }
-        } catch (error: any) {
-            setInstallFeedbackTone('error')
-            setInstallFeedbackMessage(error?.message || 'Dependency installation failed.')
+            await onDependenciesUpdated?.()
+        } catch (cause) {
+            setFeedback({ tone: 'error', message: cause instanceof Error ? cause.message : 'Dependency installation failed.' })
         } finally {
             setInstalling(false)
         }
@@ -152,214 +84,60 @@ export function DependenciesModal({
     useEffect(() => {
         const originalOverflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
-        return () => {
-            document.body.style.overflow = originalOverflow
-        }
+        return () => { document.body.style.overflow = originalOverflow }
     }, [])
-
     useEffect(() => {
-        const container = listRef.current
-        if (!container) return
-        container.scrollTop = 0
-    }, [searchValue, projectPath])
+        if (listRef.current) listRef.current.scrollTop = 0
+    }, [deferredSearch, scope, projectPath])
+    useEffect(() => {
+        if (!menuOpen) return
+        const closeOutside = (event: PointerEvent) => {
+            if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+        }
+        const closeEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setMenuOpen(false)
+        }
+        document.addEventListener('pointerdown', closeOutside)
+        document.addEventListener('keydown', closeEscape)
+        return () => {
+            document.removeEventListener('pointerdown', closeOutside)
+            document.removeEventListener('keydown', closeEscape)
+        }
+    }, [menuOpen])
 
-    return (
-        <NativeOverlayPortal><div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
-            <div
-                className="bg-sparkle-card border border-white/10 rounded-2xl shadow-2xl w-[min(1120px,96vw)] max-h-[95vh] flex flex-col m-4 overflow-hidden"
-                onClick={e => e.stopPropagation()}
-            >
-                <div className="flex items-center justify-between p-5 border-b border-white/5 bg-white/5">
-                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                        <Package size={20} className="text-[var(--accent-primary)]" />
-                        Dependencies
-                        <span className="px-2 py-0.5 rounded-full bg-white/10 text-xs font-normal text-white/60">
-                            {allDependencies.length}
-                        </span>
-                        <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border ${installBadgeClass}`}>
-                            {installIndicator}
-                            {installLabel}
-                        </span>
-                    </h3>
-                    <button onClick={onClose} className="text-white/40 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10">
-                        <X size={20} />
-                    </button>
+    const status = dependencyInstallStatus?.installed === true
+        ? <span className="inline-flex items-center gap-1.5 text-emerald-300"><CheckCircle2 size={13} />All installed</span>
+        : dependencyInstallStatus?.installed === false
+            ? <span className="inline-flex items-center gap-1.5 text-amber-300"><AlertTriangle size={13} />{missingCount} missing</span>
+            : <span className="text-sparkle-text-muted">Install status unknown</span>
+
+    return <NativeOverlayPortal><div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fadeIn" onClick={onClose}>
+        <div className="flex h-[min(720px,calc(100dvh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-sparkle-card shadow-2xl" onClick={event => event.stopPropagation()}>
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--surface-divider)] px-5 py-2.5">
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <Package size={17} className="shrink-0 text-[var(--accent-primary)]" />
+                        <h3 className="text-base font-semibold text-sparkle-text">Packages</h3>
+                        <span className="text-xs text-sparkle-text-muted">{allPackages.length}</span>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-sparkle-text-secondary" title={projectPath}>{projectName || 'Current project'}</p>
                 </div>
-                <div className="grid h-full min-h-0 grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
-                    <aside className="h-full min-h-0 border-r border-white/10 bg-black/20 p-4">
-                        <div className="rounded-xl border border-white/10 bg-gradient-to-br from-sky-500/10 via-white/[0.03] to-violet-500/10 p-3.5">
-                            <p className="text-[11px] uppercase tracking-wide text-white/45">Project Overview</p>
-                            <p className="mt-1.5 text-sm font-semibold text-white truncate" title={projectName || ''}>{projectName || 'Current Project'}</p>
-                            <p className="mt-1 text-[11px] text-white/45 truncate" title={projectPath || ''}>{projectPath || '-'}</p>
-                        </div>
-
-                        <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
-                            <p className="text-[11px] uppercase tracking-wide text-white/45 mb-2.5">Dependency Stats</p>
-                            <div className="grid grid-cols-3 gap-2">
-                                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2">
-                                    <p className="text-[10px] text-white/45 uppercase tracking-wide">Total</p>
-                                    <p className="mt-1 text-base font-semibold text-white">{allDependencies.length}</p>
-                                </div>
-                                <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-2">
-                                    <p className="text-[10px] text-sky-200/70 uppercase tracking-wide">Runtime</p>
-                                    <p className="mt-1 text-base font-semibold text-sky-100">{runtimeCount}</p>
-                                </div>
-                                <div className="rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-2">
-                                    <p className="text-[10px] text-violet-200/70 uppercase tracking-wide">Dev</p>
-                                    <p className="mt-1 text-base font-semibold text-violet-100">{devCount}</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
-                            <p className="text-[11px] uppercase tracking-wide text-white/45 mb-2.5">Install Health</p>
-                            <div className={`inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-md border ${installBadgeClass}`}>
-                                {installIndicator}
-                                {installLabel}
-                            </div>
-                            <p className="mt-2.5 text-xs text-white/65 leading-relaxed">{installDetail}</p>
-                            <div className="mt-3">
-                                <div className="flex items-center justify-between text-[11px] text-white/55 mb-1.5">
-                                    <span>Matched packages</span>
-                                    <span>{installedTracked}/{totalTracked} ({installPercent}%)</span>
-                                </div>
-                                <div className="h-2 rounded-full bg-white/10 overflow-hidden border border-white/10">
-                                    <div
-                                        className={`h-full ${progressTone} transition-all`}
-                                        style={{ width: `${Math.max(0, Math.min(100, installPercent))}%` }}
-                                    />
-                                </div>
-                            </div>
-                            {dependencyInstallStatus?.checked && (
-                                <div className="mt-3 flex items-center justify-between text-xs">
-                                    <span className="text-white/55">Missing</span>
-                                    <span className={missingCount > 0 ? 'text-amber-200' : 'text-emerald-200'}>{missingCount}</span>
-                                </div>
-                            )}
-                            <div className="mt-4 pt-3 border-t border-white/10">
-                                <p className="text-[11px] uppercase tracking-wide text-white/45 mb-2">Actions</p>
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => { void runInstall('missing') }}
-                                        disabled={!canInstallDependencies || !hasMissingDependencies || installing}
-                                        className="text-[11px] px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                                        title={hasMissingDependencies ? 'Install missing dependencies' : 'No missing dependencies'}
-                                    >
-                                        Install Missing
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => { void runInstall('all') }}
-                                        disabled={!canInstallDependencies || installing}
-                                        className="text-[11px] px-2.5 py-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                                        title="Install or repair all dependencies"
-                                    >
-                                        Install / Repair All
-                                    </button>
-                                </div>
-
-                                {(installFeedbackTone !== 'idle' || installing) && (
-                                    <div className={`mt-2.5 text-[11px] rounded-lg border px-2.5 py-2 flex items-center gap-1.5 ${installFeedbackTone === 'success'
-                                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                                        : installFeedbackTone === 'error'
-                                            ? 'border-red-500/30 bg-red-500/10 text-red-200'
-                                            : 'border-sky-500/30 bg-sky-500/10 text-sky-200'
-                                    }`}>
-                                        {installing ? (
-                                            <Loader2 size={12} className="animate-spin" />
-                                        ) : installFeedbackTone === 'success' ? (
-                                            <CheckCircle2 size={12} />
-                                        ) : installFeedbackTone === 'error' ? (
-                                            <AlertTriangle size={12} />
-                                        ) : (
-                                            <HelpCircle size={12} />
-                                        )}
-                                        <span className="leading-relaxed">{installFeedbackMessage}</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </aside>
-
-                    <section className="min-w-0 h-full min-h-0 flex flex-col">
-                        <div className="p-4 border-b border-white/5 bg-black/15">
-                            <div className="relative">
-                                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-                                <input
-                                    type="text"
-                                    value={search}
-                                    onChange={(e) => setSearch(e.target.value)}
-                                    placeholder="Search packages..."
-                                    autoFocus
-                                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[var(--accent-primary)]/50 focus:bg-white/10 transition-all"
-                                />
-                            </div>
-                            <p className="mt-2 text-xs text-white/45">{filtered.length}/{allDependencies.length} shown</p>
-                        </div>
-
-                        <div
-                            ref={listRef}
-                            className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/10 p-2 custom-scrollbar"
-                        >
-                            {filtered.length > 0 ? (
-                                <div className="grid grid-cols-1 gap-2">
-                                    {filtered.map(({ name, version, scope }) => {
-                                        const isMissing = missingDependencySet.has(name.toLowerCase())
-                                        const presenceTone = dependencyInstallStatus?.checked
-                                            ? isMissing ? 'missing' : 'installed'
-                                            : 'unknown'
-
-                                        return (
-                                            <div
-                                                key={`${scope}:${name}`}
-                                                className="flex items-center justify-between rounded-xl border border-white/5 bg-white/[0.02] p-3"
-                                            >
-                                                <div className="min-w-0 flex-1">
-                                                    <span className="text-sm text-white/80 font-mono font-medium block truncate" title={name}>{name}</span>
-                                                    <div className="mt-1 flex items-center gap-1.5">
-                                                        <span className={`inline-flex text-[10px] px-1.5 py-0.5 rounded border ${scope === 'dependency'
-                                                            ? 'border-sky-500/30 bg-sky-500/10 text-sky-200'
-                                                            : 'border-violet-500/30 bg-violet-500/10 text-violet-200'
-                                                        }`}>
-                                                            {scope === 'dependency' ? 'runtime' : 'dev'}
-                                                        </span>
-                                                        <span className={`inline-flex text-[10px] px-1.5 py-0.5 rounded border ${presenceTone === 'installed'
-                                                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                                                            : presenceTone === 'missing'
-                                                                ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-                                                                : 'border-white/10 bg-white/5 text-white/60'
-                                                        }`}>
-                                                            {presenceTone === 'installed' ? 'installed' : presenceTone === 'missing' ? 'missing' : 'unknown'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-3">
-                                                    <span className="text-xs text-white/40 font-mono px-2 py-1 rounded bg-black/30 border border-white/5">{version}</span>
-                                                    <a
-                                                        href={`https://www.npmjs.com/package/${name}`}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="rounded-lg p-1.5 text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10"
-                                                        title="View on npm"
-                                                    >
-                                                        <ExternalLink size={14} />
-                                                    </a>
-                                                </div>
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-                            ) : (
-                                <div className="flex flex-col items-center justify-center py-16 text-white/30">
-                                    <Package size={48} className="mb-4 opacity-20" />
-                                    <p className="text-sm">No packages found</p>
-                                </div>
-                            )}
-                        </div>
-                    </section>
+                <div className="flex shrink-0 items-center gap-1.5">
+                    <div ref={menuRef} className="relative"><button type="button" onClick={() => setMenuOpen(value => !value)} aria-label="Package actions" aria-haspopup="menu" aria-expanded={menuOpen} className="rounded-md p-1.5 text-sparkle-text-secondary hover:bg-white/5"><MoreHorizontal size={16} /></button>{menuOpen ? <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-xl"><button type="button" role="menuitem" disabled={!canInstall || installing} onClick={() => void runInstall('all')} className="w-full rounded px-2.5 py-2 text-left text-xs hover:bg-white/10 disabled:opacity-50">Install / repair all</button></div> : null}</div>
+                    <button type="button" onClick={onClose} aria-label="Close packages" className="rounded-md p-1.5 text-sparkle-text-secondary hover:bg-white/10 hover:text-sparkle-text"><X size={17} /></button>
                 </div>
-            </div>
-        </div></NativeOverlayPortal>
-    )
+            </header>
+            {feedback ? <div role="status" className={`flex shrink-0 items-center gap-2 border-b border-[var(--surface-divider)] px-5 py-2 text-xs ${feedback.tone === 'error' ? 'text-red-300' : feedback.tone === 'success' ? 'text-emerald-300' : 'text-sky-300'}`}>{installing ? <Loader2 size={13} className="animate-spin" /> : feedback.tone === 'error' ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}{feedback.message}</div> : null}
+            <div className="shrink-0 border-b border-[var(--surface-divider)] px-5 pt-2"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sparkle-text-muted" /><input autoFocus type="search" aria-label="Search packages" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search packages or versions" className="w-full rounded-md border border-[var(--surface-divider)] bg-black/10 py-2 pl-9 pr-3 text-sm text-sparkle-text outline-none focus:border-[var(--accent-primary)]" /></div><div className="mt-3 flex gap-5 text-xs">{([['all', `All ${allPackages.length}`], ['runtime', `Runtime ${runtimeCount}`], ['dev', `Dev ${devCount}`]] as const).map(([key, label]) => <button type="button" key={key} onClick={() => setScope(key)} className={`border-b-2 pb-2 ${scope === key ? 'border-[var(--accent-primary)] text-sparkle-text' : 'border-transparent text-sparkle-text-muted hover:text-sparkle-text'}`}>{label}</button>)}</div></div>
+            <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-1">{visible.length > 0 ? visible.map(item => <div key={`${item.scope}:${item.name}`} className="flex min-w-0 items-center gap-3 border-b border-[var(--surface-divider)] py-2.5 last:border-b-0"><PackageLogo packageName={item.name} /><div className="min-w-0 flex-1"><div className="truncate font-mono text-xs font-medium text-sparkle-text" title={item.name}>{item.name}</div><div className="mt-0.5 text-[11px] text-sparkle-text-muted">{item.scope === 'runtime' ? 'Runtime' : 'Development'}{dependencyInstallStatus?.checked ? missing.has(item.name.toLocaleLowerCase()) ? ' · Missing' : ' · Installed' : ''}</div></div><span className="max-w-36 truncate font-mono text-xs text-sparkle-text-secondary" title={item.version}>{item.version}</span><a href={`https://www.npmjs.com/package/${item.name}`} target="_blank" rel="noopener noreferrer" aria-label={`View ${item.name} on npm`} className="rounded p-1.5 text-sparkle-text-muted hover:bg-white/5 hover:text-sparkle-text"><ExternalLink size={14} /></a></div>) : <div className="py-16 text-center text-xs text-sparkle-text-muted">{search ? 'No packages match your search.' : 'No packages in this section.'}</div>}</div>
+            <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--surface-divider)] px-5 py-2 text-[11px] text-sparkle-text-muted">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    {status}
+                    <span className="hidden max-w-48 truncate sm:inline" title={dependencyInstallStatus?.reason}>{dependencyInstallStatus?.checked ? `${dependencyInstallStatus.installedPackages}/${dependencyInstallStatus.totalPackages} found` : dependencyInstallStatus?.reason || ''}</span>
+                    {missingCount > 0 ? <button type="button" disabled={!canInstall || installing} onClick={() => void runInstall('missing')} className="rounded-md bg-[var(--accent-primary)] px-2 py-1 text-xs font-medium text-[var(--accent-on-primary)] disabled:opacity-50">{installing ? 'Installing…' : 'Install missing'}</button> : null}
+                </div>
+                <span className="shrink-0">{visible.length} of {allPackages.length} packages</span>
+            </footer>
+        </div>
+    </div></NativeOverlayPortal>
 }

@@ -28,6 +28,7 @@ import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { toAssistantShellSnapshot } from '../src/main/assistant/persistence-snapshot'
 import {
     ACTIVE_ASSISTANT_HISTORY_MAX_RECORDS,
+    applyAssistantHistoryPage,
     applyAssistantRetainedHistory,
     applyAssistantThreadDetail,
     boundAssistantActiveHistoryWindow,
@@ -579,6 +580,12 @@ assert.equal(
     'retained activity rows must survive a shell refresh alongside chat messages'
 )
 const dematerializedSnapshot = dematerializeAssistantHistories(restoredFromRetainedHistory, new Set())
+for (const direction of ['older', 'newer'] as const) {
+    const pagedFromShell = applyAssistantHistoryPage(dematerializedSnapshot, retainedHistory, direction === 'older' ? older : newest, direction)
+    assert.deepEqual(pagedFromShell.history.messages.map(message => message.id), retainedHistory.messages.map(message => message.id), `${direction} paging must preserve the retained messages when the shell arrays are empty`)
+    assert.deepEqual(pagedFromShell.history.activities.map(activity => activity.id), retainedHistory.activities.map(activity => activity.id), `${direction} paging must preserve retained actions`)
+    assert.deepEqual(pagedFromShell.history.proposedPlans.map(plan => plan.id), retainedHistory.proposedPlans.map(plan => plan.id), `${direction} paging must preserve retained plans`)
+}
 assert.equal(dematerializedSnapshot.sessions[0]!.threads[0]!.messages.length, 0, 'evicted inactive history releases message payloads from the renderer snapshot')
 assert.equal(dematerializedSnapshot.sessions[0]!.threads[0]!.activities.length, 0, 'evicted inactive history releases activity payloads from the renderer snapshot')
 assert.equal(dematerializedSnapshot.sessions[0]!.threads[0]!.messageCount, thread.messageCount, 'history eviction preserves shell counters for the chat rail')

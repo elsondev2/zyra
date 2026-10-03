@@ -127,7 +127,7 @@ function packageFiles(entries) {
 }
 
 export async function downloadCatalogPlugin({ stagingRoot, entry, commit, signal = new AbortController().signal, fetchImpl = fetch, cache, onProgress = () => {} }) {
-  if (!SHA.test(commit) || !entry || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name) || !entry.hasSkills || entry.installation === 'BLOCKED') fail('PLUGIN_DOWNLOAD_SOURCE', 'This Plugin cannot be downloaded from the catalog.')
+  if (!SHA.test(commit) || !entry || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.name) || !(entry.hasSkills || entry.hasMcp || entry.hasApps) || entry.installation === 'BLOCKED') fail('PLUGIN_DOWNLOAD_SOURCE', 'This Plugin cannot be downloaded from the catalog.')
   const sourceLocator = `https://github.com/openai/plugins/tree/${commit}/plugins/${entry.name}`
   if (entry.sourceUrl !== sourceLocator) fail('PLUGIN_DOWNLOAD_SOURCE', 'Plugin catalog provenance does not match its release.')
   const operation = new AbortController()

@@ -10,6 +10,7 @@ import type { ComposerContextFile } from './assistant-composer-types'
 import { getContentTypeTag, getContextFileMeta, toKbLabel } from './assistant-composer-utils'
 import { openAssistantFileTarget } from './assistant-file-navigation'
 import { buildAssistantResourceIndex, type AssistantResource } from './assistant-resource-index'
+import { assistantResourceCaption } from './assistant-resource-labels'
 import type { AssistantDiffTurn } from './assistant-diff-types'
 import { isClipboardAttachmentReference } from './assistant-timeline-helpers'
 
@@ -48,7 +49,7 @@ function buildInlineImagePreview(resource: AssistantResource): ComposerContextFi
     return {
         id: `${resource.id}:preview`,
         path: dataUrl,
-        name: attachment.displayName || attachment.name || resource.title,
+        name: resource.title,
         mimeType: attachment.mime || dataUrl.slice(5, dataUrl.indexOf(';')) || 'image/*',
         kind: 'image',
         previewDataUrl: dataUrl,
@@ -175,6 +176,7 @@ export function AssistantPreviewResourceNavigator({
     }, [])
 
     const openResource = useCallback(async (resource: AssistantResource) => {
+        const previewOptions = { displayName: resource.title, openNavigator: true, revealNavigatorTarget: false }
         setOpeningResourceId(resource.id)
         setExplicitSelection({ id: resource.id, activeFilePath: normalizedActiveFilePath })
         setError(null)
@@ -183,16 +185,16 @@ export function AssistantPreviewResourceNavigator({
                 onOpenUrl(resource.url)
                 return
             }
-            if (resource.path && await openAssistantFileTarget({ target: resource.path, projectPath, openPreview: onOpenPreview })) return
+            if (resource.path && await openAssistantFileTarget({ target: resource.path, projectPath, openPreview: onOpenPreview, previewOptions })) return
 
             const attachmentPath = String(resource.attachment?.path || '').trim()
             if (isClipboardAttachmentReference(attachmentPath)) {
                 const result = await window.devscope.assistant.resolveClipboardAttachment({ reference: attachmentPath })
-                if (result.success && result.path && await openAssistantFileTarget({ target: result.path, projectPath, openPreview: onOpenPreview })) {
+                if (result.success && result.path && await openAssistantFileTarget({ target: result.path, projectPath, openPreview: onOpenPreview, previewOptions })) {
                     setExplicitSelection({ id: resource.id, activeFilePath: normalizedPath(result.path) })
                     return
                 }
-            } else if (attachmentPath && await openAssistantFileTarget({ target: attachmentPath, projectPath, openPreview: onOpenPreview })) {
+            } else if (attachmentPath && await openAssistantFileTarget({ target: attachmentPath, projectPath, openPreview: onOpenPreview, previewOptions })) {
                 return
             }
 
@@ -260,7 +262,7 @@ export function AssistantPreviewResourceNavigator({
                                     return (
                                         <button key={resource.id} type="button" role="row" aria-rowindex={firstResourceIndex + index + 2} aria-current={active ? 'true' : undefined} onClick={() => { void openResource(resource) }} className={cn('grid h-12 w-full grid-cols-[32px_minmax(0,1fr)_38px] items-center gap-2 border-b px-2 text-left transition-colors', active ? 'border-[var(--accent-primary)]/20 bg-[color-mix(in_srgb,var(--accent-primary)_8%,var(--color-bg))]' : 'border-white/[0.055] hover:bg-white/[0.025]')} title={resourceLocation(resource)}>
                                             <span className="relative flex size-7 items-center justify-center overflow-hidden border border-white/[0.07] bg-black/15" role="cell">{resource.kind === 'image' ? <ResourceImage resource={resource} /> : host ? <MarkdownSiteIcon host={host} className="inline-flex size-4" /> : <Globe2 size={14} className="text-sky-200/65" />}{openingResourceId === resource.id ? <span className="absolute inset-0 flex items-center justify-center bg-black/55"><LoaderCircle size={10} className="animate-spin text-white/85" /></span> : null}</span>
-                                            <span className="min-w-0" role="cell"><span className="block truncate text-[9px] font-medium text-sparkle-text-secondary">{resource.title}</span><span className="mt-0.5 block truncate font-mono text-[7px] text-sparkle-text-muted/45">{resourceLocation(resource)}</span></span>
+                                            <span className="min-w-0" role="cell"><span className="block truncate text-[9px] font-medium text-sparkle-text-secondary">{resource.title}</span><span className="mt-0.5 block truncate text-[7px] text-sparkle-text-muted/45">{assistantResourceCaption(resource)}</span></span>
                                             <span className="text-right text-[7px] font-medium uppercase text-sparkle-text-muted/50" role="cell">{resource.kind}</span>
                                         </button>
                                     )

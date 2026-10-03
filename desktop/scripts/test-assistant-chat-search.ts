@@ -13,6 +13,7 @@ import {
 } from '../src/main/assistant/assistant-search-index'
 import { parseAssistantChatSearchQuery } from '../src/shared/assistant/chat-search'
 import { readAssistantHistoryAroundMessage } from '../src/main/assistant/persistence-history'
+import { upsertAssistantCanonicalTimelineProjection } from '../src/main/assistant/persistence-write'
 
 const searchIndexSource = readFileSync(new URL('../src/main/assistant/assistant-search-index.ts', import.meta.url), 'utf8')
 const persistenceSource = readFileSync(new URL('../src/main/assistant/persistence.ts', import.meta.url), 'utf8')
@@ -216,6 +217,12 @@ try {
         threadId: 'thread-active', messageId: 'message-final', turnLimit: 1
     })
     assert.ok(anchoredFinalAssistant.page.messages.some((message) => message.id === 'message-final'), 'durable final assistant ownership must remain navigable')
+    const peerId = 'zyra-thread-message:peer-navigation'
+    db.run(`INSERT INTO assistant_activities (id, thread_id, kind, tone, summary, detail, created_at) VALUES (?, ?, 'thread-message', 'info', ?, ?, ?)`, [peerId, 'thread-active', 'Message from helper', 'Verified the adapter.', '2026-08-01T00:00:00.500Z'])
+    const peerAnchor = readAssistantHistoryAroundMessage(db, { threadId: 'thread-active', messageId: peerId, turnLimit: 1 })
+    assert.equal(peerAnchor.messageId, peerId)
+    assert(peerAnchor.page.activities.some(activity => activity.id === peerId), 'Peer reply navigation loads the exact activity-backed bubble')
+    assert.throws(() => readAssistantHistoryAroundMessage(db, { threadId: 'thread-active', messageId: 'zyra-thread-message:missing' }), /not found/i)
     for (const ineligibleMessageId of ['missing-message', 'message-interim', 'message-late-final']) {
         assert.throws(() => readAssistantHistoryAroundMessage(db, {
             threadId: 'thread-active',
@@ -265,6 +272,19 @@ try {
         ])
     }
     refreshProjection()
+    const legacyFinalId = 'assistant-message-pi-message:assistant:1790723517628'
+    const canonicalFinalId = 'assistant-message-zyra-message:assistant:1790723517628'
+    db.run(`INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, created_at, updated_at) VALUES (?, 'thread-active', 'assistant', 'Alias repaired final answer', 'turn-alias', 0, '2026-08-06T00:00:01Z', '2026-08-06T00:00:01Z')`, [legacyFinalId])
+    db.run(`INSERT INTO assistant_turns (id, thread_id, model, state, requested_at, completed_at, assistant_message_id, updated_at) VALUES ('turn-alias', 'thread-active', 'test', 'completed', '2026-08-06T00:00:00Z', '2026-08-06T00:00:01Z', ?, '2026-08-06T00:00:01Z')`, [legacyFinalId])
+    upsertAssistantCanonicalTimelineProjection(db, { threadId: 'thread-active', activities: [], messages: [{
+        id: canonicalFinalId, role: 'assistant', text: 'Alias repaired final answer', turnId: 'turn-alias', streaming: false,
+        createdAt: '2026-08-06T00:00:00.900Z', updatedAt: '2026-08-06T00:00:00.900Z'
+    }] })
+    assert.equal(db.exec(`SELECT assistant_message_id FROM assistant_turns WHERE id = 'turn-alias'`)[0]?.values[0]?.[0], canonicalFinalId, 'removing a Pi replay repairs the owning turn reference')
+    assert.equal(db.exec('SELECT id FROM assistant_messages WHERE id = ?', [legacyFinalId]).length, 0)
+    refreshProjection()
+    assert.equal(searchAssistantChatsFallback(db, { query: 'Alias repaired final answer', scope: 'active' }).matches[0]?.messageId, canonicalFinalId, 'the repaired final answer stays searchable')
+    assert.equal(readAssistantHistoryAroundMessage(db, { threadId: 'thread-active', messageId: legacyFinalId }).messageId, canonicalFinalId, 'saved navigation references resolve the canonical answer after repair')
     raw.run('PRAGMA wal_checkpoint(TRUNCATE)')
     raw.run('PRAGMA journal_mode = DELETE')
     db.close()

@@ -1,12 +1,12 @@
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineZyraTool } from "../agents/define-zyra-tool.mjs";
 import { computerControlSchema, COMPUTER_CONTROL_OPERATIONS } from "./tool-contracts.mjs";
 import { normalizeControlToolInput, unavailableControlResult } from "./contracts.mjs";
 
 export function createComputerControlTool(options = {}) {
-  return defineTool({
+  return defineZyraTool({
     name: "computer_control",
     label: "Computer control",
-    description: "Open, observe, and control one ordinary Windows application through the desktop permission broker. Use open_app when the requested app is not running, otherwise start with list_windows. For the app the user requested, call request_grant with its windowToken; this selects that exact window and requests access in one step. Full access issues routine grants automatically. Supervised, Auto review, and Edits only ask in chat. Critical side effects always pause in chat.",
+    description: "Open, observe, and control one ordinary Windows application through the desktop permission broker. Use open_app when the requested app is not running, otherwise start with list_windows. For the app the user requested, call request_grant with its windowToken; this selects that exact window and requests access in one step. Full access issues grants and executes actions without approval prompts. Supervised, Auto review, and Edits only retain their existing chat approvals.",
     parameters: computerControlSchema,
     execute: async (_toolCallId, input = {}, signal) => {
       const normalized = normalizeControlToolInput(input);

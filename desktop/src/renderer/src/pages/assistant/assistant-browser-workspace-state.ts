@@ -98,7 +98,6 @@ export type AssistantBrowserNavigationResult =
     | { success: true; url: string }
     | { success: false; error: string }
 
-export const ASSISTANT_BROWSER_TAB_LIMIT = 8
 const ASSISTANT_BROWSER_STORAGE_KEY = 'zyra:assistant-browser-workspaces:v1'
 const ASSISTANT_BROWSER_WORKSPACE_LIMIT = 20
 const ASSISTANT_BROWSER_URL_LIMIT = 2048
@@ -149,7 +148,6 @@ export function addAssistantBrowserTab(
             ? { ...state, activeTabId: tabId }
             : state
     }
-    if (state.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) return state
     return {
         ...state,
         version: 1,
@@ -330,7 +328,6 @@ export function normalizeAssistantBrowserWorkspaceState(
                 updatedAt: Number.isFinite(tab.updatedAt) ? Number(tab.updatedAt) : Date.now()
             }]
         })
-        .slice(0, ASSISTANT_BROWSER_TAB_LIMIT)
     if (tabs.length === 0) return createAssistantBrowserWorkspaceState(fallbackTabId)
     const requestedActiveTabId = String(input.activeTabId || '')
     const activeTabId = tabs.some((tab) => tab.id === requestedActiveTabId) ? requestedActiveTabId : tabs[0].id

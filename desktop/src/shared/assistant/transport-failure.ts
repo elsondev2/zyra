@@ -1,6 +1,7 @@
 const ASSISTANT_TRANSPORT_FAILURE_PATTERN = /\bfetch failed\b|network request failed|network issue|network(?: is)? (?:unavailable|offline)|socket hang up|agent-server (?:connection )?closed|agent server is disconnected|econnreset|econnrefused|etimedout|enotfound|eai_again|epipe|und_err_/i
 const ASSISTANT_TRANSPORT_FAILURE_CODES = new Set([
     'AGENT_SERVER_DISCONNECTED',
+    'AGENT_SERVER_TIMEOUT',
     'AGENT_SERVER_UNAVAILABLE',
     'ECONNRESET',
     'ECONNREFUSED',

@@ -106,26 +106,34 @@ async function testStatusAndRemoval() {
 async function testBrowserFirstOAuthContract() {
   const auth = new FakeAuthStorage();
   let callbackContractChecked = false;
-  auth.login = async (provider, callbacks) => {
+  auth.loginOAuth = async (provider, credential) => {
     assert.equal(provider, "openai-codex");
-    assert.equal(typeof callbacks.onSelect, "function");
-    assert.equal(typeof callbacks.onDeviceCode, "function");
-    assert.equal(typeof callbacks.onManualCodeInput, "function");
-    assert.equal(await callbacks.onSelect({
-      message: "Choose login",
-      options: [
-        { id: "device", label: "Device code" },
-        { id: "browser", label: "Browser callback" },
-      ],
-    }), "browser");
-    auth.set(provider, { type: "oauth" });
-    callbackContractChecked = true;
+    assert.equal(credential.type, "oauth");
+    auth.set(provider, credential);
   };
   const result = await loginZyraAuth("openai-codex", {
     authStorage: auth,
-    onAuth: () => {},
+    authBaseUrl: "https://auth.fixture.invalid",
+    callbackPort: 0,
+    redirectHost: "127.0.0.1",
+    fetchImpl: async (_url, request) => {
+      assert.equal(new URLSearchParams(request.body).get("code"), "fixture-code");
+      return response(200, {
+        access_token: "fixture-access",
+        refresh_token: "fixture-refresh",
+        id_token: `fixture.${Buffer.from(JSON.stringify({ chatgpt_account_id: "fixture-account" })).toString("base64url")}.signature`,
+        expires_in: 3600,
+      });
+    },
+    onAuth: async ({ url }) => {
+      const authorization = new URL(url);
+      assert.equal(authorization.searchParams.get("originator"), "zyra");
+      const redirect = authorization.searchParams.get("redirect_uri");
+      const callback = await fetch(`${redirect}?code=fixture-code&state=${authorization.searchParams.get("state")}`);
+      assert.equal(callback.status, 200);
+      callbackContractChecked = true;
+    },
     onMessage: () => {},
-    onPrompt: async () => "manual-code",
   });
   assert.equal(callbackContractChecked, true);
   assert.equal(auth.hasAuth("openai-codex"), true);

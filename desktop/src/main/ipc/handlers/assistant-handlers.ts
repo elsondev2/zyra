@@ -41,9 +41,13 @@ import type {
     AssistantSetPlaygroundRootInput,
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
+    AssistantSetPluginAppViewSettingsInput,
+    AssistantReadPluginAppViewInput,
+    AssistantCallPluginAppViewToolInput,
     AssistantSetSessionProjectInput,
     AssistantUpdateSessionConfigurationInput,
     AssistantTranscribeVoiceInput,
+    AssistantSaveVoiceHistoryInput,
     AssistantUpdateProjectInput,
     AssistantUserInputResponseInput,
     FleetOperationInput
@@ -51,10 +55,8 @@ import type {
 import { getAssistantService } from '../../assistant'
 import { hasActiveBrowserAssistantClient } from '../../assistant/browser-client-lease'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from '../../assistant/clipboard-attachments'
-import {
-    getCodexVoiceTranscriptionState,
-    transcribeVoiceWithCodex
-} from '../../assistant/codex-voice-transcription'
+import { getCodexVoiceTranscriptionState } from '../../assistant/codex-voice-transcription'
+import { deleteVoiceHistory, getFailedVoiceRecording, listVoiceHistory, saveVoiceHistory, transcribeVoiceAndSave } from '../../assistant/voice-history'
 
 async function withAssistantResult<T>(work: () => Promise<T> | T): Promise<T | { success: false; error: string }> {
     try {
@@ -148,6 +150,18 @@ export function handleAssistantGetPluginCatalog() {
     return withAssistantResult(() => getAssistantService().getPluginCatalog())
 }
 
+export function handleAssistantGetPluginMcpConnections(_event: Electron.IpcMainInvokeEvent, pluginId: string) {
+    return withAssistantResult(() => getAssistantService().getPluginMcpConnections(pluginId))
+}
+
+export function handleAssistantConnectPluginMcp(_event: Electron.IpcMainInvokeEvent, pluginId: string, serverName: string) {
+    return withAssistantResult(() => getAssistantService().connectPluginMcp(pluginId, serverName))
+}
+
+export function handleAssistantDisconnectPluginMcp(_event: Electron.IpcMainInvokeEvent, pluginId: string, serverName: string) {
+    return withAssistantResult(() => getAssistantService().disconnectPluginMcp(pluginId, serverName))
+}
+
 const pluginDownloadOwners = new WeakSet<Electron.WebContents>()
 
 export function handleAssistantStartPluginDownload(event: Electron.IpcMainInvokeEvent, input: AssistantStartPluginDownloadInput) {
@@ -205,6 +219,27 @@ export function handleAssistantSetPluginState(
     input: AssistantSetPluginStateInput
 ) {
     return withAssistantResult(() => getAssistantService().setPluginState(input.pluginId, input.state, input.expectedCatalogRevision))
+}
+
+export function handleAssistantSetPluginAppViewSettings(
+    _event: Electron.IpcMainInvokeEvent,
+    input: AssistantSetPluginAppViewSettingsInput
+) {
+    return withAssistantResult(() => getAssistantService().setPluginAppViewSettings(input))
+}
+
+export function handleAssistantReadPluginAppView(
+    _event: Electron.IpcMainInvokeEvent,
+    input: AssistantReadPluginAppViewInput
+) {
+    return withAssistantResult(() => getAssistantService().readPluginAppView(input))
+}
+
+export function handleAssistantCallPluginAppViewTool(
+    _event: Electron.IpcMainInvokeEvent,
+    input: AssistantCallPluginAppViewToolInput
+) {
+    return withAssistantResult(() => getAssistantService().callPluginAppViewTool(input))
 }
 
 export function handleAssistantRollbackPlugin(
@@ -502,8 +537,28 @@ export function handleAssistantTranscribeVoice(_event: Electron.IpcMainInvokeEve
         durationMs: Number(input?.durationMs) || 0,
         encodedLength: typeof input?.audioBase64 === 'string' ? input.audioBase64.length : 0
     })
-    return withAssistantResult(async () => ({
-        success: true as const,
-        text: await transcribeVoiceWithCodex(input)
-    }))
+    return withAssistantResult(async () => ({ success: true as const, text: await transcribeVoiceAndSave(input) }))
+}
+
+export function handleAssistantSaveVoiceHistory(_event: Electron.IpcMainInvokeEvent, input: AssistantSaveVoiceHistoryInput) {
+    return withAssistantResult(async () => {
+        if (input?.engine !== 'browser') throw new Error('Invalid voice history engine.')
+        await saveVoiceHistory(input)
+        return { success: true as const }
+    })
+}
+
+export function handleAssistantListVoiceHistory() {
+    return withAssistantResult(async () => ({ success: true as const, entries: await listVoiceHistory() }))
+}
+
+export function handleAssistantGetFailedVoiceRecording(_event: Electron.IpcMainInvokeEvent, id: string) {
+    return withAssistantResult(async () => ({ success: true as const, audioBase64: await getFailedVoiceRecording(id) }))
+}
+
+export function handleAssistantDeleteVoiceHistory(_event: Electron.IpcMainInvokeEvent, id: string) {
+    return withAssistantResult(async () => {
+        await deleteVoiceHistory(id)
+        return { success: true as const }
+    })
 }

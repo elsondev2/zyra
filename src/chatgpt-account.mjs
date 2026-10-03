@@ -11,7 +11,7 @@ import {
   listCodexUsageWindows,
   normalizeCodexLimitWindow,
 } from "./codex-usage-windows.mjs";
-import { createZyraAuthStorage } from "./pi-runtime.mjs";
+import { createZyraCredentialAuthStorage } from "./zyra-auth-store.mjs";
 
 const CHATGPT_ACCOUNT_PROVIDER = "openai-codex";
 const CODEX_ACCOUNT_API_BASE = "https://chatgpt.com/backend-api";
@@ -48,7 +48,7 @@ const CHATGPT_REALTIME_VOICES = new Set([
 ]);
 
 export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVIDER, options = {}) {
-  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
+  const authStorage = options.authStorage ?? await createZyraCredentialAuthStorage(options);
   const status = authStorage.getAuthStatus(provider);
   let credential = authStorage.get(provider);
   let claims = extractOpenAiCodexClaims(credential?.access);
@@ -130,7 +130,7 @@ export async function fetchCodexResetCredits() {
   return normalizeCodexResetCredits(data);
 }
 
-export async function redeemCodexResetCredit(creditId) {
+export async function redeemCodexResetCredit(creditId, options = {}) {
   const normalizedId = String(creditId ?? "").trim();
   if (!normalizedId) throw new Error("Choose a banked Codex reset before redeeming.");
   const { data } = await requestCodexAccountJson("/wham/rate-limit-reset-credits/consume", {
@@ -139,7 +139,7 @@ export async function redeemCodexResetCredit(creditId) {
       credit_id: normalizedId,
       redeem_request_id: randomUUID(),
     }),
-  });
+  }, options);
   return normalizeCodexResetRedemption(data);
 }
 
@@ -164,15 +164,15 @@ export function formatCodexUsageStats(stats) {
   return lines;
 }
 
-export async function resolveChatGptAccountAuth() {
-  const authStorage = await createZyraAuthStorage();
+export async function resolveChatGptAccountAuth(options = {}) {
+  const authStorage = options.authStorage ?? await createZyraCredentialAuthStorage(options);
   const accessToken = await authStorage.getApiKey(CHATGPT_ACCOUNT_PROVIDER, { includeFallback: false });
   if (!accessToken) return undefined;
 
   const credential = authStorage.get(CHATGPT_ACCOUNT_PROVIDER);
   const claims = extractOpenAiCodexClaims(credential?.access ?? accessToken);
   return {
-    source: "Pi auth storage",
+    source: "Zyra credential store",
     accessToken,
     accountId: typeof credential?.accountId === "string" ? credential.accountId : claims?.accountId,
     email: claims?.email,
@@ -578,10 +578,10 @@ export function isCodexResetCreditAvailable(credit, now = Date.now()) {
   return new Date(credit.expiresAt).getTime() > now;
 }
 
-async function requestCodexAccountJson(pathname, init = {}) {
-  const auth = await resolveChatGptAccountAuth();
+async function requestCodexAccountJson(pathname, init = {}, options = {}) {
+  const auth = await resolveChatGptAccountAuth(options);
   if (!auth) {
-    throw new Error("No ChatGPT account is connected through Pi. Run /login or `zyra login subscription`.");
+    throw new Error("No ChatGPT account is connected in Zyra. Run /login or `zyra login subscription`.");
   }
 
   const response = await fetchCodexAccountWithAuth(auth, pathname, init);

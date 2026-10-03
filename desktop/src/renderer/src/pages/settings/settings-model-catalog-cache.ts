@@ -1,4 +1,5 @@
 import type { AssistantModelInfo } from '@shared/assistant/contracts'
+import { installModelCatalogPricing } from '@shared/assistant/pricing'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 
 const MODEL_CATALOG_TTL_MS = 5 * 60_000
@@ -7,14 +8,38 @@ let cachedModels: AssistantModelInfo[] | null = null
 let cachedAt = 0
 let catalogGeneration = 0
 let pendingModels: { generation: number; promise: Promise<AssistantModelInfo[]> } | null = null
+const listeners = new Set<(models: AssistantModelInfo[]) => void>()
+let unsubscribeEvents: (() => void) | null = null
+
+export function subscribeSettingsModels(listener: (models: AssistantModelInfo[]) => void): () => void {
+    listeners.add(listener)
+    if (!unsubscribeEvents && typeof window.devscope.assistant.onEvent === 'function') {
+        unsubscribeEvents = window.devscope.assistant.onEvent(payload => {
+            for (const event of payload.events || (payload.event ? [payload.event] : [])) {
+                if (event.type !== 'models.updated' || !Array.isArray(event.payload['models'])) continue
+                catalogGeneration += 1
+                rememberSettingsModels(event.payload['models'] as AssistantModelInfo[])
+            }
+        })
+    }
+    return () => {
+        listeners.delete(listener)
+        if (!listeners.size) {
+            unsubscribeEvents?.()
+            unsubscribeEvents = null
+        }
+    }
+}
 
 export function readCachedSettingsModels(): AssistantModelInfo[] {
     return cachedModels || []
 }
 
 export function rememberSettingsModels(models: AssistantModelInfo[]): AssistantModelInfo[] {
+    installModelCatalogPricing(models)
     cachedModels = models
     cachedAt = Date.now()
+    for (const listener of listeners) listener(models)
     return models
 }
 

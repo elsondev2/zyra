@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { parseZyraPluginMcpConfig } from './plugin-mcp-config.mjs'
+import { parseZyraPluginAppConnections } from './plugin-app-connections.mjs'
+import { capZyraPluginConnectionServers, createZyraPluginConnectionPins, mergeZyraPluginConnectionSources, reconcileZyraPluginAppReferences } from './plugin-connection-sources.mjs'
 import {
   ZYRA_PLUGIN_LIMITS,
   ZyraPluginValidationError,
@@ -209,6 +212,7 @@ async function existingPathKind(value) {
 async function effectiveContributions(rootRealPath, manifest) {
   const result = { ...manifest.contributions }
   const conventions = {
+    apps: './.app.json',
     mcp: './.mcp.json',
     hooks: './hooks.json',
     commands: './commands',
@@ -286,6 +290,26 @@ export async function inspectZyraPluginPackage(packageRoot, options = {}) {
   const { files, totalBytes } = await walkPluginPackage(requestedRoot, rootRealPath)
   const contributions = await effectiveContributions(rootRealPath, manifest)
   await validateContributionPaths(rootRealPath, manifest, contributions)
+  const appText = contributions.apps ? await readBoundedText(resolvePluginRelativePath(rootRealPath, contributions.apps, 'apps'), 64 * 1024) : null
+  const appConnections = appText ? parseZyraPluginAppConnections(appText) : null
+  let nativeServers = []
+  if (contributions.mcp) {
+    const mcpPath = resolvePluginRelativePath(rootRealPath, contributions.mcp, 'mcp')
+    nativeServers = parseZyraPluginMcpConfig(await readBoundedText(mcpPath, 64 * 1024))
+  }
+  const appServers = reconcileZyraPluginAppReferences(nativeServers, appConnections?.servers || [], appText ? JSON.parse(appText).apps : {})
+  // Runtime integrity reads check package bytes against an existing review.
+  // Today's bridge table must not introduce an unreviewed name collision that
+  // breaks a previously pinned native server. Fresh inspection has no cap.
+  const servers = mergeZyraPluginConnectionSources(capZyraPluginConnectionServers(nativeServers, options.connectionServerPins), capZyraPluginConnectionServers(appServers, options.connectionServerPins))
+  const appMcpPath = contributions.mcp && appConnections?.servers.length ? contributions.apps : undefined
+  // Keep the primary path compatible with native-only and apps-as-MCP packages.
+  // Mixed packages add a separately reviewed path, copied into new Chat pins.
+  if (!contributions.mcp && appConnections?.servers.length) contributions.mcp = contributions.apps
+  const connectionMetadata = contributions.mcp ? {
+    ...(appMcpPath ? { appMcpPath } : {}),
+    mcpServerPins: createZyraPluginConnectionPins(servers),
+  } : {}
   const skills = await inspectPluginSkills(rootRealPath, contributions.skills, files)
 
   const packageHash = createHash('sha256')
@@ -300,7 +324,10 @@ export async function inspectZyraPluginPackage(packageRoot, options = {}) {
   }
   const contentDigest = packageHash.digest('hex')
   const containsExecutableFiles = files.some((file) => EXECUTABLE_FILE_PATTERN.test(file.relativePath))
-  const diagnostics = contributionDescriptors(contributions)
+  const descriptors = contributionDescriptors(contributions).map(entry => entry.kind === 'apps'
+    && appConnections?.servers.length && !appConnections.unresolved.length
+    ? { ...entry, support: 'supported' } : entry)
+  const diagnostics = descriptors
     .filter((entry) => entry.support === 'unsupported')
     .slice(0, ZYRA_PLUGIN_LIMITS.maxDiagnostics)
     .map((entry) => ({
@@ -308,6 +335,15 @@ export async function inspectZyraPluginPackage(packageRoot, options = {}) {
       message: `${entry.kind} is recorded but disabled by this Zyra release.`,
       contribution: entry.kind,
     }))
+  for (const entry of appConnections?.unresolved || []) diagnostics.push({
+    type: 'unresolved-app-connection', contribution: 'apps',
+    message: `${entry.name} uses a provider-hosted connection. This package does not supply a public MCP endpoint Zyra can connect to.`,
+  })
+  if (appConnections?.servers.length) {
+    for (const server of appConnections.servers) diagnostics.push({
+      type: 'app-mcp-endpoint', contribution: 'mcp', message: `${server.name} connects to ${server.url}. Sign in separately after installation.`,
+    })
+  }
 
   return {
     schemaVersion: 1,
@@ -321,8 +357,9 @@ export async function inspectZyraPluginPackage(packageRoot, options = {}) {
       totalBytes,
       containsExecutableFiles,
       skills,
-      contributions: contributionDescriptors(contributions),
-      diagnostics,
+      ...connectionMetadata,
+      contributions: descriptors,
+      diagnostics: diagnostics.slice(0, ZYRA_PLUGIN_LIMITS.maxDiagnostics),
     },
     files: files.map(({ absolutePath: _absolutePath, mtimeMs: _mtimeMs, ...file }) => file),
   }

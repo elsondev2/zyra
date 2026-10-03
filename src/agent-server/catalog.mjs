@@ -7,6 +7,7 @@ import { getProjectSessionsDir } from "../project-paths.mjs";
 import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";
+import { ZyraSessionManager } from "./zyra-session-manager.mjs";
 import {
   EAGER_HISTORY_TOOL_RESULTS,
   HISTORY_TOOL_RESULT_BODY_POLICY,
@@ -240,10 +241,12 @@ export class CanonicalChatCatalog {
   }
 
   async openSessionManager(chat) {
-    const SessionManager = this.loadSessionManager
-      ? await this.loadSessionManager()
-      : (await import("@earendil-works/pi-coding-agent")).SessionManager;
-    return SessionManager.open(chat.sessionPath, getProjectSessionsDir(chat.storageProject || chat.project));
+    const sessionDirectory = getProjectSessionsDir(chat.storageProject || chat.project);
+    if (!this.loadSessionManager) {
+      return ZyraSessionManager.open(chat.sessionPath, sessionDirectory, chat.cwd || chat.project);
+    }
+    const SessionManager = await this.loadSessionManager();
+    return SessionManager.open(chat.sessionPath, sessionDirectory);
   }
 
   async updateChat(selector, patch = {}) {
@@ -254,6 +257,8 @@ export class CanonicalChatCatalog {
     const next = {
       ...existing,
       ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
+      ...(patch.agentCreatedBy !== undefined ? { agentCreatedBy: String(patch.agentCreatedBy).slice(0, 192) } : {}),
+      ...(patch.agentLabel !== undefined ? { agentLabel: String(patch.agentLabel).slice(0, 120) } : {}),
       ...(patch.project !== undefined ? { project: normalizeProject(patch.project) } : {}),
       ...(patch.cwd !== undefined ? { cwd: normalizeProject(patch.cwd) } : {}),
       ...(patch.archived !== undefined ? {
@@ -315,6 +320,8 @@ function applyMetadata(chat, metadata = {}, record = {}) {
   return {
     ...chat,
     title: normalizeTitle(metadata.title || chat.title),
+    agentCreatedBy: metadata.agentCreatedBy || null,
+    agentLabel: metadata.agentLabel || null,
     project: metadata.project || chat.project || chat.storageProject || chat.cwd,
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,

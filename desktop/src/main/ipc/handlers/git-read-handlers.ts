@@ -103,7 +103,7 @@ export async function handleGetGitStatus(_event: Electron.IpcMainInvokeEvent, pr
 export async function handleGetGitStatusDetailed(
     _event: Electron.IpcMainInvokeEvent,
     projectPath: string,
-    options?: { includeStats?: boolean }
+    options?: { includeStats?: boolean; includeIgnored?: boolean }
 ) {
     try {
         const entries = await getGitStatusDetailed(projectPath, options)

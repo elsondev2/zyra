@@ -49,6 +49,76 @@ body.zyra-reduce-motion *::after {
   transition-duration: 0.01ms !important;
 }
 
+/* Settings sliders. Fill is painted from a --slider-fill percentage. */
+.zyra-settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, var(--accent-primary) var(--slider-fill, 50%), var(--settings-track) var(--slider-fill, 50%));
+  outline: none;
+  cursor: pointer;
+}
+
+.zyra-settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--settings-text) 25%, transparent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 120ms ease;
+}
+
+.zyra-settings-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.zyra-settings-slider:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+}
+
+.zyra-settings-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--settings-track);
+}
+
+.zyra-settings-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent-primary);
+}
+
+.zyra-settings-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--settings-text) 25%, transparent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.zyra-settings-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Code text scaling. Only applied while a non-default code scale is active. */
+body.zyra-code-zoom pre,
+body.zyra-code-zoom kbd,
+body.zyra-code-zoom samp {
+  zoom: var(--code-zoom);
+}
+
+body.zyra-code-zoom code:not(pre *):not(kbd *):not(samp *),
+body.zyra-code-zoom .font-mono:not(pre *):not(kbd *):not(samp *) {
+  zoom: var(--code-zoom);
+}
+
 /* ============================================================================
    Custom Scrollbar
    ============================================================================ */
@@ -469,8 +539,8 @@ body:not(.light) .framework-badge {
 
 @keyframes assistantTitleReveal {
   from {
-    opacity: 0;
-    filter: blur(2px);
+    opacity: 0.85;
+    filter: blur(0.3px);
     transform: translateY(1px);
   }
   to {
@@ -1594,30 +1664,10 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
   transition: background-color 150ms ease-out;
 }
 
-.file-actions-menu-row::before {
-  content: '';
-  position: absolute;
-  pointer-events: none;
-  left: 0;
-  top: 9px;
-  bottom: 9px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--file-actions-menu-accent, var(--accent-primary));
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-
 .file-actions-menu-row:hover,
 .file-actions-menu-row:focus-within,
 .file-actions-menu-row[data-expanded='true'] {
   background-color: color-mix(in srgb, var(--file-actions-menu-accent, var(--accent-primary)) 9%, transparent);
-}
-
-.file-actions-menu-row:hover::before,
-.file-actions-menu-row:focus-within::before,
-.file-actions-menu-row[data-expanded='true']::before {
-  opacity: 1;
 }
 
 @keyframes fileActionsFlyoutIn {
@@ -1630,8 +1680,7 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .file-actions-menu-row,
-  .file-actions-menu-row::before { transition: none; }
+  .file-actions-menu-row { transition: none; }
   .file-actions-menu-flyout { animation: none; }
 }
 
@@ -2326,6 +2375,8 @@ body.zyra-reduce-motion .assistant-screenshot-preview-arrive {
   transition-delay: 0s;
 }
 
+/* Accessory Browser tabs switch directly; fading both frames exposed the white viewport below. */
+.accessory-browser-workspace .assistant-browser-viewport-frame,
 body.zyra-reduce-motion .assistant-browser-viewport-frame {
   transition: none;
 }
@@ -2565,4 +2616,26 @@ body.zyra-reduce-motion .zyra-settings-switch-thumb {
   line-height: 1.12;
   letter-spacing: -0.03em;
   color: color-mix(in srgb, var(--color-text) 86%, transparent);
+}
+
+@keyframes provider-add-page-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes provider-add-page-in-left {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: none; }
+}
+
+.animate-provider-add-in-right {
+  animation: provider-add-page-in-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-provider-add-in-left {
+  animation: provider-add-page-in-left 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-provider-add-in-right, .animate-provider-add-in-left { animation: none; }
 }

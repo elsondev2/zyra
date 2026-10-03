@@ -74,9 +74,9 @@ assert.equal(routeShellSource.includes('flex h-12 shrink-0 items-center border-b
 
 const pageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
 assert.equal(pageSource.includes("default: (await import('./AssistantDiffPanel')).AssistantDiffPanel"), true, 'closed Inspector code stays out of the initial chat chunk')
-assert.equal(pageSource.includes('const [inspectorMounted, setInspectorMounted]'), false, 'a closed Inspector cannot remain mounted behind the chat')
+assert.match(pageSource, /const \[inspectorMounted, setInspectorMounted\] = useState\(inspectorOpen\)/, 'an unopened Inspector cannot mount its optional code')
 assert.equal(pageSource.includes('requestIdleCallback(warm'), false, 'opening Assistant cannot evaluate the Inspector chunk during startup idle time')
-assert.match(pageSource, /\{inspectorOpen \? \(\s*<Suspense/, 'the Inspector mounts only after the user opens it')
+assert.match(pageSource, /\{inspectorMounted \|\| inspectorOpen \? \(\s*<AssistantInspectorFrame[^>]*>\s*<Suspense/, 'optional Inspector code loads after opening while preserving its established state on close')
 assert.equal(pageSource.includes("lazy(() => import('@/components/ui/FilePreviewModal'))"), true, 'closed File Preview code stays out of the initial chat chunk')
 assert.equal(
     pageSource.includes('overflow-hidden animate-fadeIn [--accent-primary'),

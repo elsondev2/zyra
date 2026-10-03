@@ -6,6 +6,8 @@ import type { NativeOverlayApi, NativeOverlayKind, NativeOverlayBounds } from '@
 type Kind = NativeOverlayKind
 type NativeOverlayBridge = Pick<NativeOverlayApi, 'prepareNativeOverlay' | 'setNativeOverlayVisible'> & Partial<Pick<NativeOverlayApi, 'onNativeOverlayDismiss' | 'recoverNativeOverlay'>>
 interface Surface { window: Window; frameName: string; document: NativeOverlayDocument; unregister: () => void }
+const activityListeners = new Set<() => void>()
+const notifyActivity = () => { for (const listener of activityListeners) listener() }
 export interface NativeOverlayLease {
     ready: Promise<HTMLElement | null>
     present: () => Promise<boolean>
@@ -36,7 +38,9 @@ class NativeOverlayHost {
     private revision = Date.now() * 1000
     private visibility = false
     private boundsKey = ''
+    private focusRequested = false
     private leaseBounds = new Map<symbol, NativeOverlayBounds | null>()
+    private leaseFocus = new Map<symbol, boolean>()
     private visibilityPending: Promise<void> | null = null
     private hideFrame = 0
     private restoreFocus: HTMLElement | null = null
@@ -44,6 +48,7 @@ class NativeOverlayHost {
     private presented = new Set<symbol>()
     private suspended = new Set<symbol>()
     private hasPresented = () => [...this.presented].some(id => !this.suspended.has(id))
+    isPresented = () => this.hasPresented()
     private changes = new Set<() => void>()
     private generation = 0
     private disposed = false
@@ -62,17 +67,19 @@ class NativeOverlayHost {
         return { x, y, width: Math.max(0, Math.min(window.innerWidth, Math.max(...rectangles.map(value => value.x + value.width))) - x), height: Math.max(0, Math.min(window.innerHeight, Math.max(...rectangles.map(value => value.y + value.height))) - y) }
     }
 
-    private async setVisible(visible: boolean): Promise<void> {
+    private async setVisible(visible: boolean, requestFocus = false): Promise<void> {
         const bounds = this.kind === 'interactive' && visible ? this.presentationBounds() : null
         const boundsKey = JSON.stringify(bounds)
-        if (this.visibility === visible && this.boundsKey === boundsKey) { await this.visibilityPending; return }
+        const focus = visible && [...this.presented].some(id => !this.suspended.has(id) && this.leaseFocus.get(id))
+        if (!requestFocus && this.visibility === visible && this.boundsKey === boundsKey && this.focusRequested === focus) { await this.visibilityPending; return }
         this.visibility = visible
         this.boundsKey = boundsKey
+        this.focusRequested = focus
         const api = bridge()
         const frameName = this.surface?.frameName
         if (api && frameName) {
             const revision = ++this.revision
-            const request = api.setNativeOverlayVisible({ kind: this.kind, frameName, visible, revision, focus: false, bounds }).then(result => {
+            const request = api.setNativeOverlayVisible({ kind: this.kind, frameName, visible, revision, focus, bounds }).then(result => {
                 if (!this.matches(frameName) || revision !== this.revision) return
                 if (!result.success) {
                     this.visibility = false
@@ -169,10 +176,11 @@ class NativeOverlayHost {
     }
 
     /** A lease remains held while React runs existing exit animations and nested content. */
-    acquire(bounds: NativeOverlayBounds | null = null): NativeOverlayLease {
+    acquire(bounds: NativeOverlayBounds | null = null, focusOnPresent = false): NativeOverlayLease {
         const id = Symbol('native-overlay')
         this.leases.add(id)
         this.leaseBounds.set(id, bounds)
+        this.leaseFocus.set(id, focusOnPresent)
         cancelAnimationFrame(this.hideFrame)
         if (this.leases.size === 1 && this.kind === 'interactive') this.restoreFocus = getOverlayActiveElement()
         return {
@@ -186,9 +194,10 @@ class NativeOverlayHost {
                 if (!this.leases.has(id) || !this.surface) return false
                 const presentingFrameName = this.surface.frameName
                 this.presented.add(id)
+                notifyActivity()
                 if (this.suspended.has(id)) return true
                 cancelAnimationFrame(this.hideFrame)
-                try { await this.setVisible(true); return true }
+                try { await this.setVisible(true, focusOnPresent); return true }
                 catch (error) {
                     const api = bridge()
                     if (!api?.recoverNativeOverlay) throw error
@@ -204,7 +213,9 @@ class NativeOverlayHost {
                 if (!this.leases.delete(id)) return
                 this.presented.delete(id)
                 this.leaseBounds.delete(id)
+                this.leaseFocus.delete(id)
                 this.suspended.delete(id)
+                notifyActivity()
                 if (this.hasPresented()) {
                     void this.setVisible(true).catch(error => console.error('Native overlay bounds update failed', error))
                     return
@@ -230,6 +241,7 @@ class NativeOverlayHost {
     suspendCurrentPresentation(): () => void {
         const ids = [...this.leases].filter(id => !this.suspended.has(id))
         for (const id of ids) this.suspended.add(id)
+        notifyActivity()
         cancelAnimationFrame(this.hideFrame)
         void this.setVisible(this.hasPresented()).catch(error => console.error('Overlay suspension failed', error))
         let restored = false
@@ -237,6 +249,7 @@ class NativeOverlayHost {
             if (restored) return
             restored = true
             for (const id of ids) this.suspended.delete(id)
+            notifyActivity()
             if (!this.disposed && this.hasPresented()) void this.setVisible(true).catch(error => console.error('Overlay restoration failed', error))
         }
     }
@@ -246,6 +259,7 @@ class NativeOverlayHost {
         cancelAnimationFrame(this.hideFrame)
         this.leases.clear()
         this.leaseBounds.clear()
+        this.leaseFocus.clear()
         this.presented.clear()
         const child = this.surface?.window
         this.surface?.unregister()
@@ -265,6 +279,11 @@ function installDismissListener(api: NativeOverlayBridge) {
     })
 }
 export function getNativeOverlayHost(passive = false) { return hosts[passive ? 'passive' : 'interactive'] }
+export function isNativeOverlayActive(): boolean { return Object.values(hosts).some(host => host.isPresented()) }
+export function subscribeNativeOverlayActivity(listener: () => void): () => void {
+    activityListeners.add(listener)
+    return () => activityListeners.delete(listener)
+}
 
 function disposeHosts(closeWindows = true) {
     removeDismiss?.()

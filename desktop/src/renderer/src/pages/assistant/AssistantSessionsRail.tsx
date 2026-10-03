@@ -450,12 +450,25 @@ export function AssistantSessionsRail({
                         <button
                             ref={railRef}
                             type="button"
+                            role="separator"
+                            aria-orientation="vertical"
+                            aria-valuemin={minSidebarWidth}
+                            aria-valuemax={maxSidebarWidth}
+                            aria-valuenow={resolvedWidth}
                             aria-label={railTitle}
                             data-resizing={isResizing ? 'true' : 'false'}
                             onPointerDown={handleResizePointerDown}
                             onPointerMove={handleResizePointerMove}
                             onPointerUp={handleResizePointerEnd}
                             onPointerCancel={handleResizePointerEnd}
+                            onKeyDown={(event) => {
+                                const step = event.shiftKey ? 32 : 8
+                                const delta = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+                                const next = event.key === 'Home' ? minSidebarWidth : event.key === 'End' ? maxSidebarWidth : Math.max(minSidebarWidth, Math.min(maxSidebarWidth, resolvedWidth + delta))
+                                if (!delta && event.key !== 'Home' && event.key !== 'End') return
+                                event.preventDefault()
+                                onWidthChange?.(next)
+                            }}
                             className={`absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] sm:flex touch-none group-data-[side=left]:-right-4 group-data-[side=right]:left-0 ${isResizing ? 'cursor-grabbing bg-white/[0.04] after:bg-white/25' : 'cursor-default after:bg-transparent hover:bg-white/[0.03] hover:after:bg-white/10'}`}
                             title={railTitle}
                         />

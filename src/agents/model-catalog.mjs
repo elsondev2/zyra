@@ -1,12 +1,12 @@
 import { getCachedModelAvailability } from "../model-availability.mjs";
-import { isPiSupportPending } from "../model-compatibility.mjs";
+import { isTransportSupportPending } from "../model-compatibility.mjs";
 import { sortModelsLatestFirst } from "../model-order.mjs";
 
 export const FLEET_MODEL_PROVIDER = "openai-codex";
 export const FLEET_MODEL_ALIASES = Object.freeze({
-  sol: "gpt-5.6-sol",
-  terra: "gpt-5.6-terra",
-  luna: "gpt-5.6-luna",
+  sol: "sol",
+  terra: "terra",
+  luna: "luna",
 });
 export const PREVIOUS_CODEX_MODELS = Object.freeze([
   "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
@@ -23,13 +23,13 @@ export function buildFleetModelCatalog(modelRegistry, options = {}) {
   return sortModelsLatestFirst((all ?? []).filter((model) => model?.provider && model?.id)).map((model) => {
     const key = modelKey(model);
     const live = availability.get(key) ?? getCachedModelAvailability(model, options) ?? {};
-    const status = isPiSupportPending(model) ? "blocked" : live.availability ?? "unknown";
+    const status = isTransportSupportPending(model) ? "blocked" : live.availability ?? "unknown";
     const authenticatedModel = authenticated.has(key) || modelRegistry?.hasConfiguredAuth?.(model) === true;
     const reasons = [];
     if (!authenticatedModel) reasons.push("authentication_not_configured");
-    if (isPiSupportPending(model)) reasons.push("pi_support_pending");
+    if (isTransportSupportPending(model)) reasons.push("transport_support_pending");
     if (status === "unavailable") reasons.push(live.reason ?? "upstream_unavailable");
-    if (status === "blocked" && !reasons.includes("pi_support_pending")) reasons.push(live.reason ?? "blocked");
+    if (status === "blocked" && !reasons.includes("transport_support_pending")) reasons.push(live.reason ?? "blocked");
     return {
       key,
       provider: model.provider,
@@ -38,12 +38,12 @@ export function buildFleetModelCatalog(modelRegistry, options = {}) {
       model,
       authenticated: authenticatedModel,
       availability: status,
-      availabilityReason: live.reason ?? (isPiSupportPending(model) ? "pi_support_pending" : undefined),
-      supportPending: isPiSupportPending(model),
+      availabilityReason: live.reason ?? (isTransportSupportPending(model) ? "transport_support_pending" : undefined),
+      supportPending: isTransportSupportPending(model),
       contextWindow: Number(model.contextWindow) || 0,
       reasoning: model.reasoning !== false,
       toolUse: model.toolUse !== false,
-      eligible: authenticatedModel && !isPiSupportPending(model) && !["blocked", "unavailable"].includes(status),
+      eligible: authenticatedModel && !isTransportSupportPending(model) && !["blocked", "unavailable"].includes(status),
       rejectionReasons: reasons,
       generation: modelGeneration(model.id),
       tier: modelTier(model.id),

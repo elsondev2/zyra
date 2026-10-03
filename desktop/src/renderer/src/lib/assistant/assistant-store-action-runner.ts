@@ -9,21 +9,23 @@ type SetAssistantStoreState = (
 
 export async function runAssistantStoreAction<T = Record<string, unknown>>(
     setState: SetAssistantStoreState,
-    work: () => Promise<DevScopeResult<T>>
+    work: () => Promise<DevScopeResult<T>>,
+    options: { markCommandPending?: boolean; reportError?: boolean } = {}
 ): Promise<DevScopeResult<T>> {
-    setState({ error: null, commandPending: true })
+    const { markCommandPending = true, reportError = true } = options
+    setState(markCommandPending ? { error: null, commandPending: true } : { error: null })
     try {
         const result = await work()
         if (!result.success) {
-            setState({ error: result.error })
+            if (reportError) setState({ error: result.error })
             return result
         }
         return result
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Assistant command failed.'
-        setState({ error: message })
+        if (reportError) setState({ error: message })
         return { success: false as const, error: message }
     } finally {
-        setState({ commandPending: false })
+        if (markCommandPending) setState({ commandPending: false })
     }
 }

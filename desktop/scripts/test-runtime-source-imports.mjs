@@ -3,19 +3,11 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, symlink } from 'node:
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { buildRuntimeManifest, validateRuntimeStage, RUNTIME_MANIFEST_FILE, RUNTIME_METADATA_FILES, RUNTIME_SOURCE_DIRECTORIES } from './release/runtime-contract.mjs'
+import { buildRuntimeManifest, validateRuntimeStage, RUNTIME_MANIFEST_FILE, RUNTIME_METADATA_FILES, RUNTIME_SOURCE_DIRECTORIES, REQUIRED_RUNTIME_FILES } from './release/runtime-contract.mjs'
 
-const scoped = '@earendil-works/pi-coding-agent'
+const scoped = '@zyra-test/fixture-runtime'
 const projectRoot = path.resolve(import.meta.dirname, '../..')
 const deepFile = 'dist/core/tools/path-utils.js'
-const required = [
-    'analytics/events.v1.json', 'src/analytics/client.mjs', 'src/analytics/contracts.mjs',
-    'src/analytics/cli.mjs', 'src/zyra-sdk.mjs', 'src/zyra-ui-bridge.mjs',
-    'src/agent-server/main.mjs', 'bin/zyra.mjs', 'prompts/zyra_system_prompt.md',
-    'prompts/inspect-project.md', 'agents/bug-analyzer.md', 'agents/code-reviewer.md',
-    'workflows/review-changes.mjs', 'skills/visualize/SKILL.md'
-]
-
 async function put(root, name, content = '') {
     const file = path.join(root, name)
     await mkdir(path.dirname(file), { recursive: true })
@@ -61,7 +53,7 @@ async function fixture(run, { installed = true } = {}) {
     const root = path.join(temp, 'runtime')
     try {
         for (const dir of RUNTIME_SOURCE_DIRECTORIES) await mkdir(path.join(root, dir), { recursive: true })
-        for (const file of [...RUNTIME_METADATA_FILES, ...required]) await put(root, file)
+        for (const file of [...RUNTIME_METADATA_FILES, ...REQUIRED_RUNTIME_FILES]) await put(root, file)
         const pkg = { name: 'runtime-fixture', version: '0.6.1', license: 'Apache-2.0', dependencies: { [scoped]: '1.0.0', plain: '1.0.0' } }
         await put(root, 'package.json', JSON.stringify(pkg))
         await put(root, 'package-lock.json', JSON.stringify({ name: pkg.name, version: pkg.version, lockfileVersion: 3, packages: { '': pkg } }))

@@ -47,7 +47,7 @@ export interface ChatGptRealtimeTransport {
         realtimeSessionGeneration?: number
     }>
     appendContext(items: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>): Promise<void>
-    requestSpeech(text: string, canonicalMessageId?: string): Promise<void>
+    requestSpeech(text: string, canonicalMessageId?: string, voiceTaskId?: string): Promise<void>
     presentComposerResponse(input: { turnId: string; text?: string; error?: string; canonicalMessageId?: string }): void
     stop(): Promise<void>
     on(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
@@ -66,6 +66,8 @@ interface ChatGptAdapterSession {
     suppressedHydrationProviderItemIds: Set<string>
     completedTranscriptProviderItemIds: Set<string>
     pendingCanonicalSpeechReplays: Array<{ canonicalMessageId: string; normalizedText: string }>
+    pendingVoiceTaskIds: Set<string>
+    voiceTaskByProviderItem: Map<string, string>
 }
 
 export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
@@ -111,7 +113,9 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             hydrationReplayBudget: createHydrationReplayBudget(input.hydrationSeed.items),
             suppressedHydrationProviderItemIds: new Set(),
             completedTranscriptProviderItemIds: new Set(),
-            pendingCanonicalSpeechReplays: []
+            pendingCanonicalSpeechReplays: [],
+            pendingVoiceTaskIds: new Set(),
+            voiceTaskByProviderItem: new Map()
         }
         this.sessions.set(adapterSessionId, session)
         this.currentAdapterSessionId = adapterSessionId
@@ -234,7 +238,18 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
         const event = normalizeWebRtcTranscriptEvent(value, session.webRtcTurnRoles)
         if (event && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
         if (event && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
-        if (event?.kind === 'completed' && this.suppressTranscriptReplay(session, event.role, event.text, event.providerItemId)) return
+        if (event?.role === 'assistant') {
+            const taskId = asText(asRecord(value)?.['zyraVoiceTaskId'])
+            if (taskId && session.pendingVoiceTaskIds.delete(taskId)) {
+                session.voiceTaskByProviderItem.set(event.providerItemId, taskId)
+                if (session.voiceTaskByProviderItem.size > 128) {
+                    session.voiceTaskByProviderItem.delete(session.voiceTaskByProviderItem.keys().next().value!)
+                }
+            }
+        }
+        const voiceTaskId = event?.role === 'assistant'
+            ? session.voiceTaskByProviderItem.get(event.providerItemId) : undefined
+        if (event?.kind === 'completed' && !voiceTaskId && this.suppressTranscriptReplay(session, event.role, event.text, event.providerItemId)) return
         if (!event) {
             if (isWebRtcTranscriptCompletion(value)) {
                 this.emit({
@@ -255,7 +270,8 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             type: `realtime.${event.role}.transcript.${event.kind}`,
             providerItemId: event.providerItemId,
             ...(transcriptSource ? { transcriptSource } : {}),
-            ...(event.kind === 'completed' ? { text: event.text } : { delta: event.delta })
+            ...(event.kind === 'completed' ? { text: event.text } : { delta: event.delta }),
+            ...(event.kind === 'completed' && voiceTaskId ? { voiceTaskId } : {})
         } as RealtimeDomainEvent)
     }
 
@@ -268,10 +284,15 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             throw new Error('ChatGPT speech request carries a stale Voice route claim.')
         }
         if (Date.parse(item.expiresAt) <= Date.parse(this.clock.now())) throw new Error('ChatGPT speech request expired.')
-        addCanonicalSpeechReplay(session, item.canonicalMessageId, item.text)
+        if (item.voiceTaskId) {
+            session.pendingVoiceTaskIds.add(item.voiceTaskId)
+            if (session.pendingVoiceTaskIds.size > 128) session.pendingVoiceTaskIds.delete(session.pendingVoiceTaskIds.values().next().value!)
+        } else addCanonicalSpeechReplay(session, item.canonicalMessageId, item.text)
         try {
-            await this.runtime.requestSpeech(item.text, item.canonicalMessageId)
+            if (item.voiceTaskId) await this.runtime.requestSpeech(item.text, undefined, item.voiceTaskId)
+            else await this.runtime.requestSpeech(item.text, item.canonicalMessageId)
         } catch (error) {
+            if (item.voiceTaskId) session.pendingVoiceTaskIds.delete(item.voiceTaskId)
             removeCanonicalSpeechReplay(session, item.canonicalMessageId)
             throw error
         }
@@ -326,6 +347,7 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             if (event.providerItemId && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
             if (event.providerItemId && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
             if (event.type === 'transcript.done' && event.providerItemId
+                && !session.voiceTaskByProviderItem.has(event.providerItemId)
                 && this.suppressTranscriptReplay(session, event.role === 'user' ? 'user' : 'assistant', event.text, event.providerItemId)) return
             // Flat legacy notifications may omit item identity. The
             // production Desktop bridge supplies the identity-bearing WebRTC
@@ -338,7 +360,9 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
                 ...eventBase(session, this.clock.now()),
                 type,
                 providerItemId: event.providerItemId,
-                ...(event.type === 'transcript.done' ? { text: event.text } : { delta: event.delta })
+                ...(event.type === 'transcript.done' ? { text: event.text } : { delta: event.delta }),
+                ...(event.type === 'transcript.done' && session.voiceTaskByProviderItem.has(event.providerItemId)
+                    ? { voiceTaskId: session.voiceTaskByProviderItem.get(event.providerItemId) } : {})
             } as RealtimeDomainEvent)
             return
         }

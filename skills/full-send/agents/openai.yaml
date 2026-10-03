@@ -1,0 +1,6 @@
+interface:
+  display_name: "Full Send"
+  short_description: "Finish authorized work with proof and fewer handoffs"
+  default_prompt: "Use $full-send to carry this task through its authorized finish and verify the actual result."
+policy:
+  allow_implicit_invocation: true

@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react'
-import { Archive, FolderKanban, FolderOpen, FolderPlus, Plus, RotateCcw, X } from 'lucide-react'
+import { Archive, FolderOpen, FolderPlus, Image, MoreHorizontal, Plus, RotateCcw, X } from 'lucide-react'
+import { FileActionsMenu } from '@/components/ui/FileActionsMenu'
 import type { AssistantProject, AssistantProjectCatalog, AssistantProjectMigrationCandidate } from '@shared/assistant/contracts'
+import { AssistantProjectIcon } from '../assistant/AssistantProjectIcon'
+import { getAssistantProjectIconSourcePath } from '../assistant/assistant-project-choices'
 import { SettingsActionsMenu } from './SettingsActionsMenu'
 import { SettingsListPagination } from './SettingsListPagination'
 import { paginateSettingsItems } from './settings-list-page'
-import { SettingsButton, SettingsDialog, SettingsInput, SettingsNotice, SettingsRow, SettingsSection, SettingsSelect } from './settings-layout'
+import { SettingsButton, SettingsDialog, SettingsInput, SettingsNotice, SettingsSection, SettingsSelect } from './settings-layout'
+
+const catalogActionButtonClass = '!h-8 !w-8 !text-[var(--settings-text-secondary)] hover:!bg-[var(--settings-row-hover)] hover:!text-[var(--settings-text)] focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-45'
 
 type CatalogProps = {
     catalog: AssistantProjectCatalog
@@ -18,6 +23,10 @@ type CatalogProps = {
     onArchive: (projectId: string, archived: boolean) => Promise<unknown>
     onImport: (candidate: AssistantProjectMigrationCandidate) => Promise<unknown>
     onDismiss: (candidateId: string) => Promise<unknown>
+    hasCustomIcon: (project: AssistantProject) => boolean
+    onChangeIcon: (project: AssistantProject) => Promise<unknown>
+    onRemoveIcon: (project: AssistantProject) => Promise<unknown>
+    onConfigureDiscovery: () => void
 }
 
 export function ProjectSettingsCatalog(props: CatalogProps) {
@@ -45,39 +54,60 @@ export function ProjectSettingsCatalog(props: CatalogProps) {
         finally { setBusy(false) }
     }
     return <>
-        <SettingsSection title="Project catalog" headerAction={<SettingsButton onClick={() => void run(props.onCreate)} disabled={props.creating || busy}><Plus size={13} />New project</SettingsButton>}>
-            <div className="flex flex-wrap items-center gap-2 border-b border-[var(--settings-row-divider)] px-4 py-3">
-                <SettingsInput value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} placeholder="Search projects" aria-label="Search project catalog" className="min-w-0 flex-1 sm:w-auto" />
+        <SettingsSection title="Project catalog" hideHeader className="flex min-h-0 flex-1 flex-col [content-visibility:visible]" bodyClassName="flex min-h-0 flex-1 flex-col !rounded-none !border-0 !bg-transparent !shadow-none">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 pb-4">
+                <SettingsInput value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} placeholder="Search projects" aria-label="Search project catalog" className="min-w-0 flex-1 basis-full sm:basis-0 sm:w-auto" />
                 <SettingsSelect value={view} onChange={event => { setView(event.target.value as typeof view); setPage(0) }} aria-label="Project catalog view" className="!min-w-0 !w-32"><option value="active">Active ({props.catalog.projects.filter(project => !project.archived).length})</option><option value="detected">Detected ({props.catalog.candidates.filter(candidate => candidate.status === 'pending').length})</option><option value="archived">Archived ({props.catalog.projects.filter(project => project.archived).length})</option></SettingsSelect>
+                <SettingsButton onClick={() => void run(props.onCreate)} disabled={props.creating || busy}><Plus size={13} />New project</SettingsButton>
             </div>
             {props.error || actionError ? <SettingsNotice tone="error">{props.error || actionError}</SettingsNotice> : null}
             {props.loading ? <SettingsNotice>Refreshing projects…</SettingsNotice> : null}
-            <div className="max-h-[520px] overflow-y-auto [scrollbar-gutter:stable]">
-                {page.items.map(record => 'folders' in record ? <SettingsRow
-                    key={record.id}
-                    title={record.name}
-                    icon={<FolderKanban size={16} className="text-[var(--settings-text-muted)]" />}
-                    description={`${record.folders.length} associated ${record.folders.length === 1 ? 'folder' : 'folders'}${record.archived ? ', archived' : ''}.`}
-                    info={<div className="space-y-1"><span className="font-medium">Project home</span><code className="block break-all text-[11px]">{record.homePath}</code></div>}
-                    status={record.folders.some(folder => !folder.available) ? 'Folder unavailable' : undefined}
-                    statusTone="warning"
-                    control={<SettingsActionsMenu ariaLabel={`Manage ${record.name}`} disabled={busy} items={[
-                        { id: 'folders', label: 'View folders', icon: <FolderOpen size={13} />, onSelect: () => setSelectedId(record.id) },
-                        { id: 'home', label: 'Open project home', icon: <FolderOpen size={13} />, onSelect: () => run(() => props.onOpenHome(record)) },
-                        ...(!record.archived ? [
-                            { id: 'add', label: 'Add folder', icon: <FolderPlus size={13} />, onSelect: () => run(() => props.onAddFolder(record.id, 'read-write')) },
-                            { id: 'add-read-only', label: 'Add read-only folder', icon: <FolderPlus size={13} />, onSelect: () => run(() => props.onAddFolder(record.id, 'read-only')) }
-                        ] : []),
-                        { id: 'archive', label: record.archived ? 'Restore project' : 'Archive project', icon: record.archived ? <RotateCcw size={13} /> : <Archive size={13} />, separatorBefore: true, onSelect: () => run(() => props.onArchive(record.id, !record.archived)) }
-                    ]} />}
-                /> : <SettingsRow
-                    key={record.id}
-                    title={record.suggestedName}
-                    description="Detected folder awaiting your review."
-                    info={<code className="break-all text-[11px]">{record.path}</code>}
-                    status="Review required" statusTone="warning"
-                    control={<div className="flex gap-2"><SettingsButton disabled={busy} onClick={() => void run(() => props.onImport(record))}>Review & import</SettingsButton><SettingsActionsMenu label="More" ariaLabel={`Actions for ${record.suggestedName}`} disabled={busy} items={[{ id: 'dismiss', label: 'Dismiss suggestion', icon: <X size={13} />, onSelect: () => run(() => props.onDismiss(record.id)) }]} /></div>}
-                />)}
+            {view === 'detected' ? <div className="flex items-center justify-between gap-3 border-b border-[var(--settings-row-divider)] px-4 py-2.5"><span className="text-[11px] text-[var(--settings-text-secondary)]">Projects found in your chosen folders</span><SettingsButton variant="ghost" onClick={props.onConfigureDiscovery}>Choose folders</SettingsButton></div> : null}
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+                <ul aria-label="Projects" className="divide-y divide-[var(--settings-row-divider)]">
+                    {page.items.map(record => 'folders' in record ? (
+                        <li key={record.id} className="group flex min-w-0 items-center gap-3 px-1 py-3">
+                            <button type="button" onClick={() => setSelectedId(record.id)} aria-label={`View folders for ${record.name}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]">
+                                <span className="flex size-8 shrink-0 items-center justify-center">
+                                    <AssistantProjectIcon projectPath={getAssistantProjectIconSourcePath(record)} size={24} />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-[13px] font-medium text-[var(--settings-text)] group-hover:text-[var(--accent-primary)]" title={record.name}>{record.name}</span>
+                                    <span className="mt-0.5 block truncate text-[11px] text-[var(--settings-text-secondary)]" title={record.folders.map(folder => folder.path).join('\n')}>
+                                        {record.folders[0]?.path || 'Project home'}
+                                    </span>
+                                </span>
+                            </button>
+                            <div className="flex shrink-0 items-center gap-3">
+                                {record.folders.length > 1 ? <span className="hidden text-[11px] text-[var(--settings-text-muted)] sm:inline">{record.folders.length} folders</span> : null}
+                                {record.folders.some(folder => !folder.available) ? <span className="text-[10px] text-[var(--status-warning)]">Folder unavailable</span> : null}
+                                <FileActionsMenu title={`Manage ${record.name}`} disabled={busy} density="compact" menuWidth={224} triggerIcon={<MoreHorizontal size={16} />} buttonClassName={catalogActionButtonClass} openButtonClassName="!bg-[var(--settings-row-hover)] !text-[var(--settings-text)]" items={[
+                                    { id: 'folders', label: 'View folders', icon: <FolderOpen size={13} />, onSelect: () => setSelectedId(record.id) },
+                                    { id: 'home', label: 'Open project home', icon: <FolderOpen size={13} />, onSelect: () => run(() => props.onOpenHome(record)) },
+                                    ...(!record.archived ? [
+                                        { id: 'add', label: 'Add folder', icon: <FolderPlus size={13} />, onSelect: () => run(() => props.onAddFolder(record.id, 'read-write')) },
+                                        { id: 'add-read-only', label: 'Add read-only folder', icon: <FolderPlus size={13} />, onSelect: () => run(() => props.onAddFolder(record.id, 'read-only')) }
+                                    ] : []),
+                                    { id: 'change-icon', label: props.hasCustomIcon(record) ? 'Change custom icon' : 'Set custom icon', icon: <Image size={13} />, separatorBefore: true, onSelect: () => run(() => props.onChangeIcon(record)) },
+                                    ...(props.hasCustomIcon(record) ? [{ id: 'remove-icon', label: 'Remove custom icon', icon: <X size={13} />, onSelect: () => run(() => props.onRemoveIcon(record)) }] : []),
+                                    { id: 'archive', label: record.archived ? 'Restore project' : 'Archive project', icon: record.archived ? <RotateCcw size={13} /> : <Archive size={13} />, separatorBefore: true, onSelect: () => run(() => props.onArchive(record.id, !record.archived)) }
+                                ]} />
+                            </div>
+                        </li>
+                    ) : (
+                        <li key={record.id} className="flex min-w-0 flex-wrap items-center gap-3 px-1 py-3 sm:flex-nowrap">
+                            <span className="flex size-8 shrink-0 items-center justify-center">
+                                <AssistantProjectIcon projectPath={record.path} size={24} />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                                <h3 className="truncate text-[13px] font-medium text-[var(--settings-text)]" title={record.suggestedName}>{record.suggestedName}</h3>
+                                <p className="mt-0.5 truncate text-[11px] text-[var(--settings-text-secondary)]" title={record.path}>{record.path}</p>
+                            </div>
+                            <SettingsButton disabled={busy} onClick={() => void run(() => props.onImport(record))}>Review & import</SettingsButton>
+                            <FileActionsMenu title={`Actions for ${record.suggestedName}`} disabled={busy} density="compact" menuWidth={224} triggerIcon={<MoreHorizontal size={16} />} buttonClassName={catalogActionButtonClass} items={[{ id: 'dismiss', label: 'Dismiss suggestion', icon: <X size={13} />, onSelect: () => run(() => props.onDismiss(record.id)) }]} />
+                        </li>
+                    ))}
+                </ul>
                 {!props.loading && !props.error && page.total === 0 ? <SettingsNotice>{query ? 'No matching projects.' : view === 'active' ? 'No active projects.' : view === 'archived' ? 'No archived projects.' : 'No detected folders to review.'}</SettingsNotice> : null}
             </div>
             <SettingsListPagination {...page} onPageChange={setPage} />

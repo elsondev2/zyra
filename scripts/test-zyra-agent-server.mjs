@@ -71,7 +71,7 @@ class FakeWorker extends EventEmitter {
     if (type === "abort") return Promise.resolve({ aborted: true });
     if (type === "canonical_message.append") {
       const receipt = {
-        receiptId: "pi_entry_voice_test",
+        receiptId: "zyra_entry_voice_test",
         operationId: payload.operationId,
         canonicalMessageId: payload.messageId,
         conversationId: payload.conversationId,

@@ -1,4 +1,5 @@
 import { recoverAttachmentReplay } from './agent-server-attachment-recovery'
+import { selectDesktopControlWorker } from './external-tool-routing'
 import { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
 export { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
 import { publishRuntimeActivation } from './runtime-activation'
@@ -28,6 +29,7 @@ export type ZyraWorkerLike = {
     setControlRequestHandler(handler: (operation: unknown, signal: AbortSignal, principal?: unknown) => Promise<Record<string, unknown>>): void
     isAlive(): boolean
     request(type: string, payload?: Record<string, unknown>): Promise<Record<string, unknown>>
+    readPresence?(): Promise<CanonicalAgentChatPresence | null>
     flushReplay(): void
     dispose(): void
 }
@@ -69,6 +71,8 @@ export type CanonicalAgentChatPresence = {
 }
 
 export type CanonicalAgentChat = {
+    agentCreatedBy?: string | null
+    agentLabel?: string | null
     canonicalChatId: string
     sessionPath: string
     storageProject?: string
@@ -166,6 +170,11 @@ export class DesktopAgentServerConnection {
     async updatePluginAuthority(input: PluginAuthorityUpdate): Promise<void> {
         const client = await this.getClient()
         await client.request('session.pluginAuthority', input, { timeoutMs: 20_000 })
+    }
+
+    async prepareRuntime(model: string | null): Promise<void> {
+        const client = await this.getClient()
+        await client.request('runtime.prepare', { model }, { timeoutMs: 65_000 })
     }
 
     async listModels(forceRefresh = false, skipAvailability = false): Promise<Record<string, unknown>[]> {
@@ -295,6 +304,8 @@ export class DesktopAgentServerConnection {
             providerThreadId: String(connected['providerThreadId'] || result['canonicalChatId'] || sessionKey),
             agentServerActiveTurnId: activeRequestContext?.['turnId'],
             agentServerLatestTurnId: presenceLatestTurn?.['id'],
+            agentServerLatestTurnState: presenceLatestTurn?.['state'],
+            agentServerLatestTurnCompletedAt: presenceLatestTurn?.['completedAt'],
             agentServerOrphanedTurnId: orphanedTurnId || undefined
         }
     }
@@ -422,8 +433,7 @@ export class DesktopAgentServerConnection {
             const requestId = String(message['requestId'] || '')
             const candidates = [...(this.workers.get(String(message['sessionKey'] || '')) || [])].filter((candidate) => candidate.isAlive())
             const requestLocalThreadId = asRecord(message['requestContext'])?.['localThreadId']
-            const worker = candidates.find((candidate) => candidate.localThreadId === requestLocalThreadId)
-                || candidates.at(-1)
+            const worker = selectDesktopControlWorker(candidates, requestLocalThreadId, message['externalToolSessionId'])
             if (!worker) {
                 if (!this.options.handleDetachedControl) throw Object.assign(new Error('No desktop runtime is attached to this canonical chat.'), { code: 'CONTROL_DRIVER_UNAVAILABLE', retryable: true })
                 const controller = new AbortController()
@@ -525,6 +535,12 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
         if (this.disposed) throw new Error('Zyra agent-server worker is detached.')
         if (type === 'connect') return this.connection.attach(this, payload)
         return this.connection.request(this, type, payload)
+    }
+
+    async readPresence(): Promise<CanonicalAgentChatPresence | null> {
+        if (!this.sessionKey || this.disposed) return null
+        const chat = await this.connection.getCanonicalChat(this.sessionKey, this.cwd)
+        return chat?.presence || null
     }
 
     bindSession(sessionKey: string, payload: Record<string, unknown>): void {

@@ -20,6 +20,7 @@ export class ZyraComponentHost {
   constructor(options = {}) {
     this.output = options.output ?? defaultOutput;
     this.components = [];
+    this.hasTranscript = false;
     this.inputComponent = null;
     this.footerComponent = null;
     this.auxiliaryComponents = [];
@@ -286,10 +287,12 @@ export class ZyraComponentHost {
   renderContentLines(width = this.width()) {
     if (!this.contentDirty && this.contentCacheWidth === width) return this.contentLinesCache;
     const lines = [];
+    let hasTranscript = false;
     let previousSpacingKind = "";
     for (const component of this.components) {
       if (component.hidden) continue;
       const rendered = safeRender(component, width);
+      if (rendered.length > 0 && component.isTranscript) hasTranscript = true;
       if (previousSpacingKind === "tool" && component.spacingKind === "tool" && lines.at(-1) === "" && rendered[0] === "") {
         rendered.shift();
       }
@@ -297,6 +300,7 @@ export class ZyraComponentHost {
       if (rendered.length > 0) previousSpacingKind = component.spacingKind ?? "";
     }
     const renderedLines = renderLinesWithinWidth(lines, width);
+    this.hasTranscript = hasTranscript;
     this.contentLinesCache = renderedLines;
     this.contentCacheWidth = width;
     this.contentPhysicalRowsCache = countPhysicalRows(renderedLines, width);

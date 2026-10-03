@@ -23,9 +23,10 @@ const environment = {
   USERPROFILE: temporaryRoot,
   LOCALAPPDATA: path.join(temporaryRoot, "local"),
   APPDATA: path.join(temporaryRoot, "roaming"),
-  PI_CODING_AGENT_DIR: piAgentDirectory,
+  ZYRA_CODING_AGENT_DIR: piAgentDirectory,
   ZYRA_AGENT_SERVER_CHANNEL: channel,
   ZYRA_STATE_DIR: stateDirectory,
+  ZYRA_OFFLINE: "1",
   ZYRA_DATA_ROOT: temporaryRoot,
   ZYRA_CALLER_CWD: temporaryRoot,
   ZYRA_DISTRIBUTION: "standalone",
@@ -89,8 +90,8 @@ try {
 }
 
 function writeBundledOAuthFixture() {
-  mkdirSync(piAgentDirectory, { recursive: true });
-  writeFileSync(path.join(piAgentDirectory, "auth.json"), JSON.stringify({
+  mkdirSync(path.join(stateDirectory, "credentials"), { recursive: true });
+  writeFileSync(path.join(stateDirectory, "credentials", "auth.json"), JSON.stringify({
     "openai-codex": {
       type: "oauth",
       access: `zyra-standalone-oauth-smoke-${process.pid}`,

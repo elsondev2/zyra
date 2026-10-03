@@ -15,7 +15,23 @@ export const RUNTIME_METADATA_FILES = Object.freeze([
 ])
 export const RUNTIME_MANIFEST_FILE = 'zyra-runtime-manifest.json'
 
-const REQUIRED_RUNTIME_FILES = Object.freeze([
+export const REQUIRED_RUNTIME_FILES = Object.freeze([
+    'src/zyra-runtime.mjs',
+    'src/harness-config-plugin.mjs',
+    'src/runtime/schema/preload.mjs',
+    'src/runtime/schema/bundled/manifest.json',
+    'src/runtime/provenance.json',
+    'src/runtime/engine/src/index.js',
+    'src/runtime/agent/src/index.js',
+    'src/runtime/providers/src/index.js',
+    'src/runtime/terminal/src/index.js',
+    'src/runtime/engine/LICENSE',
+    'src/runtime/agent/LICENSE',
+    'src/runtime/providers/LICENSE',
+    'src/runtime/terminal/LICENSE',
+    'src/runtime/client/LICENSE',
+    'src/runtime/protocol/LICENSE',
+    'src/runtime/telemetry/LICENSE',
     'LICENSE',
     'NOTICE',
     'THIRD_PARTY_NOTICES.md',

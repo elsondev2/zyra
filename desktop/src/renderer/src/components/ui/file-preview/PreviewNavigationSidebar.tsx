@@ -3,6 +3,7 @@ import {
     AlertCircle,
     AppWindow,
     ArrowUp,
+    ArrowLeft,
     ChevronDown,
     ChevronRight,
     ChevronsDownUp,
@@ -17,13 +18,14 @@ import {
     List,
     MoveHorizontal,
     Pencil,
+    PanelLeftOpen,
     Search,
     X,
     Plus,
     RefreshCw,
     SlidersHorizontal,
     Trash2,
-    WrapText
+    Ellipsis
 } from 'lucide-react'
 import type { DevScopeFileTreeNode } from '@shared/contracts/devscope-project-contracts'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
@@ -36,9 +38,12 @@ import { cn, getFileExtension } from '@/lib/utils'
 import type { PreviewFile, PreviewOpenOptions } from './types'
 import { resolvePreviewType } from './utils'
 import { PreviewVirtualFileTree } from './PreviewVirtualFileTree'
+import { usePreviewFileMoveDrop, type FileMoveDestination } from './previewFileMoveDrag'
+import { PreviewTreeContextMenu, type PreviewTreeMenuAnchor } from './PreviewTreeContextMenu'
 import { PreviewFileIconGrid } from './PreviewFileIconGrid'
 import { PreviewFileDetailsTable } from './PreviewFileDetailsTable'
 import { FileSystemEntryIcon } from './FileSystemEntryIcon'
+import { subscribeAssistantFilesSearchFocus } from '@/pages/assistant/assistant-files-search-focus'
 import { usePreviewFolderTree } from './usePreviewFolderTree'
 import { prefetchPreviewFile, preloadPreviewRenderer } from './useFilePreview'
 import { getPathName, normalizePathKey } from './previewNavigationSidebar.tree'
@@ -134,7 +139,6 @@ export type PreviewNavigationWorkspaceState = {
     expandedPathKeys?: string[]
     selectedPath?: string
     query?: string
-    searchScope?: 'project' | 'folder'
     view?: 'list' | 'icons'
 }
 
@@ -183,22 +187,33 @@ export function PreviewNavigationSidebar({
         [filesNavigationMode, initialWorkspaceState, workspacePreferenceProjectPath]
     )
     const iconTheme = settings.appearanceResolvedMode
-    const nameLayout = settings.filePreviewExplorerNameLayout
+    const nameLayout = settings.filePreviewExplorerNameLayout === 'horizontal' ? 'horizontal' : 'truncate'
+
     const [explorerOpen, setExplorerOpen] = useState(true)
     const [collapseAllRequest, setCollapseAllRequest] = useState(0)
     const [toastMessage, setToastMessage] = useState<string | null>(null)
+    const [backgroundMenuAnchor, setBackgroundMenuAnchor] = useState<PreviewTreeMenuAnchor | null>(null)
+    const closeBackgroundMenu = useCallback(() => setBackgroundMenuAnchor(null), [])
+    useEffect(() => { setBackgroundMenuAnchor(null) }, [file.path, projectPath])
     const [treePrompt, setTreePrompt] = useState<TreePromptState>(null)
     const [deleteTargets, setDeleteTargets] = useState<DevScopeFileTreeNode[]>([])
     const [workspaceFilter, setWorkspaceFilter] = useState(initialWorkspaceState?.query || '')
-    const [searchBarFocused, setSearchBarFocused] = useState(false)
-    const [searchScope, setSearchScope] = useState<'project' | 'folder'>(initialWorkspaceState?.searchScope || 'project')
+    const searchContainerRef = useRef<HTMLDivElement | null>(null)
     const [selectedWorkspacePath, setSelectedWorkspacePath] = useState(initialWorkspaceState?.selectedPath || file.path)
+    useEffect(() => subscribeAssistantFilesSearchFocus(() => {
+        const input = searchContainerRef.current?.querySelector<HTMLInputElement>('input[aria-label^="Search"]')
+        if (!input) return false
+        input.focus()
+        input.select()
+        return true
+    }), [])
     const [automaticRevealRequestId, setAutomaticRevealRequestId] = useState<string | null>(null)
     const [showHiddenFiles, setShowHiddenFiles] = useState(workspacePreferenceSeed.showHiddenFiles)
     const [workspaceView, setWorkspaceView] = useState<'list' | 'icons'>(workspacePreferenceSeed.view)
     const [workspaceSelectionCount, setWorkspaceSelectionCount] = useState(0)
     const [navigationPaneWidth, setNavigationPaneWidth] = useState(workspacePreferenceSeed.navigationPaneWidth)
     const [navigationPaneResizing, setNavigationPaneResizing] = useState(false)
+    const [compactNavigationOpen, setCompactNavigationOpen] = useState(false)
     const [persistedExpandedPathKeys, setPersistedExpandedPathKeys] = useState<string[]>(workspacePreferenceSeed.expandedPathKeys)
     const deferredWorkspaceFilter = useDeferredValue(workspaceFilter)
     const toastTimerRef = useRef<number | null>(null)
@@ -233,6 +248,18 @@ export function PreviewNavigationSidebar({
         initialFolderPath: filesNavigationMode ? workspacePreferenceSeed.currentFolderPath : null
     })
 
+    const [folderBackHistory, setFolderBackHistory] = useState<string[]>([])
+    const lastVisitedFolderRef = useRef({ root: treeRootPath, path: activeFolderPath })
+    useEffect(() => {
+        const previous = lastVisitedFolderRef.current
+        lastVisitedFolderRef.current = { root: treeRootPath, path: activeFolderPath }
+        if (normalizePathKey(previous.root) !== normalizePathKey(treeRootPath)) {
+            setFolderBackHistory([])
+        } else if (previous.path && activeFolderPath && normalizePathKey(previous.path) !== normalizePathKey(activeFolderPath)) {
+            setFolderBackHistory((history) => [...history.slice(-99), previous.path])
+        }
+    }, [activeFolderPath, treeRootPath])
+
     const navigateToFolder = useCallback((folderPath: string) => {
         const nextFolderPath = String(folderPath || '').trim()
         if (!nextFolderPath) return
@@ -243,6 +270,14 @@ export function PreviewNavigationSidebar({
             setAutomaticRevealRequestId(`preview-folder-change:${automaticRevealSequenceRef.current}:${normalizePathKey(nextFolderPath)}`)
         }
     }, [filesNavigationMode, navigateFolderTreeTo])
+
+    const navigateBack = () => {
+        const previousPath = folderBackHistory.at(-1)
+        if (!previousPath) return
+        setFolderBackHistory((history) => history.slice(0, -1))
+        lastVisitedFolderRef.current = { root: treeRootPath, path: previousPath }
+        navigateToFolder(previousPath)
+    }
 
     useEffect(() => {
         if (typeof window.requestIdleCallback === 'function') {
@@ -373,10 +408,9 @@ export function PreviewNavigationSidebar({
             expandedPathKeys: persistedExpandedPathKeys,
             selectedPath: selectedWorkspacePath,
             query: workspaceFilter,
-            searchScope,
             view: workspaceView
         })
-    }, [activeFolderPath, filesNavigationMode, onWorkspaceStateChange, persistedExpandedPathKeys, searchScope, selectedWorkspacePath, workspaceFilter, workspaceView])
+    }, [activeFolderPath, filesNavigationMode, onWorkspaceStateChange, persistedExpandedPathKeys, selectedWorkspacePath, workspaceFilter, workspaceView])
 
     useEffect(() => {
         if (filesNavigationMode) setSelectedWorkspacePath(activeFolderPath)
@@ -442,10 +476,9 @@ export function PreviewNavigationSidebar({
     const workspaceIconNodes = workspaceFolderNodes
     const workspaceFolderName = getPathName(activeFolderPath) || explorerRootName
     const searchQuery = deferredWorkspaceFilter.trim()
-    const searchScopePath = searchScope === 'folder' ? activeFolderPath : treeRootPath
     const fileSearch = usePreviewFileSearch({
         projectPath: treeRootPath,
-        scopePath: searchScopePath,
+        scopePath: treeRootPath,
         query: searchQuery,
         loadedTree: tree,
         showHidden: filesNavigationMode && showHiddenFiles
@@ -492,6 +525,29 @@ export function PreviewNavigationSidebar({
             toastTimerRef.current = null
         }, 2200)
     }, [])
+
+    const handleMoveNodes = useCallback(async (sources: DevScopeFileTreeNode[], destination: FileMoveDestination) => {
+        let moved = 0
+        const failures: string[] = []
+        for (const source of sources) {
+            try {
+                const result = await window.devscope.moveFileSystemItem(source.path, destination.path)
+                if (result.success) moved++
+                else failures.push(`${source.name}: ${result.error || 'Could not move'}`)
+            } catch (error) {
+                failures.push(`${source.name}: ${error instanceof Error ? error.message : 'Could not move'}`)
+            }
+        }
+        try {
+            await reload()
+        } catch {
+            failures.push('Could not refresh the folder. Refresh to see its current contents.')
+        }
+        showToast(failures.length
+            ? `Moved ${moved} of ${sources.length}. ${failures.join('; ')}`
+            : `Moved ${moved} ${moved === 1 ? 'item' : 'items'} to ${destination.name}`)
+    }, [reload, showToast])
+    const fileMoveDropHandlers = usePreviewFileMoveDrop(handleMoveNodes)
 
     const copyNodePath = useCallback(async (node: DevScopeFileTreeNode) => {
         try {
@@ -801,6 +857,15 @@ export function PreviewNavigationSidebar({
         }
     ], [showHiddenFiles])
 
+    const backgroundMenuItems: FileActionsMenuItem[] = [
+        { id: 'new-file', label: 'New file', icon: <ExplorerCreateIcon kind="file" />, onSelect: () => startCreate('file', activeFolderPath) },
+        { id: 'new-folder', label: 'New folder', icon: <ExplorerCreateIcon kind="directory" />, onSelect: () => startCreate('directory', activeFolderPath) },
+        { id: 'refresh', label: 'Refresh', icon: <RefreshCw className="size-3.5" />, onSelect: () => { void reload() } },
+        { id: 'details', label: 'Details view', icon: <List className="size-3.5" />, checked: workspaceView === 'list', onSelect: () => setWorkspaceView('list') },
+        { id: 'icons', label: 'Large icons', icon: <Grid3X3 className="size-3.5" />, checked: workspaceView === 'icons', onSelect: () => setWorkspaceView('icons') },
+        ...workspaceOptionsMenuItems
+    ]
+
     const promptTitle = treePrompt?.type === 'rename'
         ? `Rename ${treePrompt.target.type === 'directory' ? 'folder' : 'file'}`
         : treePrompt?.type === 'create-folder'
@@ -914,6 +979,8 @@ export function PreviewNavigationSidebar({
             <button
                 type="button"
                 onClick={() => navigateToFolder(treeRootPath)}
+                data-file-drop-path={treeRootPath}
+                data-file-drop-name={explorerRootName}
                 className={cn(
                     'flex min-w-0 flex-1 items-center gap-1.5 px-0.5 text-left text-[10px] font-semibold text-sparkle-text-secondary hover:text-sparkle-text',
                     normalizePathKey(activeFolderPath) === normalizePathKey(treeRootPath) && 'text-sparkle-text'
@@ -928,7 +995,7 @@ export function PreviewNavigationSidebar({
                 <button type="button" disabled={!activeFolderPath} onClick={() => startCreate('directory', activeFolderPath)} className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text disabled:opacity-25" title="New folder" aria-label="New folder"><ExplorerCreateIcon kind="directory" /></button>
                 <button type="button" onClick={() => void reload()} className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text" title="Refresh folder tree" aria-label="Refresh folder tree"><RefreshCw className={cn('size-3.5', folderLoading && 'animate-spin motion-reduce:animate-none')} /></button>
                 <button type="button" onClick={() => setCollapseAllRequest((request) => request + 1)} className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text" title="Collapse folder tree" aria-label="Collapse folder tree"><ChevronsDownUp className="size-3.5" /></button>
-                <button type="button" onClick={() => updateSettings({ filePreviewExplorerNameLayout: nameLayout === 'wrap' ? 'horizontal' : 'wrap' })} className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text" title={nameLayout === 'wrap' ? 'Use horizontal scrolling for long names' : 'Wrap long names'} aria-label={nameLayout === 'wrap' ? 'Use horizontal scrolling for long names' : 'Wrap long names'}>{nameLayout === 'wrap' ? <WrapText className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}</button>
+                <button type="button" onClick={() => updateSettings({ filePreviewExplorerNameLayout: nameLayout === 'truncate' ? 'horizontal' : 'wrap' })} className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text" title={nameLayout === 'truncate' ? 'Scroll names horizontally' : 'Truncate long names'} aria-label={nameLayout === 'truncate' ? 'Scroll names horizontally' : 'Truncate long names'}>{nameLayout === 'truncate' ? <Ellipsis className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}</button>
             </div>
         </div>
     )
@@ -981,7 +1048,7 @@ export function PreviewNavigationSidebar({
 
     return (
         <>
-        <div className={cn('flex min-h-0 flex-1 flex-col', filesNavigationMode ? 'bg-[color-mix(in_srgb,var(--color-bg)_97%,black)]' : 'bg-sparkle-card')}>
+        <div ref={searchContainerRef} {...fileMoveDropHandlers} className={cn('flex min-h-0 flex-1 flex-col', filesNavigationMode ? 'bg-[color-mix(in_srgb,var(--color-bg)_97%,black)]' : 'bg-sparkle-card')}>
             {variant === 'navigation' ? (
                 <>
                     {folderNavigationHeader}
@@ -1008,12 +1075,14 @@ export function PreviewNavigationSidebar({
             ) : variant === 'workspace' ? (
                 <>
                     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-white/[0.055] px-3">
-                        <button type="button" disabled={!canNavigateWorkspaceUp} onClick={() => { if (workspaceParentPath) navigateToFolder(workspaceParentPath) }} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text disabled:opacity-20" title="Up one folder" aria-label="Up one folder"><ArrowUp className="size-3.5" /></button>
+                        <button type="button" disabled={folderBackHistory.length === 0} onClick={navigateBack} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text disabled:opacity-20" title="Back to previous folder" aria-label="Back to previous folder"><ArrowLeft className="size-3.5" /></button>
+                        <button type="button" data-file-drop-path={canNavigateWorkspaceUp ? workspaceParentPath : undefined} data-file-drop-name="parent folder" disabled={!canNavigateWorkspaceUp} onClick={() => { if (workspaceParentPath) navigateToFolder(workspaceParentPath) }} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text disabled:opacity-20" title="Up one folder" aria-label="Up one folder"><ArrowUp className="size-3.5" /></button>
                         <FileSystemEntryIcon path={activeFolderPath} kind="directory" expanded light={iconTheme === 'light'} size={17} />
                         <div className="min-w-0 flex-1">
                             <h2 className="truncate text-[11px] font-semibold text-sparkle-text" title={activeFolderPath}>{workspaceFolderName}</h2>
                             <p className="truncate text-[8px] text-sparkle-text-muted/40" title={activeFolderPath}>{activeFolderPath}</p>
                         </div>
+                        <button type="button" onClick={() => setCompactNavigationOpen(true)} className="hidden size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted/55 hover:bg-white/[0.055] hover:text-sparkle-text max-[720px]:inline-flex" title="Show folders" aria-label="Show folders"><PanelLeftOpen className="size-3.5" /></button>
                         {workspaceHeaderActions ? <div className="ml-auto flex min-w-0 max-w-[45%] shrink-0 items-center justify-end" data-files-root-selector="true">{workspaceHeaderActions}</div> : null}
                     </div>
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[0.05] px-3">
@@ -1021,8 +1090,6 @@ export function PreviewNavigationSidebar({
                             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-sparkle-text-muted/35" />
                             <input
                                 value={workspaceFilter}
-                                onFocus={() => setSearchBarFocused(true)}
-                                onBlur={() => setSearchBarFocused(false)}
                                 onChange={(event) => setWorkspaceFilter(event.target.value)}
                                 onKeyDown={(event) => {
                                     if (event.key === 'Escape' && workspaceFilter) {
@@ -1030,24 +1097,12 @@ export function PreviewNavigationSidebar({
                                         setWorkspaceFilter('')
                                     }
                                 }}
-                                placeholder={searchScope === 'folder' ? 'Search this folder' : 'Search project files'}
+                                placeholder="Search files and folders"
                                 className="h-7 w-full rounded-md border border-white/[0.065] bg-white/[0.02] pl-7 pr-7 text-[9px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted/35 focus:border-[var(--accent-primary)]/30 focus:bg-white/[0.03]"
                                 aria-label="Search workspace files"
                             />
                             {workspaceFilter ? <button type="button" onClick={() => setWorkspaceFilter('')} className="absolute right-1.5 top-1/2 inline-flex size-4 -translate-y-1/2 items-center justify-center text-sparkle-text-muted/45 hover:text-sparkle-text" title="Clear file search" aria-label="Clear file search"><X className="size-3" /></button> : null}
                         </div>
-                        {searchBarFocused || workspaceFilter.trim() ? (
-                            <button
-                                type="button"
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => setSearchScope((scope) => scope === 'project' ? 'folder' : 'project')}
-                                className="inline-flex h-7 shrink-0 items-center px-1.5 text-[8px] font-medium text-sparkle-text-muted/55 hover:text-sparkle-text"
-                                title={searchScope === 'project' ? 'Search the entire project' : `Search only ${workspaceFolderName}`}
-                                aria-label="Change file search scope"
-                            >
-                                {searchScope === 'project' ? 'Project' : 'Folder'}
-                            </button>
-                        ) : null}
                         <div className="flex h-7 items-center rounded-md border border-white/[0.065] bg-white/[0.015] p-0.5" aria-label="Explorer view">
                             <button type="button" onClick={() => setWorkspaceView('list')} className={cn('inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/45', workspaceView === 'list' ? 'bg-white/[0.085] text-sparkle-text' : 'hover:text-sparkle-text')} title="Details view" aria-label="Details view"><List className="size-3.5" /></button>
                             <button type="button" onClick={() => setWorkspaceView('icons')} className={cn('inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted/45', workspaceView === 'icons' ? 'bg-white/[0.085] text-sparkle-text' : 'hover:text-sparkle-text')} title="Large icons" aria-label="Large icons"><Grid3X3 className="size-3.5" /></button>
@@ -1131,15 +1186,15 @@ export function PreviewNavigationSidebar({
                         onClick={(event) => {
                             event.stopPropagation()
                             updateSettings({
-                                filePreviewExplorerNameLayout: nameLayout === 'wrap' ? 'horizontal' : 'wrap'
+                                filePreviewExplorerNameLayout: nameLayout === 'truncate' ? 'horizontal' : 'wrap'
                             })
                         }}
                         className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text"
-                        title={nameLayout === 'wrap' ? 'Use horizontal scrolling for long names' : 'Wrap long names'}
-                        aria-label={nameLayout === 'wrap' ? 'Use horizontal scrolling for long names' : 'Wrap long names'}
-                        aria-pressed={nameLayout === 'wrap'}
+                        title={nameLayout === 'truncate' ? 'Scroll names horizontally' : 'Truncate long names'}
+                        aria-label={nameLayout === 'truncate' ? 'Scroll names horizontally' : 'Truncate long names'}
+                        aria-pressed={nameLayout === 'horizontal'}
                     >
-                        {nameLayout === 'wrap' ? <WrapText className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}
+                        {nameLayout === 'truncate' ? <Ellipsis className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}
                     </button>
                 </div>
             </div>
@@ -1149,8 +1204,6 @@ export function PreviewNavigationSidebar({
                         <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-sparkle-text-muted/35" />
                         <input
                             value={workspaceFilter}
-                            onFocus={() => setSearchBarFocused(true)}
-                            onBlur={() => setSearchBarFocused(false)}
                             onChange={(event) => setWorkspaceFilter(event.target.value)}
                             onKeyDown={(event) => {
                                 if (event.key === 'Escape' && workspaceFilter) {
@@ -1158,24 +1211,24 @@ export function PreviewNavigationSidebar({
                                     setWorkspaceFilter('')
                                 }
                             }}
-                            placeholder={searchScope === 'folder' ? 'Search this folder' : 'Search project files'}
+                            placeholder="Search files and folders"
                             className="h-6 w-full bg-transparent pl-6 pr-6 text-[9px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted/35"
                             aria-label="Search project files"
                         />
                         {workspaceFilter ? <button type="button" onClick={() => setWorkspaceFilter('')} className="absolute right-1 top-1/2 inline-flex size-4 -translate-y-1/2 items-center justify-center text-sparkle-text-muted/45 hover:text-sparkle-text" title="Clear file search" aria-label="Clear file search"><X className="size-3" /></button> : null}
                     </div>
-                    {searchBarFocused || workspaceFilter.trim() ? (
-                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => setSearchScope((scope) => scope === 'project' ? 'folder' : 'project')} className="h-6 px-1 text-[8px] font-medium text-sparkle-text-muted/50 hover:text-sparkle-text" title={searchScope === 'project' ? 'Search the entire project' : `Search only ${workspaceFolderName}`}>{searchScope === 'project' ? 'Project' : 'Folder'}</button>
-                    ) : null}
                 </div>
             ) : null}
 
             {variant === 'workspace' ? (
-                <div className="assistant-workspace-explorer-layout flex min-h-0 flex-1 overflow-hidden">
+                <div className="assistant-workspace-explorer-layout relative flex min-h-0 flex-1 overflow-hidden">
+                    {compactNavigationOpen ? <button type="button" onClick={() => setCompactNavigationOpen(false)} className="absolute inset-0 z-10 hidden bg-black/45 max-[720px]:block" aria-label="Close folders" /> : null}
                     <aside
                         className={cn(
                             'assistant-workspace-explorer-layout__tree relative min-h-0 shrink-0 flex-col overflow-hidden border-r border-white/[0.055] bg-[color-mix(in_srgb,var(--color-card)_72%,var(--color-bg))]',
-                            navigationPaneResizing ? 'transition-none' : 'transition-[width] duration-150 ease-out'
+                            navigationPaneResizing ? 'transition-none' : 'transition-[width] duration-150 ease-out',
+                            'max-[720px]:absolute max-[720px]:inset-y-0 max-[720px]:left-0 max-[720px]:z-20 max-[720px]:shadow-2xl max-[720px]:transition-transform',
+                            compactNavigationOpen ? 'max-[720px]:translate-x-0' : 'max-[720px]:-translate-x-full'
                         )}
                         style={{ width: `${navigationPaneWidth}px` }}
                         aria-label="Folder navigation pane"
@@ -1199,7 +1252,15 @@ export function PreviewNavigationSidebar({
                             <span className={cn('pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors', navigationPaneResizing ? 'bg-[var(--accent-primary)]/55' : 'bg-transparent group-hover:bg-[var(--accent-primary)]/45 group-focus-visible:bg-[var(--accent-primary)]/55')} />
                         </div>
                     </aside>
-                    <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]">
+                    <main
+                        className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]"
+                        onContextMenu={(event) => {
+                            if ((event.target as HTMLElement).closest('[data-explorer-icon-item], [data-explorer-details-row], [role="option"], button, input')) return
+                            event.preventDefault()
+                            event.stopPropagation()
+                            setBackgroundMenuAnchor({ left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 })
+                        }}
+                    >
                         {workspaceMainSurface}
                     </main>
                 </div>
@@ -1224,6 +1285,7 @@ export function PreviewNavigationSidebar({
                         </div>
                     ) : null}
         </div>
+        {backgroundMenuAnchor ? <PreviewTreeContextMenu items={backgroundMenuItems} anchor={backgroundMenuAnchor} onClose={closeBackgroundMenu} /> : null}
         <PromptModal
             isOpen={Boolean(treePrompt)}
             title={promptTitle}

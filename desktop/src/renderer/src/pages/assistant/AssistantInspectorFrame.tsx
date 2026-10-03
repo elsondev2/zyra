@@ -5,6 +5,16 @@ type InspectorFrame = { element: RefObject<HTMLDivElement | null>; presented: bo
 const InspectorFrameContext = createContext<InspectorFrame | null>(null)
 export const useInspectorFrame = () => useContext(InspectorFrameContext)
 
+/** Keep the opening pane visible while its optional workspace module loads. */
+export function AssistantInspectorLoading() {
+    return <div role="status" aria-label="Opening inspector" className="h-full min-w-0 bg-[var(--bg-primary)] p-4">
+        <div className="text-xs text-[var(--text-tertiary)]">Opening inspector…</div>
+        <div aria-hidden="true" className="mt-5 space-y-3 animate-pulse motion-reduce:animate-none">
+            {[0, 1, 2].map(index => <div key={index} className="h-8 rounded bg-[var(--bg-secondary)]" />)}
+        </div>
+    </div>
+}
+
 /** Own entrance geometry before the optional inspector code has loaded. */
 export function AssistantInspectorFrame({ open, width, children }: { open: boolean; width: number; children: ReactNode }) {
     const { settings } = useSettings()

@@ -4,6 +4,7 @@ import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import storeCatalog from '../../src/shared/plugins/openai-directory.json'
 import PluginsPage from '../../src/renderer/src/pages/plugins/PluginsPage'
 import { assistantStore } from '../../src/renderer/src/lib/assistant/store'
+import { installDesktopLinkHandler } from '../../src/renderer/src/lib/desktop-links'
 import { makePluginDirectoryFixture, fixtureStandaloneSkills, fixtureSkillOverview } from './plugin-directory-data'
 import '../../src/renderer/src/index.css'
 
@@ -11,6 +12,7 @@ const catalog = makePluginDirectoryFixture()
 const overview = structuredClone(fixtureSkillOverview)
 const clone = <T,>(value: T): T => structuredClone(value)
 const calls: Array<{ method: string; input?: unknown }> = []
+const connectedPlugins = new Set<string>()
 let releaseInstallation: (() => void) | null = null
 const switches = { failNext: false, failMethod: '', empty: false, delay: 0, installDelay: 0, holdInstall: false, preparation: 'ready' as 'metadata' | 'downloading' | 'inspecting' | 'ready' }
 const result = async (method: string, input?: unknown) => {
@@ -24,6 +26,12 @@ const result = async (method: string, input?: unknown) => {
     if (switches.failNext || switches.failMethod === method) { switches.failNext = false; switches.failMethod = ''; return { success: false, error: 'Fixture request failed. Try again.' } }
     return null
 }
+installDesktopLinkHandler(async (url) => {
+    const failure = await result('openDesktopLink', { url })
+    if (failure) return failure
+    console.info('Fixture link requested:', url)
+    return { success: true }
+})
 Object.defineProperty(navigator, 'userAgent', { configurable: true, value: navigator.userAgent + ' Electron/fixture' })
 Object.assign(document.documentElement.style, { fontFamily: 'Arial, sans-serif' })
 for (const [key, value] of Object.entries({ '--color-bg': '#111111', '--color-card': '#222222', '--color-text': '#eeeeee', '--color-text-secondary': '#a5a5a5', '--color-text-muted': '#858585', '--accent-primary': '#0ea5e9', '--accent-secondary': '#38bdf8' })) document.documentElement.style.setProperty(key, value)
@@ -41,7 +49,9 @@ const review = () => {
     Object.assign(release, { id: `fixture-release-${entry.name}`, pluginId: `fixture-${entry.name}`, name: entry.name, version: entry.version, contentDigest: 'f'.repeat(64) })
     Object.assign(release.manifest, { name: entry.name, version: entry.version, description: entry.longDescription, license: entry.license || null })
     Object.assign(release.manifest.interface, { displayName: entry.displayName, shortDescription: entry.description, developerName: entry.publisher, category: entry.category })
-    return { reviewId: download!.reviewId, expiresAt: '2099-01-01', manifest: release.manifest, release: { ...release, contributions: [{ kind: 'skills', relativePath: './skills', support: 'supported' }, ...(entry.hasMcp ? [{ kind: 'mcp', relativePath: './.mcp.json', support: 'planned' }] : []), ...(entry.hasApps ? [{ kind: 'apps', relativePath: './.app.json', support: 'planned' }] : [])], diagnostics: [] } }
+    release.skills = entry.hasSkills ? release.skills : []
+    Object.assign(release.manifest.contributions, { skills: entry.hasSkills ? './skills' : null, mcp: entry.hasMcp ? './.mcp.json' : null, apps: entry.hasApps ? './.app.json' : null })
+    return { reviewId: download!.reviewId, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), manifest: release.manifest, release: { ...release, contributions: [...(entry.hasSkills ? [{ kind: 'skills', relativePath: './skills', support: 'supported' }] : []), ...(entry.hasMcp ? [{ kind: 'mcp', relativePath: './.mcp.json', support: 'supported' }] : []), ...(entry.hasApps && !entry.hasMcp ? [{ kind: 'apps', relativePath: './.app.json', support: 'planned' }] : [])], diagnostics: [] } }
 }
 const api = {
     startPluginDownload: async ({ name }: { name: string }) => {
@@ -67,6 +77,22 @@ const api = {
     getSnapshot: async () => clone(chatSnapshot),
     getStatus: async () => ({ available: false, connected: false, connecting: false, selectedSessionId: chatSnapshot.selectedSessionId, activeThreadId: null, providerThreadId: null, message: null }),
     getPluginCatalog: async () => await result('getPluginCatalog') || { success: true, catalog: switches.empty ? { ...clone(catalog), plugins: [], releases: [], sources: [] } : clone(catalog) },
+    getPluginMcpConnections: async (pluginId: string) => {
+        const failed = await result('getPluginMcpConnections', { pluginId }); if (failed) return failed
+        const plugin = catalog.plugins.find(entry => entry.id === pluginId)
+        const release = catalog.releases.find(entry => entry.id === plugin?.activeReleaseId)
+        return { success: true, connections: release?.manifest.contributions.mcp ? [{ pluginId, name: plugin!.name, server: plugin!.name, kind: 'http', destination: 'fixture.example', state: connectedPlugins.has(pluginId) ? 'connected' : 'not-connected' }] : [] }
+    },
+    connectPluginMcp: async (pluginId: string, server: string) => {
+        const failed = await result('connectPluginMcp', { pluginId, server }); if (failed) return failed
+        connectedPlugins.add(pluginId)
+        return { success: true, toolCount: 2, authenticated: true }
+    },
+    disconnectPluginMcp: async (pluginId: string, server: string) => {
+        const failed = await result('disconnectPluginMcp', { pluginId, server }); if (failed) return failed
+        connectedPlugins.delete(pluginId)
+        return { success: true }
+    },
     listProjects: async () => ({ success: true, catalog: { projects: [{ id: 'fixture-project', name: 'Sample Project', archived: false }] } }),
     listPromptResources: async () => await result('listPromptResources') || { success: true, skills: fixtureStandaloneSkills.filter((skill) => !skill.sourceId || overview.settings.enabledSourceIds.includes(skill.sourceId)), commands: [], diagnostics: [] },
     getSkillSourceOverview: async () => await result('getSkillSourceOverview') || { success: true, ...clone(overview) },
@@ -95,11 +121,11 @@ const api = {
         await result('refreshChatPluginScope', input)
         const scope = catalog.chatScopes[0], set = catalog.pluginSets[0]
         scope.pluginSetRevision = set.revision
-        scope.plugins = set.pluginIds.map((id) => { const p = catalog.plugins.find((entry) => entry.id === id)!; const r = catalog.releases.find((entry) => entry.id === p.activeReleaseId)!; return { pluginId: p.id, releaseId: r.id, name: p.name, version: r.version, contentDigest: r.contentDigest, skillsPath: r.manifest.contributions.skills, capabilityCeiling: [] } })
+        scope.plugins = set.pluginIds.map((id) => { const p = catalog.plugins.find((entry) => entry.id === id)!; const r = catalog.releases.find((entry) => entry.id === p.activeReleaseId)!; return { pluginId: p.id, releaseId: r.id, name: p.name, version: r.version, contentDigest: r.contentDigest, skillsPath: r.manifest.contributions.skills, mcpPath: r.manifest.contributions.mcp, capabilityCeiling: [] } })
         return { success: true, diff: { added: clone(scope.plugins), removed: [], changed: [] } }
     },
     rollbackPlugin: async (input: { pluginId: string; releaseId: string }) => { await result('rollbackPlugin', input); catalog.plugins.find((entry) => entry.id === input.pluginId)!.activeReleaseId = input.releaseId; return { success: true, catalog: clone(catalog) } },
-    inspectLocalPlugin: async (input: unknown) => { await result('inspectLocalPlugin', input); const release = catalog.releases[0]; return { success: true, inspection: { reviewId: 'fixture-review', expiresAt: '2099-01-01', manifest: release.manifest, release: { ...release, contributions: [{ kind: 'skills', support: 'supported' }, { kind: 'mcp', support: 'planned' }], diagnostics: [] } } } },
+    inspectLocalPlugin: async (input: unknown) => { await result('inspectLocalPlugin', input); const release = catalog.releases[0]; return { success: true, inspection: { reviewId: 'fixture-review', expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), manifest: release.manifest, release: { ...release, contributions: [{ kind: 'skills', support: 'supported' }, { kind: 'mcp', support: 'supported' }], diagnostics: [] } } } },
     installInspectedPlugin: async (input: unknown) => {
         const failed = await result('installInspectedPlugin', input); if (failed) return failed
         if (download) {

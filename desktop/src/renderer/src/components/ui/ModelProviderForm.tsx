@@ -1,11 +1,19 @@
 import { providerFeatures } from '@shared/assistant/provider-features'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ModelProviderInput, ModelProviderConnection } from '@shared/onboarding/contracts'
 import { useSettings } from '@/lib/settings'
-import { SettingsInput, SettingsSelect } from '@/pages/settings/settings-layout'
+import { SettingsButton, SettingsInput, SettingsSelect } from '@/pages/settings/settings-layout'
 
-const field = '!h-11 !min-w-0 !w-full !rounded-lg !px-3 !text-[13px] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] disabled:opacity-50'
-export function ModelProviderForm({ onConnected, onBusyChange, initialProvider = 'opencode' }: { onConnected?: (connection: ModelProviderConnection) => void | Promise<void>; onBusyChange?: (busy: boolean) => void; initialProvider?: ModelProviderInput['provider'] }) {
+const field = 'sm:w-full'
+
+export function ModelProviderForm({ onConnected, onBusyChange, onReadyChange, initialProvider = 'opencode', lockProvider = false, formId }: {
+    onConnected?: (connection: ModelProviderConnection) => void | Promise<void>
+    onBusyChange?: (busy: boolean) => void
+    onReadyChange?: (ready: boolean) => void
+    initialProvider?: ModelProviderInput['provider']
+    lockProvider?: boolean
+    formId?: string
+}) {
     const { updateSettings } = useSettings()
     const [provider, setProvider] = useState<ModelProviderInput['provider']>(initialProvider)
     const [apiKey, setApiKey] = useState('')
@@ -16,6 +24,11 @@ export function ModelProviderForm({ onConnected, onBusyChange, initialProvider =
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
     const [success, setSuccess] = useState('')
+
+    useEffect(() => {
+        onReadyChange?.(Boolean(apiKey.trim()) && (provider !== 'custom' || Boolean(name.trim() && baseUrl.trim())))
+    }, [apiKey, baseUrl, name, onReadyChange, provider])
+
     async function connect() {
         if (busy) return
         setBusy(true); onBusyChange?.(true); setError(''); setSuccess('')
@@ -26,15 +39,26 @@ export function ModelProviderForm({ onConnected, onBusyChange, initialProvider =
             updateSettings({ assistantDefaultModel: result.connection.model })
             setSuccess(`${result.connection.label} connected`)
             await onConnected?.(result.connection)
-        } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not connect this provider.') }
-        finally { setBusy(false); onBusyChange?.(false) }
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : 'Could not connect this provider.')
+        } finally {
+            setBusy(false); onBusyChange?.(false)
+        }
     }
-    return <form className="space-y-4 text-left" onSubmit={event => { event.preventDefault(); void connect() }}>
-        <label className="block text-[12px] text-sparkle-text-secondary">Provider
-            <SettingsSelect className={`${field} mt-2`} value={provider} disabled={busy} onChange={event => { setProvider(event.target.value as ModelProviderInput['provider']); setApiKey(''); setModel(''); setError(''); setSuccess('') }}>
+
+    const changeProvider = (nextProvider: ModelProviderInput['provider']) => {
+        setProvider(nextProvider)
+        setApiKey('')
+        setModel('')
+        setError('')
+        setSuccess('')
+    }
+    return <form id={formId} className="space-y-3 text-left" onSubmit={event => { event.preventDefault(); void connect() }}>
+        {!lockProvider ? <label className="block text-[12px] text-sparkle-text-secondary">Provider
+            <SettingsSelect className={`${field} mt-2`} value={provider} disabled={busy} onChange={event => changeProvider(event.target.value as ModelProviderInput['provider'])}>
                 {(['opencode', 'anthropic', 'custom'] as const).map(id => <option key={id} value={id}>{providerFeatures(id).label}</option>)}
             </SettingsSelect>
-        </label>
+        </label> : null}
         {provider === 'custom' ? <>
             <SettingsInput className={field} aria-label="Provider name" placeholder="Provider name" value={name} disabled={busy} onChange={event => setName(event.target.value)} required />
             <SettingsInput className={field} aria-label="API base URL" placeholder="https://your-provider.com/v1" value={baseUrl} disabled={busy} onChange={event => setBaseUrl(event.target.value)} required />
@@ -44,9 +68,7 @@ export function ModelProviderForm({ onConnected, onBusyChange, initialProvider =
         </> : null}
         <SettingsInput className={`${field} placeholder:text-sparkle-text-secondary`} type="password" aria-label={`${provider === 'anthropic' ? 'Claude' : provider === 'opencode' ? 'Zen' : 'Provider'} API key`} placeholder="API key" autoComplete="off" spellCheck={false} value={apiKey} disabled={busy} onChange={event => setApiKey(event.target.value)} required />
         <SettingsInput className={`${field} placeholder:text-sparkle-text-secondary`} aria-label="Model ID" placeholder={providerFeatures(provider).modelDiscovery === 'endpoint' ? 'Model ID (optional, detected when available)' : 'Model ID'} value={model} disabled={busy} onChange={event => setModel(event.target.value)} />
-        <p className="text-[11px] leading-5 text-sparkle-text-secondary">{provider === 'opencode' ? 'Connect with a Zen API key. OpenCode currently restricts its public free tier to its own app.' : provider === 'anthropic' ? 'Uses your Anthropic API credits. Claude subscription sign-in is not supported.' : 'Use a provider that supports one of these API formats.'} A short request verifies model access.</p>
-        {!providerFeatures(provider).voice ? <p className="text-[11px] leading-5 text-sparkle-text-secondary">Voice and subscription usage require a separate ChatGPT connection.</p> : null}
-        <button className="h-10 w-full rounded-full bg-[var(--accent-primary)] px-4 text-[12px] font-medium text-[var(--accent-on-primary)] transition-opacity hover:opacity-90 disabled:opacity-50" disabled={busy || !apiKey.trim()}>{busy ? 'Connecting…' : 'Connect and use provider'}</button>
+        {!formId ? <SettingsButton type="submit" variant="accent" className="w-full" disabled={busy || !apiKey.trim()}>{busy ? 'Connecting…' : 'Connect provider'}</SettingsButton> : null}
         {error || success ? <p role={error ? 'alert' : 'status'} className={`text-[12px] leading-5 ${error ? 'text-[var(--status-danger)]' : 'text-[var(--status-success)]'}`}>{error || success}</p> : null}
     </form>
 }

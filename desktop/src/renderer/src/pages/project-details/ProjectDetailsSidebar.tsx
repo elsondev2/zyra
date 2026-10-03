@@ -1,4 +1,5 @@
-import { AlertTriangle, CheckCircle2, Command, HelpCircle, Package, Play } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Command, HelpCircle, Package, Play, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
     SCRIPT_INTENT_BADGE_CLASSES,
@@ -42,7 +43,12 @@ export function ProjectDetailsSidebar({
     onRunScript: (name: string, command: string) => void
     onShowDependencies: () => void
 }) {
-    const scriptEntries = Object.entries(scripts || {})
+    const [scriptQuery, setScriptQuery] = useState('')
+    const scriptEntries = useMemo(() => Object.entries(scripts || {}), [scripts])
+    const visibleScripts = useMemo(() => {
+        const needle = scriptQuery.trim().toLocaleLowerCase()
+        return needle ? scriptEntries.filter(([name, command]) => `${name} ${command}`.toLocaleLowerCase().includes(needle)) : scriptEntries
+    }, [scriptEntries, scriptQuery])
     const mergedDependencies = [
         ...Object.entries(dependencies || {}).map(([name, version]) => ({ name, version, scope: 'runtime' as const })),
         ...Object.entries(devDependencies || {}).map(([name, version]) => ({ name, version, scope: 'dev' as const }))
@@ -103,10 +109,13 @@ export function ProjectDetailsSidebar({
                             {scriptEntries.length}
                         </span>
                     </div>
+                    <div className="relative border-b border-white/5 px-3 py-2">
+                        <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-white/35" />
+                        <input type="search" aria-label="Search scripts" value={scriptQuery} onChange={event => setScriptQuery(event.target.value)} placeholder="Find a script" className="w-full rounded-md border border-white/10 bg-black/10 py-1.5 pl-8 pr-2 text-xs text-white/85 outline-none focus:border-[var(--accent-primary)]" />
+                    </div>
                     <div className="max-h-[380px] overflow-y-auto custom-scrollbar p-2">
-                        {scriptEntries.map(([name, command]) => {
+                        {visibleScripts.map(([name, command]) => {
                             const prediction = scriptPredictions[name] || detectScriptIntentWithConfidence(name, command, scriptIntentContext)
-                            const confidencePercent = Math.round(prediction.confidence * 100)
 
                             return (
                                 <div key={name} className="group flex items-center gap-3 p-3 hover:bg-white/5 rounded-xl transition-colors border border-transparent hover:border-white/5">
@@ -124,9 +133,6 @@ export function ProjectDetailsSidebar({
                                                 <span className={cn('text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border', SCRIPT_INTENT_BADGE_CLASSES[prediction.intent])}>
                                                     {SCRIPT_INTENT_LABELS[prediction.intent]}
                                                 </span>
-                                                <span className="text-[10px] text-white/45 bg-white/10 px-1.5 py-0.5 rounded-full border border-white/10">
-                                                    {confidencePercent}%
-                                                </span>
                                             </div>
                                         </div>
                                         <p className="text-xs text-white/40 truncate font-mono mt-0.5">{command}</p>
@@ -134,6 +140,7 @@ export function ProjectDetailsSidebar({
                                 </div>
                             )
                         })}
+                        {visibleScripts.length === 0 ? <div className="px-3 py-6 text-center text-xs text-white/45">No scripts match “{scriptQuery}”.</div> : null}
                     </div>
                 </div>
             )}

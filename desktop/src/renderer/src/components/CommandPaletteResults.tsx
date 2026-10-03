@@ -81,6 +81,7 @@ export function CommandPaletteResults({
                                                 <HighlightedChatSearchText text={result.contentMatch.snippet} query={result.contentMatch.query} />
                                             </span>
                                         ) : null}
+                                        {result.detail ? <span className="mt-1 block text-[11px] leading-4 text-sparkle-text-muted/75">{result.detail}</span> : null}
                                     </span>
                                     {result.subtitle ? (
                                         <span className="hidden max-w-[132px] truncate text-[13px] leading-5 text-sparkle-text-muted/55 sm:block">

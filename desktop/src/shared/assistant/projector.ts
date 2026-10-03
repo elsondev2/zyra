@@ -9,6 +9,7 @@ import type {
     AssistantThread
 } from './contracts'
 import { reconcileAssistantMessageReplays } from './message-reconciliation'
+import { upsertAssistantRequest } from './request-identity'
 
 // A tool-start notification can precede its permission decision. Keep that
 // activity out of the execution UI until the matching request resolves.
@@ -253,6 +254,10 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
     let shouldSortSessions = false
 
     switch (event.type) {
+        case 'models.updated': {
+            if (Array.isArray(event.payload['models'])) next.knownModels = event.payload['models'] as AssistantSnapshot['knownModels']
+            break
+        }
         case 'fleet.snapshot.updated': {
             const threadId = String(event.payload['threadId'] || event.threadId || '')
             if (threadId && event.payload['snapshot']) {
@@ -499,14 +504,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             if (!writable) break
 
             const approval = event.payload['approval'] as AssistantPendingApproval
-            const index = writable.thread.pendingApprovals.findIndex((entry) => entry.requestId === approval.requestId)
-            if (index < 0) {
-                writable.thread.pendingApprovals = [...writable.thread.pendingApprovals, approval].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-            } else if (writable.thread.pendingApprovals[index] !== approval) {
-                const nextApprovals = [...writable.thread.pendingApprovals]
-                nextApprovals[index] = approval
-                writable.thread.pendingApprovals = nextApprovals
-            }
+            writable.thread.pendingApprovals = upsertAssistantRequest(writable.thread.pendingApprovals, approval)
             writable.thread.hasPendingApprovals = writable.thread.pendingApprovals.some((entry) => entry.status === 'pending')
             projectApprovalWaitingState(writable.thread, approval.status === 'resolved')
             if (approval.status === 'resolved' && approval.decision === 'decline' && approval.toolCallId) {
@@ -525,14 +523,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             if (!writable) break
 
             const userInput = event.payload['userInput'] as AssistantPendingUserInput
-            const index = writable.thread.pendingUserInputs.findIndex((entry) => entry.requestId === userInput.requestId)
-            if (index < 0) {
-                writable.thread.pendingUserInputs = [...writable.thread.pendingUserInputs, userInput].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-            } else if (writable.thread.pendingUserInputs[index] !== userInput) {
-                const nextInputs = [...writable.thread.pendingUserInputs]
-                nextInputs[index] = userInput
-                writable.thread.pendingUserInputs = nextInputs
-            }
+            writable.thread.pendingUserInputs = upsertAssistantRequest(writable.thread.pendingUserInputs, userInput)
             writable.thread.hasPendingUserInputs = writable.thread.pendingUserInputs.some((entry) => entry.status === 'pending')
             projectApprovalWaitingState(writable.thread, userInput.status === 'resolved')
             break

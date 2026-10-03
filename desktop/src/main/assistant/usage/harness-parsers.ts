@@ -1,3 +1,4 @@
+import { assistantMessageCost } from '../../../../../src/model-pricing/message-cost.mjs'
 import { createHash } from 'node:crypto'
 import type { UsageEntry, UsageHarness } from '../../../shared/assistant/usage-summary'
 
@@ -48,7 +49,7 @@ export function parseHarnessRecord(harness: UsageHarness, obj: Json, state: Pars
     if (harness === 'claude') {
         return entry(harness, obj.sessionId || state.session, msg.id || obj.uuid || `${state.session}:${++state.sequence}`, obj.timestamp, `anthropic/${msg.model || 'unknown'}`, { inputTokens: n(u.input_tokens), outputTokens: n(u.output_tokens), cachedInputTokens: n(u.cache_read_input_tokens), cacheWriteTokens: n(u.cache_creation_input_tokens), inputIncludesCachedTokens: false })
     }
-    const record = entry(harness, state.session, msg.responseId || obj.id || `${state.session}:${++state.sequence}`, obj.timestamp || msg.timestamp, `${msg.provider || 'unknown'}/${msg.model || 'unknown'}`, { inputTokens: n(u.input), outputTokens: n(u.output), cachedInputTokens: n(u.cacheRead), cacheWriteTokens: n(u.cacheWrite), inputIncludesCachedTokens: false, ...(typeof u.cost?.total === 'number' ? { costUsd: u.cost.total } : {}) })
+    const record = entry(harness, state.session, msg.responseId || obj.id || `${state.session}:${++state.sequence}`, obj.timestamp || msg.timestamp, `${msg.provider || 'unknown'}/${msg.model || 'unknown'}`, { inputTokens: n(u.input), outputTokens: n(u.output), cachedInputTokens: n(u.cacheRead), cacheWriteTokens: n(u.cacheWrite), inputIncludesCachedTokens: false, costUsd: assistantMessageCost(msg)?.total ?? null, costSource: assistantMessageCost(msg)?.source === 'api-equivalent' ? 'api-equivalent' : u.cost?.source === 'unpriced' ? 'unpriced' : 'reported', pricingServiceTier: u.cost?.serviceTier })
     return record ? { ...record, ...(typeof msg.responseId === 'string' ? { providerResponseId: msg.responseId } : {}) } : null
 }
 

@@ -17,7 +17,7 @@ export function AppSubmenu({ label, icon, items }: { label: string; icon: ReactN
         <button ref={trigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={open}
             onClick={() => open ? setOpen(false) : show(true)}
             onKeyDown={event => { if (['ArrowRight', 'Enter', ' '].includes(event.key)) { event.preventDefault(); event.stopPropagation(); show(true); if (open) menu.current?.querySelector<HTMLButtonElement>('button')?.focus() } }}
-            className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:bg-[var(--surface-hover)]">
+            className="flex h-8 w-full items-center gap-3 rounded-lg px-2.5 text-left text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:bg-[var(--surface-hover)]">
             <span className="inline-flex size-4 shrink-0 items-center justify-center">{icon}</span><span className="min-w-0 flex-1">{label}</span><ChevronRight size={13} />
         </button>
         {open ? <AnchoredNativeOverlay anchorRef={trigger} autoFocus={false} onReady={() => { if (focusOnOpen.current) { focusOnOpen.current = false; menu.current?.querySelector<HTMLButtonElement>('button')?.focus() } }}>

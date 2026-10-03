@@ -6,17 +6,23 @@ The load-bearing decision is recorded in [ADR-0017](../adr/0017-use-revisioned-p
 
 ## Current support
 
-The implemented runtime loads **Skill contributions only**. Catalog packages can contain additional contribution types; their presence in a package does not make them executable in Zyra.
+The implemented runtime loads **Skills and MCP connections**. Catalog packages can contain additional contribution types; their presence in a package does not make them executable in Zyra.
 
 | Contribution | Current state |
 | --- | --- |
 | Skills | Supported within the exact Chat Plugin scope and normal action permissions. |
-| MCP connections/tools | Planned. Configuration can be inspected, but no Plugin MCP connection or tool-registration adapter is wired. |
+| MCP connections/tools | Supported for reviewed local stdio and Streamable HTTP servers through a scoped, lazy `plugin_mcp` Chat tool. OAuth and bearer-token environment variables are supported. |
 | Plugin Commands | Planned. Separate from existing project/custom slash commands. |
 | App views | Planned; require a sandboxed resource host. |
 | Hooks, Plugin agents, browser extensions, scheduled tasks | Unsupported; require separate execution and authority design. |
 
-MCP support still needs transport and tool-schema validation, account/credential handling, scoped tool registration, permission enforcement, cancellation, disconnect cleanup and adversarial tests. Skill instructions that refer to a package's MCP tools do not supply those tools. Installation must show this partial-support boundary before approval.
+MCP connections are approved per installed Plugin server, and OAuth sessions are held in a separate OS-encrypted store. A Chat must pin the MCP contribution path: older Chats gain no MCP authority until explicitly refreshed. The runtime starts no server at app startup, caps connections and results, and closes them on disconnect or authority revocation. MCP Apps resource views and direct first-class registration of every remote tool remain unsupported.
+
+Native MCP and mapped public app contributions are merged for newly reviewed packages, with a maximum of 32 servers. Identical descriptors deduplicate. An opaque same-endpoint app reference uses the explicit native settings; conflicting explicit descriptors fail inspection. Releases and Chat snapshots retain the reviewed additional app path and descriptor hashes. Reinspection can adopt newly supported connections, but automatic discovery never rewrites an existing contribution pin, including a null MCP pin. Legacy non-null app pins retain only the frozen established bridge set and explicit package URLs.
+
+The eight-connection pool limit applies to simultaneous connections, not the number of integrations a Chat can use over time. Capacity pressure closes the least recently used idle connection. Borrowed connections are protected during tool discovery, execution and app-resource reads. Provider `isError` results remain errors in the agent-facing tool result, and invalidated OAuth credentials clear readiness.
+
+Opaque ChatGPT app IDs are not portable endpoints. An app-only package with no supported Skill or MCP contribution is not offered as a working install. Provider client registration, approved-client lists, administrator policy, account plans and regional endpoints still apply. Endpoint documentation alone does not prove Zyra is an eligible OAuth client.
 
 ## Product model
 
@@ -33,7 +39,7 @@ Plugins is a directory and management product. Its core objects are:
 - Chat Plugin scope
 - Plugin connection
 
-The intended complete workflow is below. Connection setup, `@plugin`, and uninstall steps remain planned as listed in the implementation phases.
+The workflow below separates package review, account consent and Chat authority. Catalog **Install & connect** activates the reviewed package and then connects its configured servers sequentially. Sign-in failure leaves the package installed and any completed connections intact; retry uses the existing Connect action, not another download. Skills-only installation needs no account. `@plugin` and uninstall remain planned as listed in the implementation phases.
 
 1. Browse or add a Plugin source.
 2. Inspect a Plugin and one release.
@@ -154,6 +160,8 @@ The inspector rejects:
 
 The installer copies bytes. It never evaluates a manifest, imports Plugin modules, invokes a package manager, or runs lifecycle scripts. Local package paths and install confirmation are accepted only from trusted Desktop IPC; the browser Assistant bridge can manage already-installed Plugins but cannot inspect or install local packages. Browser catalog projection also removes absolute source and installed-release paths.
 
+Catalog installation uses the user's first **Install** click as the install intent. The window-owned controller downloads the pinned release, waits for native inspection, and activates that exact unexpired review without a second confirmation screen. Local-folder imports retain explicit review. Digest validation, window ownership, contribution validation, and existing Chat pins remain unchanged. The installed product page exposes the same MCP connection service as settings; the user explicitly starts account authorization or local-server connection there. Installation never opens OAuth or starts a server on its own.
+
 ## Installation lifecycle
 
 ```text
@@ -242,23 +250,35 @@ A package may include scripts inside a Skill. Their presence raises the Plugin's
 
 ### MCP tools
 
-**Status: planned.**
+**Status: implemented for core stdio and Streamable HTTP tools.**
 
-The planned MCP adapter starts connections on demand. It must not connect every installed Plugin at application startup.
+Plugin detail lists declared servers and offers explicit connection/disconnection. Local connection runs the reviewed command; remote connection can launch an OAuth browser sign-in. The Chat tool first lists pinned servers, then one server's advertised tools, then calls an exact advertised tool. These connections are per Chat, lazy, bounded to eight concurrent servers, and closed after idle time or Chat teardown. Tool calls use the existing Chat permission gate: Supervised and Edits only request approval, Auto review uses the permission reviewer and escalates consequential actions, and Full access bypasses Zyra approval checks (ADR-0014). Account consent remains an independent authorization ceiling. The model cannot widen the pinned Plugin/release/server set. Package configuration, tool result size, and request time are bounded.
 
-The host validates server configuration, transport, destination, authentication mode, tool schemas, output bounds, cancellation, and timeout before registering tools. Registered Plugin tools remain inactive until deferred search selects them.
+The generic Chat tool conservatively flags remote calls for the existing permission policy. Advertised read/write annotations are information, not authority, and do not bypass that policy. Email approval summaries reveal only operation and recipient/content/upload counts, never message content, attachment bytes or credentials. App resources, prompts, and subscriptions from MCP servers are not exposed as Plugin contributions.
 
-Each normalized tool carries host-owned metadata describing:
+### Gmail API adapter
 
-- Plugin and release identity;
-- read or write class;
-- possible external side effect;
-- allowed network destination;
-- credential requirement;
-- input and output size limits;
-- cancellation and timeout behavior.
+The installed Gmail HTTP contribution is retained as its pinned Plugin/server identity, but Desktop routes it to a host-owned regular Gmail API adapter. No Gmail preview MCP discovery or mailbox endpoint is used. API adapters share the existing lazy Chat pool, connection authorization, `plugin_mcp` discovery/calls, bounded results, idle cleanup, disconnect and revocation fences. Packages cannot supply or select an API adapter.
 
-Missing metadata blocks the call. The model cannot supply or widen this metadata.
+Google sign-in still uses the app-owned encrypted Desktop registration, loopback callback, state binding and PKCE. Reconnect requests `gmail.readonly`, `gmail.compose` and `gmail.modify` through Google's normal consent screen; it does not silently upgrade an existing grant or require developer credentials from the user. Existing narrower tokens remain usable. Actual scopes are verified with Google's tokeninfo endpoint, recorded in the encrypted token store and rechecked after refresh. Requested scopes and package configuration never imply granted permissions. Token refresh cannot widen access, and disconnect cannot resurrect credentials through an in-flight refresh or sign-in.
+
+Discovery and every execution enforce those verified scopes. Read-only permits mail and draft reading; compose permits draft CRUD and sending; send alone permits sending a new message but not sending an existing draft; modify permits normal mail/label changes. `get_permissions` reports the granted capabilities without credentials. Connection status becomes Connected only after a real, safe Gmail profile/labels request, not OAuth or public tool discovery alone. A send-only token cannot satisfy this safe mailbox verifier; the consent flow requests compose (which permits profile verification), not send alone. If encrypted credential removal fails, the connection owner still denies runtime access and closes its pools; the removal error remains visible and durable cleanup must be retried before restarting. Permanent message/thread deletion and settings/delegation management are not exposed.
+
+The adapter supports search, paginated message/thread/draft reads, bounded plain-text/HTML body views, attachment data, MIME composition, replies, draft creation/update/deletion, direct/draft sends, labels, archive/read/star changes, reversible trash and spam actions. HTML is inert data. Compose/attachment arguments remain within the shared 64-KiB tool-input limit; outputs retain the shared 256-KiB limit. The adapter never opens a local attachment path or bypasses filesystem permissions. Writes are never retried after uncertain network results; an explicit HTTP 401 rejection permits one refresh/retry. Sends continue through the same Chat permission mode, not a Gmail-specific approval system.
+
+Focused checks: root `test:gmail-api`; Desktop `test:google-gmail-api` and `test:google-plugin-mcp`.
+
+### Calendar and Drive API adapters
+
+The exact reviewed Calendar and Drive preview descriptors also route to host-owned regular APIs. `GooglePluginApiAuth` owns encrypted refresh and actual granted-scope verification for all three services. Normal reconnect requests product-specific consent; existing grants never gain scopes through refresh or discovery. Connected requires a real safe product read, advertised tools and the same installed release and server descriptor before and after credential approval. Disconnect and release-change races cannot restore approval.
+
+Calendar supports bounded calendar/event reads, REST keyword search, recurrence expansion, all-day dates, pagination and fail-closed free/busy suggestions. Event changes require actual write scopes. Patches preserve omitted fields and durations, use ETags, and RSVP changes only the authenticated self attendee. No calendar deletion, ACL/settings mutation or special event writes are exposed.
+
+Drive distinguishes all-file reads from `drive.file` app-accessible reads and writes. Content/export/upload data is explicit and bounded. Updates preserve omitted metadata, use available ETags and warn when concurrency protection is unavailable. Trash is reversible; ownership transfer, permanent deletion, public sharing, arbitrary download destinations and local-file access are unavailable. Scope checks apply both to tool execution and generated HTTP operations.
+
+Neither adapter retries uncertain writes. Only an explicit HTTP 401 rejection permits one refresh and retry. Accepted writes with unreadable results warn against repeating the action. Chat permission modes remain unchanged.
+
+Focused checks: root `test:google-api` and `test:plugin-connections`; Desktop `test:google-plugin-api` and `test:plugin-install-connect`. Synthetic coverage is separate from live account evidence. Local main-process changes require activation before the running Chat can use them.
 
 ### Commands
 
@@ -303,6 +323,8 @@ The Plugin store uses an independent migration version and atomic writes or dedi
 
 Persisted state contains normalized bounded records. Capacity and serialized-size limits fail closed before mutation; they never evict an existing Chat Plugin scope or referenced Plugin release to make room. Raw marketplace responses, package archives, OAuth responses, tokens, prompt text, and unbounded diagnostics are excluded.
 
+MCP tokens and app-owned OAuth registrations use separate OS-encrypted stores. Google Desktop registration includes both its client ID and client secret; PKCE does not replace the registered client's token-endpoint requirements. The developer provisioning tool imports Desktop client JSON through a native file picker or accepts a newly issued secret through a local masked input. It checks the existing client identity and stores only the registration fields. The masked input uses an isolated nonpersistent renderer, denies navigation and new windows, and accepts submissions only from its own main frame. Credential values never enter Chat, browser authorization URLs, process output, or Plugin packages. Provisioning selects the installation profile before Electron readiness and quits gracefully so the encryption key persists.
+
 ## Recovery
 
 On startup Zyra:
@@ -319,11 +341,11 @@ Disabling a Plugin uses a dedicated authority-revocation path. Ordinary Desktop 
 
 Older servers must support the revocation operation before the registry changes. A cleanup error or timeout is reported as failure, never successful revocation. If the server becomes unreachable after registry persistence but before receiving revocation, local grants are revoked but server-side work may still be running. Retry or a verified clean server stop is required to establish that it ended. Completed effects and deliberately escaped processes cannot be undone by this mechanism.
 
-Uninstall and Plugin account connections remain planned. Their eventual implementation must wait for cleanup and remove only credentials owned by the selected Plugin after explicit confirmation.
+Uninstall remains planned. MCP connection removal already clears only that Plugin server's encrypted credentials and closes its active Chat connections. Broader Plugin account management remains future work.
 
 ## Implementation phases
 
-Current source status: Phase 1 and the Skill-only product workflow are implemented. The directory uses bundled pinned metadata; Desktop supports local-folder import and verified catalog downloads, exact-release review, installation state, global/Project availability, Use in Chat, explicit Chat scope refresh, disable with acknowledged runtime cleanup, and rollback. Arbitrary remote-source management, uninstall, Plugin account connections, MCP tools, `@plugin` invocation, hooks and isolated Plugin UI remain future work.
+Current source status: Phase 1 plus core Plugin MCP connection, OAuth, and Chat-tool workflow are implemented. The directory uses bundled pinned metadata; Desktop supports local-folder import and verified catalog downloads, exact-release review, installation state, global/Project availability, Use in Chat, explicit Chat scope refresh, disable with acknowledged runtime cleanup, and rollback. Arbitrary remote-source management, uninstall, broader Plugin account management, `@plugin` invocation, hooks, first-class per-tool MCP capability classification, and isolated Plugin UI remain future work.
 
 Publisher descriptions are labeled as publisher text and accompanied by the current host-support boundary. `plugin-description-overrides.json` holds reviewed Zyra-written summaries where vendor copy would be misleading; the catalog records their origin so they are never attributed to the publisher. `node scripts/update-plugin-directory.mjs --apply-descriptions` applies those summaries without changing the upstream commit or package pins.
 

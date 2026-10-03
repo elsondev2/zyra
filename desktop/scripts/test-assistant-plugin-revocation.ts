@@ -28,7 +28,7 @@ try {
         revokePrincipal(principal: ControlPrincipal) { grants.revokeByPrincipal(principal); grants.removePendingByPrincipal(principal) }
     }) }))
     const { AssistantService } = await import('../src/main/assistant/service')
-    const { ZyraPiRuntime } = await import('../src/main/assistant/zyra-pi-runtime')
+    const { ZyraRuntime } = await import('../src/main/assistant/zyra-runtime')
     const { ZyraPluginRegistry } = await import(pathToFileURL(join(root, 'src/plugins/plugin-registry.mjs')).href)
     const { ZyraAgentServer } = await import(pathToFileURL(join(root, 'src/agent-server/server.mjs')).href)
     const { CanonicalChatCatalog } = await import(pathToFileURL(join(root, 'src/agent-server/catalog.mjs')).href)
@@ -93,7 +93,7 @@ try {
     cleanup.push(() => registry.dispose())
     ;(registry as any).registryPromise = Promise.resolve(coreRegistry)
     const source = (await registry.getChatSkillSources('session:affected'))[0]!
-    const runtime = new ZyraPiRuntime()
+    const runtime = new ZyraRuntime()
     ;(runtime as any).agentServerConnection = connection
     runtime.checkAvailability = async () => ({ available: true, reason: null })
     const session = { id: 'session:affected', mode: 'default', workingRoot: fixture, threads: [{ id: 'thread:affected', providerThreadId: 'chat:affected', runtimeMode: 'approval-required' }] }
@@ -135,7 +135,7 @@ try {
     connection.updatePluginAuthority = updateAuthority
     await service.setPluginState(source.pluginId, 'disabled')
     assert.equal((await registry.getCatalog()).plugins[0]?.state, 'disabled')
-    await assert.rejects(() => service.getSessionPluginSkillSources(session), /disabled/i, 'next-turn resolution fails closed until explicit scope refresh')
+    assert.deepEqual(await service.getSessionPluginSkillSources(session), [], 'automatic discovery excludes disabled plugins on the next turn')
     assert.equal(affectedServerSession.latestTurn.id, 'turn:affected')
     assert.equal(affectedServerSession.latestTurn.state, 'interrupted', 'late worker completion cannot turn a revoked turn into success')
     assert.equal(grants.list().find((grant) => grant.grantId === rootGrant.grantId)?.state, 'revoked', 'detached root grants are revoked before disable succeeds')
@@ -209,6 +209,22 @@ try {
     await assert.rejects(() => pendingAttach, (error: any) => error.code === 'AGENT_SERVER_PLUGIN_AUTHORITY_REVOKED')
     assert.equal(connectingWorker.disposed, true, 'a connect already in flight cannot resurrect revoked authority')
 
+    const autoThread = { id: 'thread:auto', providerThreadId: 'chat:auto', runtimeMode: 'approval-required' } as any
+    await runtime.connect(autoThread, fixture)
+    const emptyContext = (runtime as any).getSessionContext(autoThread.id)
+    const mcpSource = { pluginId: 'auto-plugin', releaseId: 'auto-release', contentDigest: 'a'.repeat(64), name: 'Auto', packagePath: fixture, servers: [] }
+    await runtime.connect(autoThread, fixture, null, [], [mcpSource])
+    const context = (runtime as any).getSessionContext(autoThread.id)
+    assert.notEqual(context, emptyContext, 'already connected empty Chats reload newly available MCP integrations')
+    assert.equal(context.pluginMcpSources[0].pluginId, 'auto-plugin')
+    context.activeTurnId = 'turn:auto-running'
+    await runtime.connect(autoThread, fixture, null, [], [])
+    assert.equal((runtime as any).getSessionContext(autoThread.id), context, 'automatic refresh never replaces an active turn')
+    context.activeTurnId = null
+    await runtime.connect(autoThread, fixture, null, [], [])
+    assert.notEqual((runtime as any).getSessionContext(autoThread.id), context, 'changed integration lists reload at the next turn boundary')
+    assert.deepEqual((runtime as any).getSessionContext(autoThread.id).pluginMcpSources, [])
+    runtime.disconnect(autoThread.id)
     const { ZyraAgentServerClient } = await import(pathToFileURL(join(root, 'src/agent-server/client.mjs')).href)
     const untrusted = new ZyraAgentServerClient({ root, stateDirectory: fixture, channel, autoStart: false, clientId: 'fixture:tui', surface: 'tui' })
     try {

@@ -1,5 +1,8 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 function hasZyraSdk(candidate: string): boolean {
     return existsSync(join(candidate, 'src', 'zyra-sdk.mjs'))

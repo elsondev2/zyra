@@ -3,6 +3,27 @@ export const ASSISTANT_TIMELINE_MIN_END_THRESHOLD_PX = 96
 
 export type AssistantTimelineScrollMode = 'following-end' | 'free-scrolling'
 
+export type AssistantTimelineFocusOwnership = {
+    windowKey: string
+    followKey: string | null
+    suppressedId: string | null
+}
+
+export function resolveAssistantTimelineFocusAfterFollow(previous: AssistantTimelineFocusOwnership | null, input: {
+    windowKey: string
+    followLatestRequestKey: string | null
+    focusMessageId: string | null
+}): { state: AssistantTimelineFocusOwnership; focusMessageId: string | null } {
+    let state = previous?.windowKey === input.windowKey
+        ? previous
+        : { windowKey: input.windowKey, followKey: null, suppressedId: null }
+    if (input.followLatestRequestKey && state.followKey !== input.followLatestRequestKey) {
+        state = { ...state, followKey: input.followLatestRequestKey, suppressedId: input.focusMessageId }
+    }
+    if (state.suppressedId !== input.focusMessageId) state = { ...state, suppressedId: null }
+    return { state, focusMessageId: input.focusMessageId === state.suppressedId ? null : input.focusMessageId }
+}
+
 export type AssistantTimelineScrollMetrics = {
     scrollHeight: number
     scrollTop: number

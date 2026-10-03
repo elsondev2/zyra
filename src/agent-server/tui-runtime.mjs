@@ -1,6 +1,8 @@
+import { normalizeCanonicalMessageSourceId } from '../message-identity.mjs';
+import { assistantMessageCost } from '../model-pricing/message-cost.mjs';
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { createZyraPiRuntime } from "../pi-runtime.mjs";
+import { createZyraRuntime } from "../zyra-runtime.mjs";
 import {
   defaults,
   getProjectSessionsDir,
@@ -67,7 +69,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const connected = asRecord(attached.connected) || {};
   const connectedConfig = normalizeRemoteChatConfig(asRecord(connected.config) || connected);
   const canonicalChatId = String(attached.canonicalChatId || attached.sessionKey);
-  const { modelRegistry } = await createZyraPiRuntime();
+  const { modelRegistry } = await createZyraRuntime();
   registerZyraRuntimeModels(modelRegistry);
   const model = resolveModel(modelRegistry, String(connectedConfig.model || connected.model || preferences.model));
   const sessionFile = typeof connected.sessionFile === "string" ? connected.sessionFile : null;
@@ -76,11 +78,12 @@ export async function createZyraTuiClientRuntime(options = {}) {
   };
   const connectedUsage = asRecord(connected.usage);
   const connectedCost = asRecord(connectedUsage?.cost);
-  let cumulativeCost = Number(connectedCost?.total);
+  let cumulativeCost = typeof connectedUsage?.cost === 'number' ? connectedUsage.cost : Number(connectedCost?.total);
   if (!Number.isFinite(cumulativeCost)) cumulativeCost = sumRemoteMessageCost(state.messages);
+  let costComplete = connectedUsage?.costComplete ?? state.messages.filter(message => message?.role === "assistant" && message.usage).every(message => assistantMessageCost(message) != null);
   const costAccountedMessageIds = new Set(state.messages
     .filter((message) => message?.role === "assistant" && message.id)
-    .map((message) => message.id));
+    .map((message) => normalizeCanonicalMessageSourceId(message.id)));
   let currentSessionName = asString(connected.sessionName);
   let currentProject = asString(connected.cwd) || asString(connected.project) || project;
   let historyEvents = [];
@@ -270,9 +273,15 @@ export async function createZyraTuiClientRuntime(options = {}) {
       }
     }
     if (event.type === "user_input_requested") presentUserInputRequest(event);
-    if (event.type === "message_end" && event.message?.role === "assistant" && event.message.id && !costAccountedMessageIds.has(event.message.id)) {
-      cumulativeCost += Number(event.message.usage?.cost?.total) || 0;
-      costAccountedMessageIds.add(event.message.id);
+    if (event.type === "message_end" && event.message?.role === "assistant" && event.message.id && !costAccountedMessageIds.has(normalizeCanonicalMessageSourceId(event.message.id))) {
+      const price = assistantMessageCost(event.message);
+      cumulativeCost += price?.total ?? 0;
+      if (!price) costComplete = false;
+      costAccountedMessageIds.add(normalizeCanonicalMessageSourceId(event.message.id));
+    }
+    if (event.sessionUsage && typeof event.sessionUsage.cost === "number") {
+      cumulativeCost = event.sessionUsage.cost;
+      costComplete = event.sessionUsage.costComplete === true;
     }
     updateMessages(state.messages, event);
     if (event.type === "fleet_snapshot" || String(event.type || "").startsWith("agent.") || String(event.type || "").startsWith("workflow.")) {
@@ -523,7 +532,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
     getSessionName: () => currentSessionName,
     getCwd: () => currentProject,
     getEntries: () => state.messages.map((message, index) => ({ type: "message", id: message.id || `remote-message:${index}`, message })),
-    getSessionUsage: () => ({ cost: { total: cumulativeCost } }),
+    getSessionUsage: () => ({ cost: { total: cumulativeCost, complete: costComplete, source: "api-equivalent" } }),
     appendCustomEntry: () => undefined
   };
 
@@ -721,7 +730,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
     async syncAuthProvider(providerValue) {
       const provider = String(providerValue || "").trim();
       if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider)) throw new Error("Auth refresh provider is invalid.");
-      const result = await modelRegistry.authStorage.modelRuntime.refresh({ allowNetwork: false, providers: [provider] });
+      const result = await modelRegistry.authStorage.refreshAuthProvider(provider);
       const refreshError = result?.errors?.get?.(provider);
       if (refreshError) throw refreshError;
       return client.request("auth.refresh", { provider });
@@ -880,9 +889,9 @@ function resolveModel(modelRegistry, selector) {
 
 function updateMessages(messages, event) {
   if (!["message_start", "message_update", "message_end"].includes(event.type) || !event.message) return;
-  const incoming = event.message;
+  const incoming = { ...event.message, id: normalizeCanonicalMessageSourceId(event.message.id) };
   const id = incoming.id;
-  let index = id ? messages.findIndex((message) => message?.id === id) : -1;
+  let index = id ? messages.findIndex((message) => normalizeCanonicalMessageSourceId(message?.id) === id) : -1;
   if (index < 0 && event.type !== "message_start" && incoming.role) {
     for (let candidate = messages.length - 1; candidate >= 0; candidate -= 1) {
       // A snapshot without a matching id may complete this turn's streaming
@@ -902,7 +911,8 @@ function updateMessages(messages, event) {
 function dedupeRemoteMessages(messages) {
   const result = [];
   const indexById = new Map();
-  for (const message of messages) {
+  for (const original of messages) {
+    const message = { ...original, id: normalizeCanonicalMessageSourceId(original?.id) };
     const id = message?.id;
     const existingIndex = id ? indexById.get(id) : undefined;
     if (existingIndex !== undefined) {
@@ -934,7 +944,7 @@ function normalizeRemoteChatConfig(value) {
 
 function sumRemoteMessageCost(messages) {
   return messages.reduce((total, message) => (
-    message?.role === "assistant" ? total + (Number(message.usage?.cost?.total) || 0) : total
+    message?.role === "assistant" ? total + (assistantMessageCost(message)?.total ?? 0) : total
   ), 0);
 }
 

@@ -1,3 +1,4 @@
+import { estimateAssistantTurnCostUsd } from './pricing'
 import type { AssistantSessionTurnUsageEntry } from './contracts'
 
 export type UsageRange = 7 | 30 | 90 | 365 | 'all'
@@ -5,7 +6,7 @@ export type UsageHarness = 'zyra' | 'codex' | 'claude' | 'opencode' | 'pi' | 'de
 export type UsageSummaryInput = { days?: UsageRange; timeZone?: string; harness?: UsageHarness | 'all' }
 export const usageHarnessLabels: Record<UsageHarness, string> = { zyra: 'Zyra', codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi', devscope: 'DevScope', 'zyra-cli': 'Zyra CLI' }
 export type UsageSource = { id: UsageHarness; state: 'ready' | 'indexing' | 'missing' | 'error'; files: number; records: number; updatedAt?: string; error?: string }
-export type UsageEntry = Pick<AssistantSessionTurnUsageEntry, 'id' | 'model' | 'requestedAt' | 'usage'> & Partial<Pick<AssistantSessionTurnUsageEntry, 'threadId' | 'sessionId' | 'updatedAt'>> & { harness?: UsageHarness; providerResponseId?: string }
+export type UsageEntry = Pick<AssistantSessionTurnUsageEntry, 'id' | 'model' | 'requestedAt' | 'usage'> & Partial<Pick<AssistantSessionTurnUsageEntry, 'threadId' | 'sessionId' | 'updatedAt' | 'serviceTier'>> & { harness?: UsageHarness; providerResponseId?: string }
 export type UsageTotals = { input: number; output: number; cached: number; cacheWrite: number; tokens: number; costUsd: number; turns: number; meteredTurns: number; pricedTurns: number }
 export type UsageBreakdown = UsageTotals & { id: string; provider: string; model: string; harness?: UsageHarness }
 export type UsageDayModel = UsageBreakdown & { date: string }
@@ -66,12 +67,16 @@ export function buildUsageSummary(turns: readonly UsageEntry[], input: UsageSumm
             const includesCache = usage.inputIncludesCachedTokens ?? (slash < 0 && provider === 'openai-codex')
             values.cached = number(usage.cachedInputTokens)
             values.cacheWrite = number(usage.cacheWriteTokens)
-            values.input = Math.max(0, number(usage.inputTokens) - (includesCache ? values.cached : 0))
+            values.input = Math.max(0, number(usage.inputTokens) - (includesCache ? values.cached + values.cacheWrite : 0))
             values.output = number(usage.outputTokens)
             // totalTokens is sometimes the current context size, not consumed tokens.
             values.tokens = values.input + values.output + values.cached + values.cacheWrite
             values.meteredTurns = [usage.inputTokens, usage.outputTokens, usage.cachedInputTokens, usage.cacheWriteTokens].some(finite) ? 1 : 0
-            if (finite(usage.costUsd)) { values.costUsd = usage.costUsd; values.pricedTurns = 1 }
+            const estimatedCost = estimateAssistantTurnCostUsd(turn.model, { ...usage, inputIncludesCachedTokens: includesCache }, turn.serviceTier)
+            const cost = usage.costSource !== 'unpriced' && finite(usage.costUsd)
+                && (usage.costSource === 'reported' || usage.costUsd > 0 || estimatedCost === 0 || values.tokens === 0)
+                ? usage.costUsd : estimatedCost
+            if (finite(cost)) { values.costUsd = cost; values.pricedTurns = 1 }
         }
         if (dayModels) {
             const key = `${day.date}:${id}`

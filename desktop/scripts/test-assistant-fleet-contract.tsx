@@ -147,6 +147,10 @@ assert.match(markup, /openai-codex\/gpt-5\.6-terra/)
 assert.doesNotMatch(markup, /<details\b/, 'run details are not an inline disclosure')
 assert.doesNotMatch(markup, /data-testid="assistant-agent-directory"/, 'agent details replace the directory as a dedicated page')
 
+const workflowTargetMarkup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={fleet} selectedAgentRunId={null} selectedWorkflowRunId="workflow-1" onSelectAgent={() => {}} onSelectWorkflow={() => {}} stateCapsule={{ version: 1, workspace: 'agents', section: 'agents' }} />)
+assert.match(workflowTargetMarkup, /data-testid="assistant-workflow-detail-page"/, 'an explicit workflow target selects its detail section on the first render, including after agent-section restoration')
+assert.match(workflowTargetMarkup, /data-workflow-run-id="workflow-1"/, 'the requested workflow remains the exact selected target')
+
 assert.equal(ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE, 9)
 const manyAgents = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
     const agentRunId = `agent-${index + 1}`

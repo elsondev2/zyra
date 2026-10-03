@@ -204,7 +204,7 @@ try {
     const ipcHandlersSource = readFileSync(new URL('../src/main/ipc/handlers.ts', import.meta.url), 'utf8')
     const preloadSource = readFileSync(new URL('../src/preload/adapters/assistant-adapter.ts', import.meta.url), 'utf8')
     const browserBridgeSource = readFileSync(new URL('../src/main/assistant/browser-assistant-bridge.ts', import.meta.url), 'utf8')
-    const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+    const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
     const workerSource = readFileSync(new URL('../src/main/assistant/zyra-agent-server-worker.ts', import.meta.url), 'utf8')
     const serverSource = readFileSync(new URL('../../src/agent-server/server.mjs', import.meta.url), 'utf8')
     const bridgeSource = readFileSync(new URL('../../src/zyra-ui-bridge.mjs', import.meta.url), 'utf8')

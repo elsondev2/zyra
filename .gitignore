@@ -12,7 +12,7 @@ shims/
 /review-markdown-image.png
 /AGENTS.override.md
 /AGENTS.local.md
-/docs.local/
+docs.local/
 /.release/
 tmp/
 output/
@@ -47,6 +47,7 @@ desktop/.zyra/
 desktop/*.log
 desktop/.env
 desktop/.env.*
+/src/runtime/.declarations/
 desktop/electron.vite.config.*.mjs
 /desktop/[Nn][Uu][Ll]
 /[Nn][Uu][Ll]

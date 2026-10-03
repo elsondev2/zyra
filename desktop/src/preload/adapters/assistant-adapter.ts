@@ -42,9 +42,13 @@ import type {
     AssistantSetPlaygroundRootInput,
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
+    AssistantSetPluginAppViewSettingsInput,
+    AssistantReadPluginAppViewInput,
+    AssistantCallPluginAppViewToolInput,
     AssistantSetSessionProjectInput,
     AssistantUpdateSessionConfigurationInput,
     AssistantTranscribeVoiceInput,
+    AssistantSaveVoiceHistoryInput,
     AssistantUpdateProjectInput,
     AssistantUserInputResponseInput,
     FleetOperationInput
@@ -72,6 +76,9 @@ export function createAssistantAdapter() {
             listModels: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.listModels, forceRefresh),
             listProjects: () => ipcRenderer.invoke(ASSISTANT_IPC.listProjects),
             getPluginCatalog: () => ipcRenderer.invoke(ASSISTANT_IPC.getPluginCatalog),
+            getPluginMcpConnections: (pluginId: string) => ipcRenderer.invoke(ASSISTANT_IPC.getPluginMcpConnections, pluginId),
+            connectPluginMcp: (pluginId: string, serverName: string) => ipcRenderer.invoke(ASSISTANT_IPC.connectPluginMcp, pluginId, serverName),
+            disconnectPluginMcp: (pluginId: string, serverName: string) => ipcRenderer.invoke(ASSISTANT_IPC.disconnectPluginMcp, pluginId, serverName),
             startPluginDownload: (input: AssistantStartPluginDownloadInput) => ipcRenderer.invoke(ASSISTANT_IPC.startPluginDownload, input),
             getPluginDownload: (input: AssistantPluginDownloadInput) => ipcRenderer.invoke(ASSISTANT_IPC.getPluginDownload, input),
             cancelPluginDownload: (input: AssistantPluginDownloadInput) => ipcRenderer.invoke(ASSISTANT_IPC.cancelPluginDownload, input),
@@ -86,6 +93,12 @@ export function createAssistantAdapter() {
                 ipcRenderer.invoke(ASSISTANT_IPC.refreshChatPluginScope, input),
             setPluginState: (input: AssistantSetPluginStateInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.setPluginState, input),
+            setPluginAppViewSettings: (input: AssistantSetPluginAppViewSettingsInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.setPluginAppViewSettings, input),
+            readPluginAppView: (input: AssistantReadPluginAppViewInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.readPluginAppView, input),
+            callPluginAppViewTool: (input: AssistantCallPluginAppViewToolInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.callPluginAppViewTool, input),
             rollbackPlugin: (input: AssistantRollbackPluginInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.rollbackPlugin, input),
             createProject: (input: AssistantCreateProjectInput, candidateId?: string) =>
@@ -170,6 +183,10 @@ export function createAssistantAdapter() {
             },
             getVoiceTranscriptionState: () => ipcRenderer.invoke(ASSISTANT_IPC.getVoiceTranscriptionState),
             transcribeVoice: (input: AssistantTranscribeVoiceInput) => ipcRenderer.invoke(ASSISTANT_IPC.transcribeVoice, input),
+            saveVoiceHistory: (input: AssistantSaveVoiceHistoryInput) => ipcRenderer.invoke(ASSISTANT_IPC.saveVoiceHistory, input),
+            listVoiceHistory: () => ipcRenderer.invoke(ASSISTANT_IPC.listVoiceHistory),
+            getFailedVoiceRecording: (id: string) => ipcRenderer.invoke(ASSISTANT_IPC.getFailedVoiceRecording, id),
+            deleteVoiceHistory: (id: string) => ipcRenderer.invoke(ASSISTANT_IPC.deleteVoiceHistory, id),
             onEvent: (callback: (payload: AssistantEventStreamPayload) => void) => {
                 const listener = (_event: Electron.IpcRendererEvent, payload: AssistantEventStreamPayload) => {
                     callback(payload)

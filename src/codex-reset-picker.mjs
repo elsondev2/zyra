@@ -1,5 +1,5 @@
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, SelectList, Text } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "./runtime/engine/src/index.js";
+import { Container, SelectList, Text } from "./runtime/terminal/src/index.js";
 import { formatCodexResetChoiceDescription } from "./codex-reset-format.mjs";
 import { buildTerminalTheme } from "./terminal-theme.mjs";
 

@@ -1,5 +1,6 @@
 import type {
     AssistantActivity,
+    AssistantDomainEvent,
     AssistantHistoryPage,
     AssistantProposedPlan,
     AssistantShellSnapshot,
@@ -153,6 +154,7 @@ function mergeById<T extends { id: string }>(
     existing: T[],
     incoming: T[]
 ): T[] {
+    if (existing === incoming) return existing
     if (incoming.length === 0) return existing
     if (existing.length === 0) return incoming
     const compare = (left: T, right: T) => compareAssistantTimelineOrderKeys(
@@ -212,8 +214,11 @@ function patchThread(snapshot: AssistantSnapshot, threadId: string, patch: (thre
     const sessions = snapshot.sessions.map((session) => {
         const threadIndex = session.threads.findIndex((thread) => thread.id === threadId)
         if (threadIndex < 0) return session
+        const previous = session.threads[threadIndex]!
+        const next = patch(previous)
+        if (previous === next) return session
         const threads = [...session.threads]
-        threads[threadIndex] = patch(threads[threadIndex]!)
+        threads[threadIndex] = next
         changed = true
         return { ...session, threads }
     })
@@ -334,13 +339,16 @@ export function applyAssistantRetainedHistory(
 }
 
 export function getAssistantMaterializedThreadIds(snapshot: AssistantSnapshot): Set<string> {
-    const selected = snapshot.sessions.find(session => session.id === snapshot.selectedSessionId)?.activeThreadId
-    const ids = new Set(snapshot.sessions.flatMap(session => session.threads.filter(thread => (
-        ['starting', 'running', 'waiting', 'background'].includes(thread.state)
-        || thread.hasPendingApprovals || thread.hasPendingUserInputs || thread.hasActivePlan
-        || thread.pendingApprovals.length > 0 || thread.pendingUserInputs.length > 0 || Boolean(thread.activePlan)
-    )).map(thread => thread.id)))
-    if (selected) ids.add(selected)
+    const ids = new Set<string>()
+    for (const session of snapshot.sessions) {
+        if (session.id === snapshot.selectedSessionId && session.activeThreadId) ids.add(session.activeThreadId)
+        for (const thread of session.threads) {
+            if (thread.state === 'starting' || thread.state === 'running' || thread.state === 'waiting'
+                || (thread.state as string) === 'background' || thread.hasPendingApprovals || thread.hasPendingUserInputs
+                || thread.hasActivePlan || thread.pendingApprovals.length > 0 || thread.pendingUserInputs.length > 0
+                || Boolean(thread.activePlan)) ids.add(thread.id)
+        }
+    }
     return ids
 }
 
@@ -350,6 +358,9 @@ export function dematerializeAssistantHistories(
 ): AssistantSnapshot {
     let snapshotChanged = false
     const sessions = snapshot.sessions.map((session) => {
+        // Most catalog entries are already shells; don't allocate their thread arrays.
+        if (!session.threads.some(thread => !retainedThreadIds.has(thread.id)
+            && (thread.activePlan || thread.messages.length || thread.activities.length || thread.proposedPlans.length))) return session
         let sessionChanged = false
         const threads = session.threads.map((thread) => {
             if (
@@ -442,12 +453,52 @@ export function replaceAssistantVisibleHistory(
     threadId: string,
     history: AssistantRetainedHistory
 ): AssistantSnapshot {
-    return patchThread(snapshot, threadId, (thread) => ({
+    return patchThread(snapshot, threadId, (thread) => (
+        thread.messages === history.messages
+        && thread.activities === history.activities
+        && thread.proposedPlans === history.proposedPlans
+    ) ? thread : ({
         ...thread,
         messages: history.messages,
         activities: history.activities,
         proposedPlans: history.proposedPlans
     }))
+}
+
+/** Covers thread events and session patches/selections without touching unrelated caches. */
+export function getAssistantEventHistoryThreadIds(
+    snapshot: AssistantSnapshot,
+    events: readonly AssistantDomainEvent[]
+): Set<string> {
+    const ids = new Set<string>()
+    const sessionIds = new Set<string>()
+    for (const event of events) {
+        const threadId = String(event.payload['threadId'] || event.threadId || '')
+        if (threadId) ids.add(threadId)
+        if (event.type.startsWith('session.') || (event.type.startsWith('thread.') && !threadId)) {
+            const sessionId = String(event.payload['sessionId'] || event.sessionId || '')
+            if (sessionId) sessionIds.add(sessionId)
+        }
+        if (event.type === 'thread.created') {
+            const thread = event.payload['thread'] as AssistantThread | undefined
+            if (thread?.id) ids.add(thread.id)
+        }
+        if (event.type === 'session.created') {
+            const session = event.payload['session'] as { id?: string; threads?: AssistantThread[] } | undefined
+            if (session?.id) sessionIds.add(session.id)
+            for (const thread of session?.threads || []) ids.add(thread.id)
+        }
+        if (event.type === 'session.updated') {
+            const patch = event.payload['patch'] as { threads?: AssistantThread[] } | undefined
+            if (Array.isArray(patch?.threads)) for (const thread of patch.threads) ids.add(thread.id)
+        }
+    }
+    if (sessionIds.size) {
+        for (const session of snapshot.sessions) {
+            if (sessionIds.has(session.id)) for (const thread of session.threads) ids.add(thread.id)
+        }
+    }
+    return ids
 }
 
 export function synchronizeAssistantVisibleHistory(
@@ -456,10 +507,15 @@ export function synchronizeAssistantVisibleHistory(
     history: AssistantRetainedHistory,
     detachedFromLatest: boolean
 ): AssistantRetainedHistory {
-    const thread = snapshot.sessions
-        .flatMap((session) => session.threads)
-        .find((candidate) => candidate.id === threadId)
+    let thread: AssistantThread | undefined
+    for (const session of snapshot.sessions) {
+        thread = session.threads.find(candidate => candidate.id === threadId)
+        if (thread) break
+    }
     if (!thread) return history
+    const shellRevision = getAssistantThreadHydrationRevision(thread)
+    if (thread.messages === history.messages && thread.activities === history.activities
+        && thread.proposedPlans === history.proposedPlans && shellRevision === history.shellRevision) return history
     const residentMessageIds = detachedFromLatest ? new Set(history.messages.map((message) => message.id)) : null
     const residentActivityIds = detachedFromLatest ? new Set(history.activities.map((activity) => activity.id)) : null
     const residentPlanIds = detachedFromLatest ? new Set(history.proposedPlans.map((plan) => plan.id)) : null
@@ -477,7 +533,7 @@ export function synchronizeAssistantVisibleHistory(
         messages,
         activities,
         proposedPlans,
-        shellRevision: getAssistantThreadHydrationRevision(thread),
+        shellRevision,
         lastUsedAt: Date.now()
     }, detachedFromLatest ? 'older' : 'newer')
 }
@@ -521,9 +577,11 @@ export function applyAssistantHistoryPage(
 ): { snapshot: AssistantSnapshot; history: AssistantRetainedHistory } {
     let history = current
     const nextSnapshot = patchThread(snapshot, page.threadId, (thread) => {
-        const messages = mergeById('message', thread.messages, page.messages)
-        const activities = mergeById('activity', thread.activities, page.activities)
-        const proposedPlans = mergeById('plan', thread.proposedPlans, page.proposedPlans)
+        // Shell snapshots can dematerialize their arrays after hydration. The
+        // retained window still owns those records when another page arrives.
+        const messages = mergeById('message', mergeById('message', thread.messages, current.messages), page.messages)
+        const activities = mergeById('activity', mergeById('activity', thread.activities, current.activities), page.activities)
+        const proposedPlans = mergeById('plan', mergeById('plan', thread.proposedPlans, current.proposedPlans), page.proposedPlans)
         const pageInfo = direction === 'older'
             ? {
                 oldestCursor: page.pageInfo.oldestCursor,

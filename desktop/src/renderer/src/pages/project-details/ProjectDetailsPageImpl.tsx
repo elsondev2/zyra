@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useTerminal } from '@/App'
 import { useFilePreview } from '@/components/ui/FilePreviewModal'
 import { useSettings } from '@/lib/settings'
@@ -20,7 +20,11 @@ import { useScriptRunModal } from './useScriptRunModal'
 export default function ProjectDetailsPage() {
     const { projectPath } = useParams<{ projectPath: string }>()
     const decodedPath = projectPath ? decodeURIComponent(projectPath) : ''
-    const navigate = useNavigate()
+    const navigateRoute = useNavigate()
+    const accessoryMode = useLocation().pathname.startsWith('/accessories/')
+    const navigate = useCallback((to: string) => {
+        navigateRoute(accessoryMode && (to === '/projects' || to.startsWith('/folder-browse/')) ? '/accessories' : to)
+    }, [accessoryMode, navigateRoute])
     const { openTerminal } = useTerminal()
     const { settings, updateSettings } = useSettings()
     const state = useProjectDetailsViewState(decodedPath, settings)
@@ -301,5 +305,5 @@ export default function ProjectDetailsPage() {
         derived
     })
 
-    return <ProjectDetailsPageView {...viewProps} />
+    return <ProjectDetailsPageView {...viewProps} accessoryMode={accessoryMode} />
 }

@@ -34,7 +34,7 @@ mock.module('electron', () => ({
     safeStorage: { isEncryptionAvailable: () => false },
     globalShortcut: { register: () => true, unregisterAll: electronNoop }
 }))
-const { ZyraPiRuntime } = await import('../src/main/assistant/zyra-pi-runtime')
+const { ZyraRuntime } = await import('../src/main/assistant/zyra-runtime')
 
 const tempDir = await mkdtemp(join(tmpdir(), 'zyra-image-pipeline-'))
 let fixtureChild: ChildProcess | null = null
@@ -202,7 +202,7 @@ export async function warmupZyraRuntime() { return { models: [] } }
         /no longer available/
     )
 
-    const runtime = new ZyraPiRuntime()
+    const runtime = new ZyraRuntime()
     const promptRequests: Array<Record<string, unknown>> = []
     const turnId = 'turn-with-image'
     const runtimeContext = {

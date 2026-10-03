@@ -362,9 +362,9 @@ const persisted = coalesceAssistantPersistenceEvents([
 ])
 assert.deepEqual(persisted.map((entry) => entry.event.sequence), [2, 3, 5])
 
-assert.equal(getAssistantInitialVisibleText('first burst', true), '')
+assert.equal(getAssistantInitialVisibleText('first burst', true), 'first burst')
 assert.equal(getAssistantInitialVisibleText('settled response', false), 'settled response')
-assert.equal(getAssistantInitialVisibleText('A'.repeat(500), true).length, 340)
+assert.equal(getAssistantInitialVisibleText('A'.repeat(500), true).length, 500)
 assert.equal(getAssistantStreamRevealCount(100, 'stream', false), 10)
 assert.equal(getAssistantStreamRevealCount(100, 'stream', true), 20)
 let visible = ''

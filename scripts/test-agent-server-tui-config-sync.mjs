@@ -19,7 +19,7 @@ class Worker extends EventEmitter {
   publish(patch) { Object.assign(this.config, patch); this.emit('event', { type: 'session_config', ...this.config }); }
   async request(type, payload) {
     this.calls.push({ type, payload });
-    if (type === 'connect') return { threadId: canonical, cwd: dir, config: { ...this.config }, messages: [] };
+    if (type === 'connect') return { threadId: canonical, cwd: dir, config: { ...this.config }, messages: [], usage: { cost: .5, costComplete: true } };
     if (type === 'configure') {
       if (this.rejectNext) { this.rejectNext = false; throw new Error('Synthetic configure rejection'); }
       if (this.holdNext) { this.holdNext = false; return new Promise((_, reject) => { this.rejectHeld = reject; }); }
@@ -44,6 +44,7 @@ try {
   await desktop.attach({ project: dir, session: canonical });
   await phone.request('session.join', { session: canonical, lastSequence: 0 });
   tui = await createZyraTuiClientRuntime({ project: dir, session: canonical, agentServer: { stateDirectory: dir, autoStart: false } });
+  assert.equal(tui.session.sessionManager.getSessionUsage().cost.total, .5, 'the server numeric total includes history outside the loaded TUI page');
   const desktopEvents = [], phoneEvents = [], tuiEvents = [];
   tui.session.subscribe(event => tuiEvents.push(event));
   desktop.on('session-event', message => desktopEvents.push(message.event));

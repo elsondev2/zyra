@@ -23,6 +23,71 @@ type Reply = Awaited<ReturnType<PluginDownloadApi['getPluginDownload']>>
 const controllers: PluginDownloadController[] = []
 function make(api: PluginDownloadApi) { const controller = new PluginDownloadController(() => api, 1); controllers.push(controller); return controller }
 try {
+    const installation = deferred<Awaited<ReturnType<NonNullable<PluginDownloadApi['installInspectedPlugin']>>>>()
+    let installCalls = 0
+    const automatic = make({
+        startPluginDownload: async () => ({ success: true, download: { id: 'automatic', status: 'downloading' } }),
+        getPluginDownload: async () => ({ success: true, download: { id: 'automatic', status: 'ready', inspection: review() } }),
+        cancelPluginDownload: async () => ({ success: true }),
+        installInspectedPlugin: async (input) => { installCalls++; assert.deepEqual(input, { reviewId: 'review-fixture', confirmed: true }); return installation.promise }
+    })
+    const automaticTask = automatic.start('vercel', { install: true })
+    await until(() => installCalls === 1)
+    assert.equal(automatic.getSnapshot().phase, 'installing', 'Install activates the inspected package without a second click')
+    await automatic.start('vercel', { install: true })
+    await automatic.cancel()
+    assert.equal(installCalls, 1, 'double clicks and navigation do not create a second activation')
+    installation.resolve({ success: true, catalog: makePluginDirectoryFixture() })
+    await automaticTask
+    assert.equal(automatic.getSnapshot().phase, 'idle')
+    assert.equal(automatic.getSnapshot().installationRevision, 1)
+    assert.equal(automatic.getSnapshot().installedName, 'vercel', 'completion carries its identity even after the active download is cleared')
+    const connectCatalog = makePluginDirectoryFixture()
+    const connectPlugin = connectCatalog.plugins[0]
+    connectPlugin.sourceId = `openai-catalog:${connectPlugin.name}`
+    let connectionCalls = 0
+    const connecting = deferred<{ success: true; result: { toolCount: number } }>()
+    const automaticConnect = make({
+        startPluginDownload: async () => ({ success: true, download: { id: 'connect', status: 'downloading' } }),
+        getPluginDownload: async () => ({ success: true, download: { id: 'connect', status: 'ready', inspection: review() } }),
+        cancelPluginDownload: async () => ({ success: true }),
+        installInspectedPlugin: async () => ({ success: true, catalog: connectCatalog }),
+        getPluginMcpConnections: async () => ({ success: true, connections: [{ pluginId: connectPlugin.id, name: 'Fixture', server: 'remote', kind: 'http', destination: 'example.test', state: connectionCalls ? 'connected' : 'not-connected' }] }),
+        connectPluginMcp: async () => { connectionCalls++; return connecting.promise }
+    })
+    const connectTask = automaticConnect.start(connectPlugin.name, { install: true, connect: true })
+    await until(() => connectionCalls === 1)
+    assert.equal(automaticConnect.getSnapshot().phase, 'connecting', 'explicit Install & connect continues into sign-in without another settings visit')
+    assert.equal(automaticConnect.getSnapshot().installationRevision, 1, 'installation succeeds before account sign-in finishes')
+    await automaticConnect.start(connectPlugin.name, { install: true, connect: true })
+    assert.equal(connectionCalls, 1, 'a second click does not duplicate sign-in')
+    connecting.resolve({ success: true, result: { toolCount: 1 } })
+    await connectTask
+    assert.equal(automaticConnect.getSnapshot().connectionRevision, 1)
+    assert.equal(automaticConnect.getSnapshot().phase, 'idle')
+    assert.equal(automaticConnect.getSnapshot().connectionError, undefined)
+    const declined = make({
+        startPluginDownload: async () => ({ success: true, download: { id: 'declined', status: 'downloading' } }),
+        getPluginDownload: async () => ({ success: true, download: { id: 'declined', status: 'ready', inspection: review() } }),
+        cancelPluginDownload: async () => ({ success: true }),
+        installInspectedPlugin: async () => ({ success: true, catalog: connectCatalog }),
+        getPluginMcpConnections: async () => ({ success: true, connections: [{ pluginId: connectPlugin.id, name: 'Fixture', server: 'remote', kind: 'http', destination: 'example.test', state: 'not-connected' }] }),
+        connectPluginMcp: async () => ({ success: false, error: 'Sign-in declined.' })
+    })
+    await declined.start(connectPlugin.name, { install: true, connect: true })
+    assert.equal(declined.getSnapshot().phase, 'idle', 'a connection failure is not a failed installation to retry blindly')
+    assert.equal(declined.getSnapshot().installationRevision, 1)
+    assert.match(declined.getSnapshot().connectionError || '', /declined/u)
+    let expiredInstalls = 0
+    const expiredAutomatic = make({
+        startPluginDownload: async () => ({ success: true, download: { id: 'expired-auto', status: 'downloading' } }),
+        getPluginDownload: async () => ({ success: true, download: { id: 'expired-auto', status: 'ready', inspection: { ...review(), expiresAt: '2000-01-01T00:00:00Z' } } }),
+        cancelPluginDownload: async () => ({ success: true }),
+        installInspectedPlugin: async () => { expiredInstalls++; return { success: true, catalog: makePluginDirectoryFixture() } }
+    })
+    await expiredAutomatic.start('vercel', { install: true })
+    assert.equal(expiredInstalls, 0, 'one-click installation cannot approve an expired inspection')
+    assert.equal(expiredAutomatic.getSnapshot().phase, 'failed')
     const catalog = makePluginDirectoryFixture()
     const selected = catalog.plugins[0]
     selected.sourceId = `openai-catalog:${selected.name}`
@@ -33,6 +98,11 @@ try {
     selected.state = 'disabled'
     assert.equal(getReviewedCatalogPluginSelection(catalog, selected.name, review()), null, 'install cannot silently reactivate a disabled Plugin')
     selected.state = 'active'
+    const selectedRelease = catalog.releases.find(entry => entry.id === selected.activeReleaseId)!
+    const savedSkills = selectedRelease.skills
+    selectedRelease.skills = []
+    assert.equal(getReviewedCatalogPluginSelection(catalog, selected.name, review())?.pluginId, selected.id, 'tool-only plugins support Install and new Chat')
+    selectedRelease.skills = savedSkills
     assert.equal(getReviewedCatalogPluginSelection(catalog, selected.name, { ...review(), release: { ...review().release, contentDigest: 'e'.repeat(64) } }), null, 'a changed release cannot inherit approval')
     const result = deferred<Reply>()
     let reads = 0, cancellations = 0, notifications = 0

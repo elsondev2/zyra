@@ -147,7 +147,9 @@ export function OnboardingFlow() {
         try {
             auth.setStatus(await work())
         } catch (authError) {
-            auth.setError(authError instanceof Error ? authError.message : 'Could not connect OpenAI.')
+            if (!(authError && typeof authError === 'object' && 'code' in authError && authError.code === 'ZYRA_OAUTH_CANCELLED')) {
+                auth.setError(authError instanceof Error ? authError.message : 'Could not connect OpenAI.')
+            }
         } finally {
             auth.setLoading(false)
             auth.setActivity(null)
@@ -288,6 +290,7 @@ export function OnboardingFlow() {
                         {record.currentStep === 'connect-openai' ? (
                             <ConnectOpenAiStep status={auth.status} loading={auth.loading} activity={auth.activity} error={auth.error}
                                 onRefresh={auth.refresh} onConnectChatGpt={() => runAuth('chatgpt', onboarding.connectChatGpt)}
+                                onCancelChatGpt={async () => { try { await onboarding.cancelChatGpt() } catch (cancelError) { auth.setError(cancelError instanceof Error ? cancelError.message : 'Could not cancel ChatGPT sign-in.') } }}
                                 onConnectApiKey={apiKey => runAuth('api-key', () => onboarding.connectApiKey(apiKey))} />
                         ) : null}
                         {record.currentStep === 'appearance' ? <AppearanceStep selection={appearance} onChange={changeAppearance} /> : null}

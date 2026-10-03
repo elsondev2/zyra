@@ -1,3 +1,4 @@
+import { useShortcutLabel } from '@/lib/keybindings'
 import { useEffect, useState } from 'react'
 import { Menu, Plus, Square, Settings2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -7,6 +8,7 @@ import { createAssistantChatAndNavigate } from '@/pages/assistant/create-assista
 import { extensionRequest, setExtensionTab, subscribeExtension, type ExtensionTab, type ExtensionConnectionState } from '@/lib/browser-extension'
 export function ExtensionSidebarHeader() {
     const navigate = useNavigate()
+    const shortcut = useShortcutLabel()
     const runtime = useRuntimeConnection()
     const actions = useAssistantStoreActions()
     const [tab, setTab] = useState<ExtensionTab | null>(null)
@@ -30,7 +32,7 @@ export function ExtensionSidebarHeader() {
         <div className="extension-header-actions">
             <button title="Chats" aria-label="Chats" onClick={() => window.dispatchEvent(new Event('zyra:toggle-assistant-sidebar'))}><Menu size={17}/></button>
             <span style={{ color: `var(--status-${runtime.tone})` }} title={`${runtime.label} · ${runtime.detail}`}>Zyra</span><span className="extension-connection-state">{runtime.label} · {runtime.detail}</span>
-            <button title="New chat" aria-label="New chat" onClick={() => void createAssistantChatAndNavigate(actions, navigate).then(result => { if (!result.success) setError(result.error) }).catch(reason => setError(String(reason)))}><Plus size={17}/></button>
+            <button title={`New chat${shortcut('app.newChat') ? ` (${shortcut('app.newChat')})` : ''}`} aria-label="New chat" onClick={() => void createAssistantChatAndNavigate(actions, navigate).then(result => { if (!result.success) setError(result.error) }).catch(reason => setError(String(reason)))}><Plus size={17}/></button>
             <button title="Browser access and settings" aria-label="Browser access and settings" onClick={() => void extensionRequest('open-console')}><Settings2 size={16}/></button>
         </div>
         <div className="extension-tab-context"><select aria-label="Browser access scope" value={state?.browserShared ? 'browser' : 'tab'} onChange={event => {

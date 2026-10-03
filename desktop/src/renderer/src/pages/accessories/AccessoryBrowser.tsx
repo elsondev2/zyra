@@ -9,10 +9,7 @@ import { AssistantInspectorDeveloperToast, useAssistantInspectorDeveloperToast }
 import { cn } from '@/lib/utils'
 import { AssistantBrowserPageIcon } from '../assistant/AssistantBrowserPageIcon'
 import { AssistantBrowserWorkspace, type AssistantBrowserWorkspaceController } from '../assistant/AssistantBrowserWorkspace'
-import {
-    ASSISTANT_BROWSER_TAB_LIMIT,
-    type AssistantBrowserWorkspaceState
-} from '../assistant/assistant-browser-workspace-state'
+import type { AssistantBrowserWorkspaceState } from '../assistant/assistant-browser-workspace-state'
 import { AccessoryHeaderPortal } from './AccessoryHeaderContext'
 import {
     accessoryBrowserGrabOffset,
@@ -62,6 +59,8 @@ export function AccessoryBrowser({
     const controllerRef = useRef<AssistantBrowserWorkspaceController | null>(null)
     const workspaceStateRef = useRef<AssistantBrowserWorkspaceState>(workspaceState)
     const tabStripRef = useRef<HTMLDivElement | null>(null)
+    const [tabStripWidth, setTabStripWidth] = useState(0)
+    const [tabRailOverflow, setTabRailOverflow] = useState(false)
     const dragRef = useRef<ActiveTabDrag | null>(null)
     const suppressClickRef = useRef<string | null>(null)
     const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
@@ -104,8 +103,18 @@ export function AccessoryBrowser({
     useLayoutEffect(() => {
         if (!initialized) return
         publishDropZone()
-        const observer = new ResizeObserver(publishDropZone)
-        if (tabStripRef.current) observer.observe(tabStripRef.current)
+        const strip = tabStripRef.current
+        const measure = () => {
+            if (!strip) return
+            setTabStripWidth(Math.floor(strip.clientWidth))
+            setTabRailOverflow(strip.scrollWidth > strip.clientWidth + 1)
+            publishDropZone()
+        }
+        const observer = new ResizeObserver(measure)
+        if (strip) observer.observe(strip)
+        measure()
+        const settled = window.setTimeout(measure, 200)
+        strip?.addEventListener('scroll', publishDropZone)
         let lastPosition = `${window.screenX}:${window.screenY}`
         const intervalId = window.setInterval(() => {
             const position = `${window.screenX}:${window.screenY}`
@@ -113,11 +122,13 @@ export function AccessoryBrowser({
             lastPosition = position
             publishDropZone()
         }, 500)
-        window.addEventListener('resize', publishDropZone)
+        window.addEventListener('resize', measure)
         return () => {
             observer.disconnect()
+            window.clearTimeout(settled)
             window.clearInterval(intervalId)
-            window.removeEventListener('resize', publishDropZone)
+            strip?.removeEventListener('scroll', publishDropZone)
+            window.removeEventListener('resize', measure)
             void window.devscope.accessories.registerBrowserDropZone(null)
         }
     }, [initialized, publishDropZone, workspaceState.tabs])
@@ -220,7 +231,7 @@ export function AccessoryBrowser({
         }
     }, [clearDragPresentation, onError, workspaceId])
 
-    const startTabDrag = useCallback((event: ReactPointerEvent<HTMLButtonElement>, tabId: string) => {
+    const startTabDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>, tabId: string) => {
         if (event.button !== 0 || !tabStripRef.current) return
         const tabElement = event.currentTarget.closest<HTMLElement>('[data-accessory-browser-tab-id]')
         if (!tabElement) return
@@ -251,7 +262,6 @@ export function AccessoryBrowser({
         if (!request || request.sessionMode !== sessionMode || !controller || handledRequest.current === request.id) return
         handledRequest.current = request.id
         const current = workspaceState.tabs.find(tab => tab.id === workspaceState.activeTabId)
-        if (current?.url && workspaceState.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) { onError('Close a Browser tab before opening another link.'); onRequestHandled(request.id); return }
         const tabId = current?.url ? controller.createTab('', { sessionMode }) : workspaceState.activeTabId
         setSelectedTabId(tabId)
         setNavigationRequest({ id: request.id, tabId, url: request.url, sessionMode })
@@ -281,36 +291,60 @@ export function AccessoryBrowser({
         />
     ) : null
 
+    const tabWidth = Math.max(112, Math.min(168, Math.floor((tabStripWidth - 36 - workspaceState.tabs.length * 4) / Math.max(1, workspaceState.tabs.length))))
+    const displayedActiveTabId = workspaceState.tabs.some((tab) => tab.id === selectedTabId) ? selectedTabId : workspaceState.activeTabId
+
+    useLayoutEffect(() => {
+        const strip = tabStripRef.current
+        if (!strip) return
+        const frame = window.requestAnimationFrame(() => {
+            const activeTab = [...strip.querySelectorAll<HTMLElement>('[data-accessory-browser-tab-id]')]
+                .find((element) => element.dataset.accessoryBrowserTabId === workspaceState.activeTabId)
+            if (!activeTab) return
+            const left = activeTab.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft
+            const right = left + activeTab.offsetWidth
+            if (left < strip.scrollLeft) strip.scrollLeft = left
+            else if (right > strip.scrollLeft + strip.clientWidth - 32) strip.scrollLeft = right - strip.clientWidth + 32
+        })
+        return () => window.cancelAnimationFrame(frame)
+    }, [workspaceState.activeTabId, workspaceState.tabs.length, tabWidth])
+
     if (!rootPath || !initialized) {
         return <div className="flex min-h-0 flex-1 items-center justify-center bg-sparkle-bg"><LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" /></div>
     }
 
     const tabStrip = (
         <AccessoryHeaderPortal>
-            <div ref={tabStripRef} role="tablist" aria-label="Browser tabs" style={{ WebkitAppRegion: 'drag' } as CSSProperties} className="flex h-full min-w-0 max-w-[min(72vw,820px)] items-end gap-0.5 overflow-x-auto px-1 pt-1">
+            <div ref={tabStripRef} role="tablist" aria-label="Browser tabs" style={{ WebkitAppRegion: 'drag' } as CSSProperties} onWheel={(event) => {
+                const strip = event.currentTarget
+                if (strip.scrollWidth <= strip.clientWidth) return
+                const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+                if (!delta) return
+                event.preventDefault()
+                strip.scrollLeft += delta
+            }} className="no-scrollbar flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain px-1">
                 {workspaceState.tabs.map((tab) => {
-                    const selected = tab.id === workspaceState.activeTabId
+                    const selected = tab.id === displayedActiveTabId
                     const moving = tab.id === draggingTabId
                     return (
-                        <div key={tab.id} data-accessory-browser-tab-id={tab.id} style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} className={cn('group flex h-7 min-w-28 max-w-52 items-center gap-1.5 rounded-t-md border border-b-0 px-2 transition-opacity', selected ? 'border-[var(--surface-divider)] bg-sparkle-card text-sparkle-text' : 'border-transparent text-sparkle-text-muted hover:bg-[var(--surface-hover)]', moving && 'opacity-45')}>
+                        <div key={tab.id} data-accessory-browser-tab-id={tab.id} style={{ WebkitAppRegion: 'no-drag', width: tabWidth } as CSSProperties} onPointerDown={(event) => startTabDrag(event, tab.id)} onClick={() => {
+                            if (suppressClickRef.current === tab.id) { suppressClickRef.current = null; return }
+                            setSelectedTabId(tab.id)
+                            controller?.activateTab(tab.id)
+                        }} className={cn('group flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-transparent px-2 transition-[width,background-color,border-color,opacity] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', selected ? 'border-[color-mix(in_srgb,var(--color-text)_13%,transparent)] bg-[color-mix(in_srgb,var(--color-text)_9%,var(--surface-inspector-tab))] text-sparkle-text shadow-[0_1px_3px_color-mix(in_srgb,var(--color-bg)_48%,transparent)]' : 'text-sparkle-text-secondary/82 hover:bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)] hover:text-sparkle-text', moving && 'opacity-45')}>
                             <button
                                 type="button"
                                 role="tab"
                                 aria-selected={selected}
-                                onPointerDown={(event) => startTabDrag(event, tab.id)}
-                                onClick={() => {
-                                    if (suppressClickRef.current === tab.id) { suppressClickRef.current = null; return }
-                                    setSelectedTabId(tab.id)
-                                    controller?.activateTab(tab.id)
-                                }}
-                                className="flex min-w-0 flex-1 touch-none select-none items-center gap-1.5 text-left"
+                                className="flex h-full min-w-0 flex-1 touch-none select-none items-center gap-1.5 text-left"
                             >
                                 {tab.sessionMode === 'incognito'
                                     ? <IncognitoIcon size={12} className="shrink-0 text-violet-300/85" />
                                     : <AssistantBrowserPageIcon faviconUrl={tab.faviconUrl} pageUrl={tab.url} size={12} />}
                                 <span className="truncate text-[10px]">{tab.title || 'New tab'}</span>
                             </button>
-                            <button type="button" aria-label={`Close ${tab.title || 'tab'}`} onClick={() => {
+                            <button type="button" aria-label={`Close ${tab.title || 'tab'}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => {
+                                event.stopPropagation()
                                 const next = controller?.closeTab(tab.id)
                                 if (next) setSelectedTabId(next.activeTabId)
                             }} className="inline-flex size-4 shrink-0 items-center justify-center rounded opacity-55 hover:bg-[var(--surface-hover)] hover:opacity-100"><X size={10} /></button>
@@ -320,14 +354,13 @@ export function AccessoryBrowser({
                 <button type="button" aria-label="New Browser tab" title="New tab" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} onClick={() => {
                     const tabId = controller?.createTab('', { sessionMode })
                     if (tabId) setSelectedTabId(tabId)
-                }} className="inline-flex h-7 w-6 shrink-0 items-center justify-center rounded border-t border-transparent text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><Plus size={13} /></button>
+                }} className={cn('sticky right-0 z-20 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-topbar)] text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text', tabRailOverflow && 'before:pointer-events-none before:absolute before:inset-y-0 before:-left-5 before:w-5 before:bg-gradient-to-r before:from-transparent before:to-[var(--surface-topbar)]')}><Plus size={13} /></button>
             </div>
-            <div className="h-full min-w-8 flex-1" style={{ WebkitAppRegion: 'drag' } as CSSProperties} aria-hidden="true" />
         </AccessoryHeaderPortal>
     )
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sparkle-bg">
+        <div className="accessory-browser-workspace flex min-h-0 flex-1 flex-col overflow-hidden bg-sparkle-bg">
             {tabStrip}
             <AssistantBrowserWorkspace
                 workspaceKey={`accessory:${workspaceId}`}

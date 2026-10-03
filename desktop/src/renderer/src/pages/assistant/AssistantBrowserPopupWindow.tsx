@@ -1,3 +1,5 @@
+import { resolveShortcut } from '@shared/keybindings'
+import { isShortcutRecording, isProtectedShortcutTarget, useShortcutLabel, keyboardInput } from '@/lib/keybindings'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -40,6 +42,7 @@ function popupShortcutPlatform(): BrowserShortcutPlatform {
 
 export function AssistantBrowserPopupWindow() {
     const { runtime, policy, isMaximized } = useWindowChrome()
+    const shortcut = useShortcutLabel()
     const inputRef = useRef<HTMLInputElement | null>(null)
     const browserDownloadsApi = useMemo(() => ({
         list: () => window.devscope.browserPopup.listDownloads(),
@@ -90,21 +93,17 @@ export function AssistantBrowserPopupWindow() {
 
     useEffect(() => {
         const handleShortcut = (event: KeyboardEvent) => {
-            if (event.defaultPrevented) return
+            if (event.defaultPrevented || isShortcutRecording() || isProtectedShortcutTarget(event)) return
             if (event.key === 'Escape' && state.fullscreen) {
                 event.preventDefault()
                 command({ type: 'toggle-fullscreen' })
                 return
             }
-            const action = resolveBrowserShortcut({
-                type: event.type,
-                key: event.key,
-                control: event.ctrlKey,
-                meta: event.metaKey,
-                shift: event.shiftKey,
-                alt: event.altKey
-            }, popupShortcutPlatform())
-            if (!action) return
+            const action = resolveBrowserShortcut(keyboardInput(event), popupShortcutPlatform())
+            if (!action) {
+                if (!resolveShortcut(keyboardInput(event), popupShortcutPlatform(), 'app') && resolveBrowserShortcut(keyboardInput(event), popupShortcutPlatform(), {})) event.preventDefault()
+                return
+            }
             event.preventDefault()
             command({ type: 'shortcut', action })
         }
@@ -125,7 +124,7 @@ export function AssistantBrowserPopupWindow() {
     if (state.fullscreen) return <div className="h-screen bg-black" />
 
     return (
-        <div className="h-screen overflow-hidden bg-sparkle-bg text-sparkle-text">
+        <div className="h-screen overflow-hidden bg-sparkle-bg text-sparkle-text" data-shortcut-scope="browser">
             <header
                 className="zyra-topbar-surface flex h-[34px] items-center border-b border-[var(--surface-panel-divider)]"
                 style={{ WebkitAppRegion: 'drag' } as any}
@@ -154,9 +153,9 @@ export function AssistantBrowserPopupWindow() {
                     submitAddress()
                 }}
             >
-                <button type="button" onClick={() => command({ type: 'back' })} disabled={!state.canGoBack} className={toolbarButtonClass} title="Back" aria-label="Back"><ArrowLeft size={14} /></button>
-                <button type="button" onClick={() => command({ type: 'forward' })} disabled={!state.canGoForward} className={toolbarButtonClass} title="Forward" aria-label="Forward"><ArrowRight size={14} /></button>
-                <button type="button" onClick={() => command({ type: state.loading ? 'stop' : 'reload' })} className={toolbarButtonClass} title={state.loading ? 'Stop' : 'Reload'} aria-label={state.loading ? 'Stop' : 'Reload'}>{state.loading ? <X size={13} /> : <RefreshCw size={13} />}</button>
+                <button type="button" onClick={() => command({ type: 'back' })} disabled={!state.canGoBack} className={toolbarButtonClass} title={`Back${shortcut('browser.back') ? ` (${shortcut('browser.back')})` : ''}`} aria-label="Back"><ArrowLeft size={14} /></button>
+                <button type="button" onClick={() => command({ type: 'forward' })} disabled={!state.canGoForward} className={toolbarButtonClass} title={`Forward${shortcut('browser.forward') ? ` (${shortcut('browser.forward')})` : ''}`} aria-label="Forward"><ArrowRight size={14} /></button>
+                <button type="button" onClick={() => command({ type: state.loading ? 'stop' : 'reload' })} className={toolbarButtonClass} title={state.loading ? 'Stop' : `Reload${shortcut('browser.reload') ? ` (${shortcut('browser.reload')})` : ''}`} aria-label={state.loading ? 'Stop' : 'Reload'}>{state.loading ? <X size={13} /> : <RefreshCw size={13} />}</button>
 
                 <div className={cn(
                     'flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-[13px] border px-2 transition-colors',

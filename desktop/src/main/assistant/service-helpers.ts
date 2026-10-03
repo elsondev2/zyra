@@ -78,7 +78,7 @@ export function markActiveThreadCompletionSeen(
     ) => void
 ): void {
     const thread = getActiveThread(session)
-    if (!thread?.latestTurn || thread.latestTurn.state !== 'completed') return
+    if (!thread?.latestTurn || !['completed', 'interrupted'].includes(thread.latestTurn.state)) return
     if (thread.lastSeenCompletedTurnId === thread.latestTurn.id) return
 
     appendEvent('thread.updated', occurredAt, {

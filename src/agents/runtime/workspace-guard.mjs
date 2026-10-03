@@ -20,6 +20,7 @@ export class WorkspaceGuard {
     const timeoutMs = Math.max(0, Number(options.timeoutMs) || 30_000);
     const deadline = Date.now() + timeoutMs;
     while (true) {
+      if (options.signal?.aborted) throw Object.assign(new Error('Write scope wait cancelled.'), { name: 'AbortError' });
       const conflicts = this.findConflicts(runId, normalized);
       if (!conflicts.length) break;
       if (options.wait === false || Date.now() >= deadline) {

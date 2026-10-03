@@ -1,4 +1,4 @@
-import { isPiSupportPending } from "./model-compatibility.mjs";
+import { isTransportSupportPending } from "./model-compatibility.mjs";
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -76,8 +76,8 @@ export async function checkModelAvailability(modelRegistry, model, options = {})
 
   let result;
   try {
-    if (isPiSupportPending(model)) {
-      result = buildResult(model, "blocked", "pi_support_pending");
+    if (isTransportSupportPending(model)) {
+      result = buildResult(model, "blocked", "transport_support_pending");
     } else if (!shouldPingModelAvailability(model)) {
       result = buildResult(model, "available", "provider_not_pinged");
     } else if (model.provider === "openai-codex") {
@@ -107,7 +107,7 @@ export function formatModelAvailabilitySummary(report) {
   const parts = [`Models checked: ${checked}`];
   parts.push(`removed: ${removed.length ? removed.map((item) => item.key).join(", ") : "none"}`);
   if (blocked.length > 0) {
-    parts.push(`Pi support pending: ${blocked.map((item) => item.key).join(", ")}`);
+    parts.push(`Transport support pending: ${blocked.map((item) => item.key).join(", ")}`);
   }
   if (unknown.length > 0) {
     parts.push(`kept without proof: ${unknown.map((item) => item.key).join(", ")}`);

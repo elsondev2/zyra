@@ -15,6 +15,8 @@ const controller = new AgentFleetController({
   runner: { async run(run, { signal }) {
     signal.throwIfAborted()
     runs.push(run.goal)
+    if (run.goal === 'turn-limit') { const error = new Error('Child agent reached its turn limit.'); error.code = 'CHILD_MAX_TURNS'; throw error }
+    if (run.goal === 'provider-failure') throw new Error('Synthetic provider failure')
     if (run.goal === 'active') {
       started.resolve()
       await new Promise((resolve, reject) => signal.addEventListener('abort', async () => {
@@ -58,6 +60,11 @@ try {
   await controller.cancelAll('second stop')
   const again = await spawn('after-second-stop')
   assert.equal((await controller.wait(again.agentRunId)).status, 'completed')
+  const capped = await spawn('turn-limit')
+  assert.equal((await controller.wait(capped.agentRunId)).status, 'cancelled', 'A bounded child stop must not become a provider failure')
+  assert.equal(controller.status(capped.agentRunId).error.code, 'CHILD_MAX_TURNS', 'Retain the reason and budget boundary')
+  const failed = await spawn('provider-failure')
+  assert.equal((await controller.wait(failed.agentRunId)).status, 'failed', 'A genuine provider failure remains distinct')
   for (let index = 0; index < 24; index++) await controller.cancelAll(`repeat stop ${index}`)
   assert.equal(controller.cancellation.nodes.size, 1, 'repeated cancellation retains only the fresh root')
   await controller.dispose()

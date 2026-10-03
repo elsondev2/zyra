@@ -9,6 +9,7 @@ import {
     isOnboardingStep,
     type BeginOnboardingReviewInput,
     type CancelOnboardingReviewInput,
+    type ChatGptSignInMethod,
     type CommitOnboardingStepInput,
     type NavigateOnboardingInput,
     type OnboardingAppearanceSelection,
@@ -293,8 +294,12 @@ export class OnboardingService {
         return additional ? { checking: false, verified: true, method: 'api-key', provider: additional.provider, label: `${additional.label} connected`, detail: null, checkedAt: this.now().toISOString() } : status
     }
 
-    connectChatGpt(): Promise<OnboardingAuthStatus> {
-        return this.auth.connectChatGpt()
+    connectChatGpt(signInMethod?: ChatGptSignInMethod): Promise<OnboardingAuthStatus> {
+        return this.auth.connectChatGpt(signInMethod)
+    }
+
+    cancelChatGpt(): Promise<boolean> {
+        return this.auth.cancelChatGpt()
     }
 
     connectApiKey(apiKey: string): Promise<OnboardingAuthStatus> {

@@ -23,7 +23,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/linear",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "atlassian-rovo",
@@ -39,11 +40,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/atlassian-rovo/assets/logo.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/atlassian-rovo",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "google-calendar",
@@ -59,11 +61,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/google-calendar/assets/logo.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/google-calendar",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "gmail",
@@ -79,11 +82,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/gmail/assets/gmail.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/gmail",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "slack",
@@ -103,7 +107,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/slack",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "teams",
@@ -123,7 +128,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/teams",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "sharepoint",
@@ -143,7 +149,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/sharepoint",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "outlook-email",
@@ -163,7 +170,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/outlook-email",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "outlook-calendar",
@@ -183,7 +191,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/outlook-calendar",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "canva",
@@ -203,7 +212,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/canva",
-      "longDescriptionSource": "zyra"
+      "longDescriptionSource": "zyra",
+      "skillCount": 8
     },
     {
       "name": "figma",
@@ -223,7 +233,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/figma",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 12
     },
     {
       "name": "stripe",
@@ -239,11 +250,12 @@
       "license": null,
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/stripe/assets/logo.png",
       "hasSkills": true,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/stripe",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 7
     },
     {
       "name": "vercel",
@@ -263,7 +275,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/vercel",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 54
     },
     {
       "name": "game-studio",
@@ -283,7 +296,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/game-studio",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 9
     },
     {
       "name": "superpowers",
@@ -303,7 +317,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/superpowers",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 14
     },
     {
       "name": "github",
@@ -323,7 +338,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/github",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "circleci",
@@ -343,7 +359,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/circleci",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 4
     },
     {
       "name": "google-drive",
@@ -359,11 +376,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/google-drive/assets/logo.png",
       "hasSkills": true,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/google-drive",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 5
     },
     {
       "name": "notion",
@@ -383,7 +401,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/notion",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 4
     },
     {
       "name": "cloudflare",
@@ -403,7 +422,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/cloudflare",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 9
     },
     {
       "name": "sentry",
@@ -423,7 +443,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/sentry",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "build-ios-apps",
@@ -443,7 +464,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-ios-apps",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 9
     },
     {
       "name": "build-macos-apps",
@@ -463,7 +485,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-macos-apps",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 11
     },
     {
       "name": "build-web-apps",
@@ -483,7 +506,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-web-apps",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 6
     },
     {
       "name": "build-web-data-visualization",
@@ -503,7 +527,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-web-data-visualization",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 18
     },
     {
       "name": "test-android-apps",
@@ -523,7 +548,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/test-android-apps",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 2
     },
     {
       "name": "life-science-research",
@@ -543,7 +569,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/life-science-research",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 50
     },
     {
       "name": "zotero",
@@ -563,7 +590,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/zotero",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "expo",
@@ -583,7 +611,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/expo",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 13
     },
     {
       "name": "coderabbit",
@@ -603,7 +632,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/coderabbit",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "remotion",
@@ -623,7 +653,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/remotion",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 12
     },
     {
       "name": "plugin-eval",
@@ -643,7 +674,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/plugin-eval",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 5
     },
     {
       "name": "granola",
@@ -659,11 +691,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/granola/assets/logo.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/granola",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "monday-com",
@@ -679,11 +712,12 @@
       "license": null,
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/monday-com/assets/logo.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/monday-com",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "temporal",
@@ -703,7 +737,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/temporal",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 4
     },
     {
       "name": "hyperframes",
@@ -723,7 +758,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/hyperframes",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 5
     },
     {
       "name": "supabase",
@@ -739,11 +775,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/supabase/assets/logo.png",
       "hasSkills": true,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/supabase",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 2
     },
     {
       "name": "codex-security",
@@ -763,7 +800,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/codex-security",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 14
     },
     {
       "name": "twilio-developer-kit",
@@ -783,7 +821,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/twilio-developer-kit",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 55
     },
     {
       "name": "openai-developers",
@@ -803,7 +842,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/openai-developers",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 5
     },
     {
       "name": "datadog",
@@ -823,7 +863,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/datadog",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "zoom",
@@ -843,7 +884,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/zoom",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 53
     },
     {
       "name": "mixpanel-headless",
@@ -863,7 +905,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/mixpanel-headless",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 4
     },
     {
       "name": "airtable",
@@ -879,11 +922,12 @@
       "license": null,
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/airtable/assets/logo.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/airtable",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "nvidia",
@@ -903,7 +947,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/nvidia",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 12
     },
     {
       "name": "posthog",
@@ -919,11 +964,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/posthog/assets/logo.png",
       "hasSkills": true,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/posthog",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "ngs-analysis",
@@ -943,7 +989,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/ngs-analysis",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 18
     },
     {
       "name": "shopify",
@@ -963,7 +1010,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/shopify",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 20
     },
     {
       "name": "magicpath",
@@ -983,7 +1031,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/magicpath",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "openai-ads-conversions",
@@ -1003,7 +1052,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/openai-ads-conversions",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "boltz-api-cli",
@@ -1023,7 +1073,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/boltz-api-cli",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 8
     },
     {
       "name": "dropbox",
@@ -1043,7 +1094,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/dropbox",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 6
     },
     {
       "name": "product-design",
@@ -1063,7 +1115,8 @@
       "hasApps": false,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/product-design",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 10
     },
     {
       "name": "data-analytics",
@@ -1083,7 +1136,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/data-analytics",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 18
     },
     {
       "name": "creative-production",
@@ -1103,7 +1157,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/creative-production",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 2
     },
     {
       "name": "public-equity-investing",
@@ -1119,11 +1174,12 @@
       "license": "Proprietary",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/public-equity-investing/assets/logo.png",
       "hasSkills": true,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/public-equity-investing",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 23
     },
     {
       "name": "adobe",
@@ -1143,7 +1199,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/adobe",
-      "longDescriptionSource": "zyra"
+      "longDescriptionSource": "zyra",
+      "skillCount": 6
     },
     {
       "name": "lovable",
@@ -1163,7 +1220,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/lovable",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "clickup",
@@ -1179,11 +1237,12 @@
       "license": "MIT",
       "iconUrl": "https://raw.githubusercontent.com/openai/plugins/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/clickup/assets/logo.png",
       "hasSkills": false,
-      "hasMcp": false,
+      "hasMcp": true,
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/clickup",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "consensus",
@@ -1203,7 +1262,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/consensus",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 0
     },
     {
       "name": "chatcut",
@@ -1223,7 +1283,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/chatcut",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 1
     },
     {
       "name": "higgsfield",
@@ -1243,7 +1304,8 @@
       "hasApps": true,
       "installation": "AVAILABLE",
       "sourceUrl": "https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/higgsfield",
-      "longDescriptionSource": "publisher"
+      "longDescriptionSource": "publisher",
+      "skillCount": 3
     }
   ]
 }

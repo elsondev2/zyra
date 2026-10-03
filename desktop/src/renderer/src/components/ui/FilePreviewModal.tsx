@@ -29,6 +29,7 @@ import {
     FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT,
     publishFilePreviewFocusState
 } from './file-preview/filePreviewFocusMode'
+import { subscribeAssistantFileSave } from '@/pages/assistant/assistant-file-save-requests'
 
 // Navigation history tracks media-list identity; a fresh fallback would retrigger it after every state update.
 const EMPTY_PREVIEW_MEDIA_ITEMS: PreviewMediaItem[] = []
@@ -406,9 +407,16 @@ export function FilePreviewModal({
         setMode('edit')
     }, [canEdit, ensureEditableContentLoaded, mode, previewModeEnabled, requestIntent, setMode])
 
+    useEffect(() => subscribeAssistantFileSave(() => {
+        if (!active) return false
+        if (canEdit && mode === 'edit') void handleSave()
+        return true
+    }), [active, canEdit, handleSave, mode])
+
     useEffect(() => {
         if (!active) return
         const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.defaultPrevented) return
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e' && canEdit && previewModeEnabled) {
                 event.preventDefault()
                 void handleModeChange(mode === 'edit' ? 'preview' : 'edit')

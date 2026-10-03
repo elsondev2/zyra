@@ -50,6 +50,7 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'setPluginSet',
     'refreshChatPluginScope',
     'setPluginState',
+    'setPluginAppViewSettings',
     'rollbackPlugin',
     'createProject',
     'associateProjectFolder',
@@ -97,7 +98,11 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'ingestRealtimeVoiceEvent',
     'stopRealtimeVoice',
     'getVoiceTranscriptionState',
-    'transcribeVoice'
+    'transcribeVoice',
+    'saveVoiceHistory',
+    'listVoiceHistory',
+    'getFailedVoiceRecording',
+    'deleteVoiceHistory'
 ] as const
 
 export type BrowserAssistantBridgeMethod = typeof BROWSER_ASSISTANT_BRIDGE_METHODS[number]

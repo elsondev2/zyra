@@ -73,17 +73,20 @@ const PREVIOUS_SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly Setting
         ...rows('Theme', ['Background', 'Foreground', 'Strong text', 'Subtle text', 'Secondary text', 'Muted text', 'Card', 'Border', 'Strong border', 'Theme primary', 'Theme secondary', 'Surface accent']),
         row('Theme', 'UI font', 'interface typography family google local imported more fonts'),
         row('Theme', 'Code font', 'editor terminal monospace typography google local imported more fonts'),
-        ...rows('Preferences', ['Interface density', 'Reduce motion'], {
+        row('Theme', 'Interface size', 'interface zoom scale text bigger smaller percent display'),
+        row('Theme', 'Code size', 'code zoom scale text bigger smaller percent snippets'),
+        row('Theme', 'Contrast', 'contrast stronger softer text borders accents accessible percent'),
+        ...rows('Preferences', ['Interface density', 'Reduce motion', 'Animation speed'], {
             'Interface density': 'compact comfortable spacing',
-            'Reduce motion': 'animation transitions accessibility scrolling'
+            'Reduce motion': 'animation transitions accessibility scrolling',
+            'Animation speed': 'animation speed calm brisk motion transitions duration'
         })
     ],
     account: [
         sectionTarget('Other model providers', 'Other model providers', 'opencode zen claude anthropic custom endpoint api key connect disconnect models'),
-        ...rows('OpenAI connections', ['ChatGPT subscription', 'OpenAI API key', 'New-chat default'], {
+        ...rows('OpenAI connections', ['ChatGPT subscription', 'OpenAI API key'], {
             'ChatGPT subscription': 'connect reconnect disconnect oauth retry use new chats',
-            'OpenAI API key': 'add replace verify remove disconnect api credential',
-            'New-chat default': 'switch provider model chatgpt api existing chats'
+            'OpenAI API key': 'add replace verify remove disconnect api credential'
         }),
         ...rows('ChatGPT account', ['Connection', 'Email', 'Plan', 'Pi provider', 'Account ID', 'Access refresh', 'Connection source'], {
             Connection: 'chatgpt openai oauth login signed in',
@@ -179,10 +182,9 @@ const PREVIOUS_SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly Setting
         })
     ],
     'files-editor': [
-        ...rows('File preview', ['Open fullscreen', 'Default mode', 'Python run target', 'Fullscreen left panel', 'Fullscreen Edit Inspector', 'Explorer file names'], {
+        ...rows('File preview', ['Open fullscreen', 'Default mode', 'Fullscreen left panel', 'Fullscreen Edit Inspector', 'Explorer file names'], {
             'Open fullscreen': 'preview full screen',
             'Default mode': 'preview edit initial',
-            'Python run target': 'terminal output play',
             'Fullscreen left panel': 'navigation preview',
             'Fullscreen Edit Inspector': 'right panel information preview edit mode',
             'Explorer file names': 'wrap horizontal'
@@ -196,12 +198,11 @@ const PREVIOUS_SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly Setting
         })
     ],
     'terminal-runtime': [
-        ...rows('Terminal', ['Default shell', 'Font size', 'Blinking cursor', 'Scrollback', 'Preview panel height'], {
+        ...rows('Terminal', ['Default shell', 'Font size', 'Blinking cursor', 'Scrollback'], {
             'Default shell': 'powershell command prompt cmd',
             'Font size': 'terminal text size',
             'Blinking cursor': 'terminal caret',
-            Scrollback: 'retained lines history',
-            'Preview panel height': 'file preview terminal size'
+            Scrollback: 'retained lines history'
         }),
         row('Package runtime', 'Project script runner', 'node npm pnpm yarn bun package manager')
     ],
@@ -213,20 +214,10 @@ const PREVIOUS_SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly Setting
         row('Stored credentials', 'Clear hosted API keys', 'remove groq gemini credentials')
     ],
     projects: [
-        ...rows('Project roots', ['Main projects folder', 'Additional roots'], {
-            'Main projects folder': 'root discovery choose folder',
-            'Additional roots': 'secondary configured root add remove folder discovery'
-        }),
-        ...rows('Indexing', ['Configured roots', 'Persistence', 'Traversal boundary'], {
-            'Configured roots': 'project index eligible folders',
-            Persistence: 'index disk cache restart',
-            'Traversal boundary': 'bounded scan home app data drive'
-        }),
-        ...rows('Project browser', ['Project browser view', 'Project content layout'], {
-            'Project browser view': 'finder grid',
-            'Project content layout': 'tree grouped sections'
-        }),
-        row('Project icons', 'Automatic detection', 'app icon manifest favicon override')
+        ...rows('Where Zyra looks', ['Look for projects in', 'More folders'], {
+            'Look for projects in': 'main folder find discover project suggestions',
+            'More folders': 'additional folders find discover project suggestions'
+        })
     ],
     'source-control': [
         { ...row('Providers', 'Default Git AI provider', 'groq gemini chatgpt codex commit pull request'), section: 'Text generation', sectionTargetId: createSettingsSectionTargetId('Text generation') },
@@ -263,6 +254,7 @@ const PREVIOUS_SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly Setting
         'Archived chats': 'hidden conversations restore delete count',
         Search: 'filter title project canonical id'
     }),
+    plugins: [sectionTarget('Installed plugins', 'Installed plugins', 'mcp connections connect disconnect enabled availability plugin settings')],
     diagnostics: rows('Diagnostics', ['AI debug logs', 'Provider filter', 'Clear logs'], {
         'AI debug logs': 'provider requests responses troubleshooting',
         'Provider filter': 'groq gemini codex records',
@@ -309,11 +301,12 @@ function reorganizeSearchTargets(): Record<string, SettingsSearchTarget[]> {
     result.usage = [sectionTarget('Token activity', 'Token activity', 'usage tokens input output cached cache cost daily history'), sectionTarget('Breakdown', 'Breakdown', 'provider model tokens turns cost')]
     move('providers', 'provider-writing', () => true)
     move('account', 'providers', labels('ChatGPT subscription', 'OpenAI API key'), 'Connections')
-    move('account', 'providers', labels('New-chat default'), 'Model choices')
     result.account = result.account.filter(target => target.section !== 'Other model providers' && !['Access refresh', 'Connection source'].includes(target.label))
     result.skills = result.skills.filter(target => target.section !== 'When changes apply').map(target => target.label === 'Resolution order' ? { ...target, keywords: `${target.keywords} reload new chats apply existing chats` } : target)
+    result['skill-conflicts'] = [sectionTarget('Names to review', 'Skill name conflicts', 'overlapping duplicate skills unresolved resolved preferred source automatic priority')]
     result.providers.push(sectionTarget('Connections', 'Provider connections', 'opencode zen anthropic claude custom endpoint connect api key'))
-    move('assistant', 'provider-models', labels('Model', 'Reasoning effort', 'Fast service tier'), 'Chat models')
+    move('assistant', 'chat-defaults', labels('Model', 'Reasoning effort', 'Fast service tier'), 'Chat models')
+    move('assistant', 'chat-defaults', labels('Default prompt', 'Permission mode', 'Busy send behavior'), 'New chat setup')
     move('assistant', 'provider-models', labels('Chat title model', 'Refresh chat titles', 'Title refresh interval'), 'Automatic titles')
     result['provider-models'].push(row('Delegated work', 'Approach', 'delegation automatic models reasoning cost quality speed balanced estimated api'), row('Delegated work', 'Your guidance', 'delegation notes preferences instructions agents planning implementation review debugging verification research'))
     move('assistant', 'chat-display', labels('Reasoning summaries'), 'Reasoning')
@@ -322,33 +315,34 @@ function reorganizeSearchTargets(): Record<string, SettingsSearchTarget[]> {
     move('assistant', 'memory', labels('Context limit'), 'Context')
     move('assistant', 'chat-display', target => target.section === 'Output and history', 'Conversation display')
     result.assistant = result.assistant.map(target => {
-        const section = ['Permission mode', 'Web access'].includes(target.label) ? 'Tools & approvals' : 'Chat behavior'
+        const section = target.label === 'Web access' ? 'Tools & approvals' : 'Chat behavior'
         return { ...target, section, sectionTargetId: createSettingsSectionTargetId(section) }
     })
     move('general', 'appearance-layout', target => target.section === 'Interface')
     result.general = result.general.map(target => target.section === 'Desktop host' ? { ...target, section: 'Startup', sectionTargetId: createSettingsSectionTargetId('Startup') } : target)
-    move('appearance', 'appearance-typography', labels('UI font', 'Code font'), 'Typography')
+    move('appearance', 'appearance-typography', labels('UI font', 'Code font', 'Interface size', 'Code size'), 'Typography')
     move('appearance', 'appearance-layout', target => target.section === 'Preferences')
     move('appearance', 'appearance-colors', labels('Custom theme'), 'Custom theme')
     move('appearance', 'appearance-colors', labels('Accent primary', 'Accent secondary'), 'Accent values')
-    move('appearance', 'appearance-colors', target => !['Appearance mode', 'Light and dark themes', 'Custom theme', 'Accent preset'].includes(target.label), 'Theme colors')
+    move('appearance', 'appearance-colors', target => !['Appearance mode', 'Light and dark themes', 'Custom theme', 'Accent preset', 'Contrast'].includes(target.label), 'Theme colors')
     move('voice', 'voice-lab', target => target.section === 'Instructor Voice Lab')
+    result['voice-history'] = [sectionTarget('Voice history', 'Voice history', 'dictation transcript failed recording audio playback')]
     move('connections', 'device-chrome', target => target.section === 'Chrome browser')
     result['device-chrome'] = [row('Chrome browser', 'Zyra Browser', 'chrome extension pairing connect disconnect tabs read control', 'Zyra Browser extension')]
     move('connections', 'device-mobile', target => target.section === 'Trusted devices')
     result['device-mobile'] = [{ ...row('Trusted devices', 'Continue from Android', 'mobile phone pairing network trusted devices revoke project access', 'Other devices'), section: 'Zyra on your phone', sectionTargetId: createSettingsSectionTargetId('Zyra on your phone') }]
-    move('projects', 'project-discovery', target => ['Project roots', 'Indexing'].includes(target.section))
-    move('projects', 'project-presentation', target => ['Project browser', 'Project icons'].includes(target.section))
-    result.projects.push(sectionTarget('Project catalog', 'Project catalog', 'create projects active detected archived folders access associate restore'))
-    move('files-editor', 'file-run', labels('Python run target'), 'Run & output')
-    move('terminal-runtime', 'file-run', labels('Preview panel height'), 'Run & output')
+    move('projects', 'project-discovery', target => target.section === 'Where Zyra looks')
+    result.projects.push(sectionTarget('Project catalog', 'Project catalog', 'create projects active detected archived folders access associate restore custom icon override'))
     move('files-editor', 'file-editor', target => target.section === 'Editor defaults')
     move('browser-control', 'browser-privacy', target => target.section === 'Browser privacy')
     move('browser-control', 'browser-data', target => target.section === 'Site data')
+    result['browser-extensions'] = [
+        row('Extensions', 'Install unpacked', 'chrome extension manifest v3 install add permissions third party')
+    ]
     move('source-control', 'git-pull-requests', target => target.section === 'Pull requests')
     move('source-control', 'git-writing', target => target.section === 'Text generation')
     move('memory', 'memory-inspect', target => ['Layers', 'Recommended prompts'].includes(target.section))
-    result.memory.push(row('Memory', 'Automatic updates', 'saved memory update status'), sectionTarget('Memory', 'Memory overview', 'local saved memory paths locations'))
+    result.memory.push(row('Memory', 'Remember useful details', 'enable disable optional saved context across conversations'), row('Memory', 'Processing model', 'automatic provider-aware OpenAI GPT-5.6 Luna medium ChatGPT Anthropic Claude Sonnet 5 low OpenCode Big Pickle'), sectionTarget('Memory', 'Memory overview', 'local saved memory paths locations'))
     result['memory-inspect'].push(row('Layers', 'Memory layer', 'select saved memory file'), sectionTarget('Locations', 'Memory file locations', 'data memory sessions cli path copy'))
     move('about', 'terminal-runtime', labels('zyra command'), 'Command-line access')
     result.diagnostics = result.diagnostics.map(target => target.section === 'Diagnostics' ? { ...target, section: 'Git-writing logs', sectionTargetId: createSettingsSectionTargetId('Git-writing logs') } : target)
@@ -403,15 +397,18 @@ export function resolveSettingsSearchLocation(pageId: string | null, targetId: s
     const sectionMoves: Array<[string, string, string]> = [
         ['Desktop host', 'general', 'Startup'], ['Interface', 'appearance-layout', 'Interface'],
         ['Preferences', 'appearance-layout', 'Preferences'], ['Assistant defaults', 'assistant', 'Chat behavior'],
-        ['New chat permissions', 'assistant', 'Tools & approvals'],
+        ['New chat permissions', 'chat-defaults', 'New chat setup'],
         ['Reasoning and context', 'memory', 'Context'], ['Output and history', 'chat-display', 'Conversation display'],
         ['OpenAI connections', 'providers', 'Connections'], ['Other model providers', 'providers', 'Connections'],
-        ['Browser workspace', 'browser-control', 'Browsing'], ['Discovery locations', 'project-discovery', 'Project roots'],
+        ['Browser workspace', 'browser-control', 'Browsing'], ['Discovery locations', 'project-discovery', 'Where Zyra looks'],
         ['Providers', 'git-writing', 'Text generation'], ['Zyra · ChatGPT', 'git-writing', 'Text generation'],
         ['Groq', 'provider-writing', 'Hosted providers'], ['Google Gemini', 'provider-writing', 'Hosted providers'],
         ['Diagnostics', 'diagnostics', 'Git-writing logs'], ['Trusted devices', 'device-mobile', 'Zyra on your phone']
     ]
     if (targetId === createSettingsSectionTargetId('When changes apply') || targetId === createSettingsRowTargetId('When changes apply', 'New chats')) return at('skills', createSettingsRowTargetId('Skill sources', 'Resolution order'))
+    for (const [oldSection, label] of [['Chat behavior', 'Default prompt'], ['Tools & approvals', 'Permission mode'], ['Chat behavior', 'Busy send behavior']]) {
+        if (targetId === createSettingsRowTargetId(oldSection, label)) return at('chat-defaults', createSettingsRowTargetId('New chat setup', label))
+    }
     if ([createSettingsRowTargetId('ChatGPT account', 'Access refresh'), createSettingsRowTargetId('ChatGPT account', 'Connection source')].includes(targetId)) return at('account', createSettingsRowTargetId('ChatGPT account', 'Connection'))
     if (['Provider', 'Planning', 'Implementation', 'Review', 'Debugging', 'Verification', 'Research', 'Other agents'].some(label => targetId === createSettingsRowTargetId('Delegated work', label))) return at('provider-models', createSettingsRowTargetId('Delegated work', 'Approach'))
     const movedSection = sectionMoves.find(([old]) => targetId === createSettingsSectionTargetId(old))
@@ -423,7 +420,7 @@ export function resolveSettingsSearchLocation(pageId: string | null, targetId: s
     if (targetId === createSettingsSectionTargetId('ChatGPT')) return at('providers', createSettingsSectionTargetId('Connections'))
     if (targetId === createSettingsRowTargetId('Text generation', 'Git writing defaults')) return at('git-writing', createSettingsSectionTargetId('Text generation'))
     if (pageId === 'about' && targetId === createSettingsSectionTargetId('Terminal')) return at('terminal-runtime', createSettingsSectionTargetId('Command-line access'))
-    if (targetId.startsWith('settings-row-discovery-locations-')) return at('project-discovery', targetId.replace('settings-row-discovery-locations-', 'settings-row-project-roots-'))
+    if (targetId.startsWith('settings-row-discovery-locations-')) return at('project-discovery', targetId.replace('settings-row-discovery-locations-', 'settings-row-where-zyra-looks-'))
     const ownsTarget = (id: string) => SETTINGS_SEARCH_TARGETS[id]?.some(target => target.targetId === targetId || target.sectionTargetId === targetId)
     const destination = pageId && ownsTarget(pageId)
         ? SETTINGS_DESTINATIONS.find(entry => entry.id === pageId)

@@ -1,30 +1,46 @@
-import { Worker } from 'node:worker_threads'
+import { Worker, type WorkerOptions } from 'node:worker_threads'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { desktopTerminalEnvironment } from '../assistant/agent-server-namespace'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 
 type WorkerCallbacks = {
-    onAuth?: (info: unknown) => void
+    onAuth?: (info: unknown) => unknown
+    onDeviceCode?: (info: unknown) => unknown
     onProgress?: (progress: unknown) => void
+    signal?: AbortSignal
 }
 
 type PendingRequest = WorkerCallbacks & {
     resolve: (value: unknown) => void
     reject: (error: Error) => void
     timeout: NodeJS.Timeout | null
+    abortHandler?: () => void
+    operation: string
 }
 
 type WorkerResponse = {
-    type?: 'auth' | 'progress' | 'result' | 'error'
+    type?: 'auth' | 'deviceCode' | 'progress' | 'result' | 'error'
     id?: number
     info?: unknown
     progress?: unknown
     result?: unknown
     error?: string
+    code?: string
 }
 
 function workerUrl(): URL {
     return pathToFileURL(join(resolveZyraRoot(), 'src', 'desktop-provider-worker.mjs'))
+}
+
+export function createDesktopProviderWorker(
+    createWorker: (url: URL, options: WorkerOptions) => Worker = (url, options) => new Worker(url, options)
+): Worker {
+    const namespace = desktopTerminalEnvironment()
+    if (!namespace.ZYRA_STATE_DIR) throw new Error('Desktop provider credential namespace is not configured.')
+    return createWorker(workerUrl(), {
+        env: { ...process.env, ...namespace }
+    })
 }
 
 export class ProviderWorkerClient {
@@ -33,15 +49,18 @@ export class ProviderWorkerClient {
     private readonly pending = new Map<number, PendingRequest>()
     private warmPromise: Promise<void> | null = null
 
-    constructor(private readonly createWorker: () => Worker = () => new Worker(workerUrl())) {}
+    constructor(private readonly createWorker: () => Worker = () => createDesktopProviderWorker()) {}
 
     readonly sdk = {
         loginZyraAuth: (provider: string, options: Record<string, unknown> = {}) => this.request({
             operation: 'loginZyraAuth',
-            provider
+            provider,
+            signInMethod: options.signInMethod
         }, {
-            onAuth: typeof options.onAuth === 'function' ? options.onAuth as (info: unknown) => void : undefined,
-            onProgress: typeof options.onProgress === 'function' ? options.onProgress as (progress: unknown) => void : undefined
+            onAuth: typeof options.onAuth === 'function' ? options.onAuth as (info: unknown) => unknown : undefined,
+            onDeviceCode: typeof options.onDeviceCode === 'function' ? options.onDeviceCode as (info: unknown) => unknown : undefined,
+            onProgress: typeof options.onProgress === 'function' ? options.onProgress as (progress: unknown) => void : undefined,
+            signal: options.signal instanceof AbortSignal ? options.signal : undefined
         }),
         configureZyraOpenAIApiKey: (apiKey: string) => this.request({ operation: 'configureZyraOpenAIApiKey', apiKey }),
         verifyZyraOpenAIApiAuth: () => this.request({ operation: 'verifyZyraOpenAIApiAuth' }),
@@ -56,7 +75,9 @@ export class ProviderWorkerClient {
         saveRoleModel: (input: unknown) => this.request({ operation: 'saveRoleModel', input }),
         disconnect: (provider: string) => this.request({ operation: 'disconnectModelProvider', provider }),
         connect: (input: unknown) => this.request({ operation: 'connectModelProvider', input }),
-        list: () => this.request({ operation: 'listModelProviders' })
+        list: () => this.request({ operation: 'listModelProviders' }),
+        detectHarness: () => this.request({ operation: 'detectHarness' }),
+        connectHarness: (input: unknown) => this.request({ operation: 'connectHarness', input })
     }
 
     readonly account = {
@@ -90,23 +111,37 @@ export class ProviderWorkerClient {
     }
 
     private request(message: Record<string, unknown>, callbacks: WorkerCallbacks = {}): Promise<any> {
+        if (callbacks.signal?.aborted) return Promise.reject(callbacks.signal.reason)
         const worker = this.ensureWorker()
         const id = this.nextRequestId++
         const operation = String(message.operation || '')
-        const timeoutMs = operation === 'connectModelProvider' ? 60_000 : operation === 'loginZyraAuth' ? 0 : operation === 'warm' ? 30_000 : 20_000
+        const timeoutMs = operation === 'connectModelProvider' || operation === 'connectHarness' ? 60_000 : operation === 'loginZyraAuth' ? 0 : operation === 'warm' ? 30_000 : 20_000
         return new Promise((resolve, reject) => {
             const timeout = timeoutMs > 0
                 ? setTimeout(() => {
-                    if (!this.pending.delete(id)) return
+                    const request = this.pending.get(id)
+                    if (!request) return
+                    this.clearRequest(id, request)
                     reject(new Error('Connection check timed out. Try again.'))
                 }, timeoutMs)
                 : null
-            this.pending.set(id, { resolve, reject, timeout, ...callbacks })
+            const request: PendingRequest = { resolve, reject, timeout, operation, ...callbacks }
+            this.pending.set(id, request)
             try {
                 worker.postMessage({ ...message, id })
+                if (callbacks.signal) {
+                    request.abortHandler = () => {
+                        try {
+                            worker.postMessage({ operation: 'cancelRequest', targetId: id })
+                        } catch (error) {
+                            this.rejectRequest(id, request, error)
+                        }
+                    }
+                    callbacks.signal.addEventListener('abort', request.abortHandler, { once: true })
+                    if (callbacks.signal.aborted) request.abortHandler()
+                }
             } catch (error) {
-                this.pending.delete(id)
-                if (timeout) clearTimeout(timeout)
+                this.clearRequest(id, request)
                 reject(error instanceof Error ? error : new Error('Could not start the connection action.'))
             }
         })
@@ -134,28 +169,45 @@ export class ProviderWorkerClient {
 
     private handleMessage(message: WorkerResponse) {
         if (!Number.isSafeInteger(message.id)) return
-        const request = this.pending.get(message.id as number)
+        const id = message.id as number
+        const request = this.pending.get(id)
         if (!request) return
-        if (message.type === 'auth') {
-            request.onAuth?.(message.info)
+        if (message.type === 'auth' || message.type === 'deviceCode' || message.type === 'progress') {
+            if (request.signal?.aborted) return
+            try {
+                if (message.type === 'auth') void Promise.resolve(request.onAuth?.(message.info)).catch((error) => this.rejectRequest(id, request, error))
+                else if (message.type === 'deviceCode') void Promise.resolve(request.onDeviceCode?.(message.info)).catch((error) => this.rejectRequest(id, request, error))
+                else request.onProgress?.(message.progress)
+            } catch (error) {
+                this.rejectRequest(id, request, error)
+            }
             return
         }
-        if (message.type === 'progress') {
-            request.onProgress?.(message.progress)
-            return
-        }
-        this.pending.delete(message.id as number)
-        if (request.timeout) clearTimeout(request.timeout)
+        this.clearRequest(id, request)
         if (message.type === 'result') request.resolve(message.result)
-        else request.reject(new Error(message.error || 'OpenAI connection action failed.'))
+        else request.reject(Object.assign(new Error(message.error || 'OpenAI connection action failed.'), { code: message.code }))
+    }
+
+    private rejectRequest(id: number, request: PendingRequest, error: unknown) {
+        if (this.pending.get(id) !== request) return
+        this.clearRequest(id, request)
+        if (request.operation === 'loginZyraAuth') {
+            try { this.worker?.postMessage({ operation: 'cancelRequest', targetId: id }) } catch { }
+        }
+        request.reject(error instanceof Error ? error : new Error('OpenAI connection action failed.'))
+    }
+
+    private clearRequest(id: number, request: PendingRequest) {
+        this.pending.delete(id)
+        if (request.timeout) clearTimeout(request.timeout)
+        if (request.abortHandler) request.signal?.removeEventListener('abort', request.abortHandler)
     }
 
     private rejectPending(error: Error) {
-        for (const request of this.pending.values()) {
-            if (request.timeout) clearTimeout(request.timeout)
+        for (const [id, request] of this.pending) {
+            this.clearRequest(id, request)
             request.reject(error)
         }
-        this.pending.clear()
     }
 }
 

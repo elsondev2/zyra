@@ -81,6 +81,10 @@ type BrowserAssistantBridgeDependencies = {
     resolveClipboardAttachment: (reference: string) => Promise<string | null>
     getVoiceTranscriptionState: () => Promise<AssistantVoiceTranscriptionState>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<string>
+    saveVoiceHistory: (input: import('../../shared/assistant/contracts').AssistantSaveVoiceHistoryInput) => Promise<void>
+    listVoiceHistory: () => Promise<import('../../shared/assistant/contracts').AssistantVoiceHistoryEntry[]>
+    getFailedVoiceRecording: (id: string) => Promise<string | null>
+    deleteVoiceHistory: (id: string) => Promise<void>
     isOnboardingComplete?: () => boolean
 }
 
@@ -501,6 +505,10 @@ export class BrowserAssistantBridge {
                 const result = await service.setPluginState(input.pluginId, input.state, input.expectedCatalogRevision)
                 return { ...result, catalog: withoutDesktopPluginPaths(result.catalog) }
             }
+            case 'setPluginAppViewSettings': {
+                const result = await service.setPluginAppViewSettings(args[0] as any)
+                return { ...result, catalog: withoutDesktopPluginPaths(result.catalog) }
+            }
             case 'rollbackPlugin': {
                 const input = args[0] as { pluginId: string; releaseId: string; confirmed: true; expectedCatalogRevision?: number }
                 const result = await service.rollbackPlugin(input.pluginId, input.releaseId, input.confirmed, input.expectedCatalogRevision)
@@ -616,6 +624,16 @@ export class BrowserAssistantBridge {
             case 'transcribeVoice': return {
                 success: true,
                 text: await this.dependencies.transcribeVoice(args[0] as any)
+            }
+            case 'saveVoiceHistory': {
+                await this.dependencies.saveVoiceHistory(args[0] as any)
+                return { success: true }
+            }
+            case 'listVoiceHistory': return { success: true, entries: await this.dependencies.listVoiceHistory() }
+            case 'getFailedVoiceRecording': return { success: true, audioBase64: await this.dependencies.getFailedVoiceRecording(String(args[0] || '')) }
+            case 'deleteVoiceHistory': {
+                await this.dependencies.deleteVoiceHistory(String(args[0] || ''))
+                return { success: true }
             }
         }
     }

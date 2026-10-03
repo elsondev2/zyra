@@ -15,6 +15,8 @@ import {
 import { estimateMarkdownContentHeight } from '@/lib/text-layout/markdown-blocks'
 import { stripProposedPlanBlocks } from './assistant-proposed-plan'
 import {
+    TIMELINE_TEXT_LINE_HEIGHT,
+    USER_MESSAGE_COLLAPSED_LINE_COUNT,
     estimateAttachmentGridHeight,
     getAssistantMessageWidth,
     getPlanCardContentWidth,
@@ -30,7 +32,9 @@ export type TimelineEntry =
     | { id: string; createdAt: string; timelineSequence?: number; type: 'user-input'; input: AssistantPendingUserInput }
 
 export type TimelineRenderRow =
-    | { kind: 'message'; id: string; createdAt: string; message: AssistantMessage }
+    | { kind: 'model-change'; id: string; createdAt: string; previousModel: string; model: string }
+    | { kind: 'conversation-time'; id: string; createdAt: string }
+    | { kind: 'message'; id: string; createdAt: string; message: AssistantMessage; threadMessage?: AssistantActivity; workBoundaryOnly?: boolean; peerReply?: import('./assistant-peer-replies').AssistantPeerReply }
     | { kind: 'plan'; id: string; createdAt: string; plan: AssistantProposedPlan; canImplement: boolean }
     | { kind: 'activity'; id: string; createdAt: string; activity: AssistantActivity }
     | { kind: 'activity-group'; id: string; createdAt: string; activities: AssistantActivity[] }
@@ -52,6 +56,7 @@ export type TimelineTurnWorkSummaryRow = {
     outcome: 'completed' | 'interrupted' | 'failed' | 'no-response' | null
     rows: TimelineRenderRow[]
     liveNarrationRow: TimelineRenderRow | null
+    interruptionLabel?: string
 }
 
 export type TimelineDisplayRow = TimelineRenderRow | TimelineTurnWorkSummaryRow
@@ -72,6 +77,7 @@ export type ParsedUserAttachment = {
 }
 
 export function shouldRenderActivity(activity: AssistantActivity): boolean {
+    if (activity.kind === 'thread-message') return true
     if (activity.payload?.approvalPending === true) return false
     if (isInternalAssistantActivity(activity)) return false
     if (activity.kind === 'user-input.resolved') return false
@@ -162,6 +168,7 @@ export function isIssueActivity(activity: AssistantActivity): boolean {
 }
 
 export function getActivityRenderGroupKind(activity: AssistantActivity): 'issue' | 'subagent' | 'tool' | null {
+    if (activity.kind === 'thread-message') return null
     if (isInternalAssistantActivity(activity)) return null
     if (isVoiceStrongTaskActivity(activity)) return null
     if (isModelNoticeActivity(activity)) return null
@@ -876,6 +883,12 @@ export function buildTimelineRows(entries: TimelineEntry[], isWorking: boolean, 
         } else {
             row = { kind: 'activity', id: entry.id, createdAt: entry.createdAt, activity: entry.activity }
         }
+        if (row.kind === 'activity' && row.activity.kind === 'thread-message') {
+            // A user-style conversation boundary for rendering only. The persisted
+            // record remains peer context and cannot become user approval/authority.
+            row = { kind: 'message', id: row.id, createdAt: row.createdAt, threadMessage: row.activity,
+                message: { id: row.id, role: 'user', text: row.activity.detail || String(row.activity.payload?.text || ''), turnId: null, streaming: false, createdAt: row.createdAt, updatedAt: row.createdAt } }
+        }
 
         if (row.kind === 'activity' && isInternalAssistantActivity(row.activity)) {
             const previous = rows[rows.length - 1]
@@ -1196,9 +1209,14 @@ export function estimateTimelineRowHeight(
     row: TimelineRenderRow,
     options: { containerWidth?: number | null } = {}
 ): number {
+    if (row.kind === 'model-change') return 36
+    if (row.kind === 'conversation-time') return 28
     if (row.kind === 'working') return 48
     if (row.kind === 'user-input') return row.input.status === 'pending' ? Math.max(220, 96 + row.input.questions.length * 156) : 40
     if (row.kind === 'activity') {
+        if (row.activity.kind === 'thread-message') {
+            return 72 + Math.min(USER_MESSAGE_COLLAPSED_LINE_COUNT * TIMELINE_TEXT_LINE_HEIGHT, measureTimelinePlainTextHeight(row.activity.detail || '', getUserMessageBodyWidth(options.containerWidth), 'pre-wrap').height)
+        }
         if (row.activity.turnTerminalOutcome === 'interrupted') return 28
         if (isVoiceStrongTaskActivity(row.activity)) return 36
         if (isCommandCheckpointActivity(row.activity)) return 34
@@ -1248,7 +1266,7 @@ export function estimateTimelineRowHeight(
             ? measureTimelinePlainTextHeight(rawBody || ' ', assistantWidth, 'pre-wrap').height
             : estimateMarkdownContentHeight(rawBody || ' ', assistantWidth, 'assistant')
         const footerHeight = row.message.streaming ? 48 : 36
-        return Math.min(5600, 44 + contentHeight + footerHeight)
+        return Math.min(5600, 44 + contentHeight + footerHeight + (row.peerReply && !row.peerReply.fallback ? 44 : 0))
     }
 
     const userBodyWidth = getUserMessageBodyWidth(options.containerWidth)

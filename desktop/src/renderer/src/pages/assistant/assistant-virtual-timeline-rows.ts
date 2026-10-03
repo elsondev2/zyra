@@ -1,4 +1,5 @@
 import type { TimelineDisplayRow } from './assistant-timeline-helpers'
+import { areAssistantPeerRepliesEqual } from './assistant-peer-replies'
 
 export type StableTimelineRowsState = {
     byId: Map<string, TimelineDisplayRow>
@@ -16,11 +17,15 @@ function sameRowsEquivalent(left: readonly TimelineDisplayRow[], right: readonly
 function areRowsEquivalent(left: TimelineDisplayRow, right: TimelineDisplayRow): boolean {
     if (left === right) return true
     if (left.id !== right.id || left.kind !== right.kind || left.createdAt !== right.createdAt) return false
-    if (left.kind === 'message' && right.kind === 'message') return left.message === right.message
+    if (left.kind === 'message' && right.kind === 'message') return left.message === right.message && left.threadMessage === right.threadMessage
+        && left.workBoundaryOnly === right.workBoundaryOnly
+        && areAssistantPeerRepliesEqual(left.peerReply, right.peerReply)
     if (left.kind === 'activity' && right.kind === 'activity') return left.activity === right.activity
     if (left.kind === 'plan' && right.kind === 'plan') return left.plan === right.plan && left.canImplement === right.canImplement
     if (left.kind === 'user-input' && right.kind === 'user-input') return left.input === right.input
     if (left.kind === 'working' && right.kind === 'working') return true
+    if (left.kind === 'conversation-time' && right.kind === 'conversation-time') return true
+    if (left.kind === 'model-change' && right.kind === 'model-change') return left.previousModel === right.previousModel && left.model === right.model
     if (left.kind === 'turn-work-summary' && right.kind === 'turn-work-summary') {
         return left.turnId === right.turnId
             && left.startedAt === right.startedAt
@@ -28,6 +33,7 @@ function areRowsEquivalent(left: TimelineDisplayRow, right: TimelineDisplayRow):
             && left.running === right.running
             && left.terminalResponseVisible === right.terminalResponseVisible
             && left.outcome === right.outcome
+            && left.interruptionLabel === right.interruptionLabel
             && ((!left.liveNarrationRow && !right.liveNarrationRow) || Boolean(left.liveNarrationRow && right.liveNarrationRow && areRowsEquivalent(left.liveNarrationRow, right.liveNarrationRow)))
             && sameRowsEquivalent(left.rows, right.rows)
     }

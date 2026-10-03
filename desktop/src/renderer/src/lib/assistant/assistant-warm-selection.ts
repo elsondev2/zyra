@@ -26,6 +26,9 @@ export function hasAssistantWarmSelection(input: AssistantWarmSelectionInput): b
         ? session?.threads.find((entry) => entry.id === threadId) || null
         : null
     const retainedHistory = threadId ? input.historyByThreadId[threadId] : undefined
+    // Revision freshness says the data is valid, not that this page reaches the
+    // latest turn. Reopening a chat always asks for its newest page.
+    if (retainedHistory?.pageInfo.hasNewer) return false
     return isAssistantRetainedHistoryFresh(retainedHistory, thread)
         || hasCachedSessionSelection(
             input.snapshot,
@@ -39,6 +42,23 @@ export function prepareAssistantWarmSelection(input: AssistantWarmSelectionInput
     snapshot: AssistantSnapshot
     historyByThreadId: AssistantStoreState['historyByThreadId']
 } {
+    const targetSession = input.snapshot.sessions.find(entry => entry.id === input.sessionId)
+    const targetThreadId = input.threadId || targetSession?.activeThreadId || null
+    if (targetThreadId && input.historyByThreadId[targetThreadId]?.pageInfo.hasNewer) {
+        return {
+            snapshot: {
+                ...input.snapshot,
+                selectedSessionId: input.sessionId,
+                sessions: input.snapshot.sessions.map(session => session.id !== input.sessionId ? session : {
+                    ...session,
+                    threads: session.threads.map(thread => thread.id !== targetThreadId ? thread : {
+                        ...thread, messages: [], activities: [], proposedPlans: []
+                    })
+                })
+            },
+            historyByThreadId: input.historyByThreadId
+        }
+    }
     let snapshot = applyCachedSessionSelection(
         input.snapshot,
         input.sessionId,
@@ -53,7 +73,8 @@ export function prepareAssistantWarmSelection(input: AssistantWarmSelectionInput
     const retainedHistory = threadId ? input.historyByThreadId[threadId] : undefined
     if (
         !threadId
-        || !isAssistantRetainedHistoryFresh(retainedHistory, thread)
+        || !isAssistantRetainedHistoryFresh(retainedHistory)
+        || ((thread?.messageCount || 0) === 0 && (thread?.activityCount || 0) === 0 && !thread?.latestTurn)
         || !hasRenderableAssistantRetainedHistory(retainedHistory)
     ) return { snapshot, historyByThreadId: input.historyByThreadId }
 

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     PointerSensor,
+    KeyboardSensor,
     useSensor,
     useSensors,
     type DragCancelEvent,
     type DragEndEvent,
     type DragStartEvent
 } from '@dnd-kit/core'
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { CreateFileTypeModal } from '@/components/ui/CreateFileTypeModal'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { getFileExtensionFromName, validateCreateName } from '@/lib/filesystem/fileSystemPaths'
@@ -70,7 +72,8 @@ export function useFilePreviewModalInteractions(input: {
     const dndSensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: { distance: 6 }
-        })
+        }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     )
 
     useEffect(() => {

@@ -17,6 +17,8 @@ export function AssistantNewChatProjectChip(props: {
     projectIconSourcePath?: string | null
     projectChoices: AssistantProjectChoice[]
     disabled?: boolean
+    unavailableReason?: string | null
+    onUnavailable?: (reason: string) => void
     onSelectProject: (projectId: string | null) => Promise<void> | void
     onCreateProject: () => Promise<void> | void
 }) {
@@ -57,7 +59,13 @@ export function AssistantNewChatProjectChip(props: {
             <button
                 type="button"
                 disabled={props.disabled}
-                onClick={() => setOpen((current) => !current)}
+                onClick={() => {
+                    if (props.unavailableReason) {
+                        props.onUnavailable?.(props.unavailableReason)
+                        return
+                    }
+                    setOpen((current) => !current)
+                }}
                 className={cn(
                     'inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--surface-floating)_96%,transparent)] px-2.5 text-[11px] font-medium text-sparkle-text-secondary shadow-[0_8px_24px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.045)] backdrop-blur-xl transition-[border-color,color,box-shadow] hover:border-white/[0.14] hover:text-sparkle-text focus:outline-none focus-visible:border-[var(--accent-primary)]/55 disabled:cursor-not-allowed disabled:opacity-45',
                     open && 'border-white/[0.14] text-sparkle-text shadow-[0_10px_28px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.055)]'

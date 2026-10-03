@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, FilePenLine, FileText, MessageSquareQuote, Search, SquareTerminal, Wrench } from 'lucide-react'
+import { ChevronDown, ChevronRight, FilePenLine, FileText, MessageSquareQuote, Puzzle, Search, SquareTerminal, Wrench } from 'lucide-react'
+import { bundledPluginLogo } from '../plugins/bundled-plugin-logos'
 import { parseAssistantHistoryBodyRef, type AssistantActivity, type AssistantHistoryBody, type AssistantUserInputQuestion, type FileChangeKind } from '@shared/assistant/contracts'
 import {
     analyzeAssistantReadResult,
@@ -13,6 +14,8 @@ import { cn } from '@/lib/utils'
 import { extractFilePatch, scanPatchFileSummaries } from '@/lib/diffRendering'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import { AssistantInlineDiffPreview } from './AssistantInlineDiffPreview'
+import { InlineDiffStats } from './AssistantInlineDiffStats'
+import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS } from './assistant-action-row-layout'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 import {
     AssistantFileChangeStatusPill,
@@ -23,6 +26,8 @@ import { stripAssistantCommandEnvelope } from './assistant-action-presentation'
 import { formatAssistantActionTime } from './AssistantTimelineActionShell'
 import { getTerminalOutputHeightClass } from './assistant-timeline-layout'
 import { useAssistantVisibleText } from './useAssistantVisibleText'
+import { PluginAppView } from './PluginAppView'
+import { pluginAppViewFromActivity, pluginAppViewIdentity } from './plugin-app-view-state'
 import {
     areActivitiesEquivalent,
     getActivityCommand,
@@ -178,6 +183,11 @@ function getReadLineRangeLabel(metadata: AssistantReadMetadata): string | null {
 }
 
 function getActivityIcon(activity: AssistantActivity) {
+    if (activity.kind === 'plugin-mcp') {
+        const slug = typeof activity.payload?.pluginSlug === 'string' ? activity.payload.pluginSlug : ''
+        const logo = bundledPluginLogo(slug)
+        return logo ? <img src={logo} alt="" className="h-[14px] w-[14px] rounded-[3px] object-contain" /> : <Puzzle size={13} />
+    }
     if (isCommandActivity(activity)) return <SquareTerminal size={13} />
     if (activity.kind === 'user-input.resolved') return <MessageSquareQuote size={13} />
     if (activity.kind === 'search') return <Search size={13} />
@@ -205,15 +215,6 @@ function getResolvedUserInputEntries(activity: AssistantActivity): Array<{
             answer: answer || 'No answer provided'
         }
     })
-}
-
-function InlineDiffStats({ additions, deletions, className }: { additions: number; deletions: number; className?: string }) {
-    return (
-        <span className={cn('inline-flex items-center gap-1.5 font-mono text-[10px] leading-none', className)}>
-            <span className="text-[color-mix(in_srgb,var(--status-success)_72%,var(--color-text))]">+{additions}</span>
-            <span className="text-[color-mix(in_srgb,var(--status-danger)_72%,var(--color-text))]">-{deletions}</span>
-        </span>
-    )
 }
 
 export const TimelineToolCallCard = memo(({
@@ -249,6 +250,7 @@ export const TimelineToolCallCard = memo(({
             ...hydratedBody.payload
         }
     } : sourceActivity, [hydratedBody, sourceActivity])
+    const pluginAppView = useMemo(() => pluginAppViewFromActivity(activity), [activity])
     const [expanded, setExpanded] = useState(() => !historyBodyRef && (getCanonicalActivityImagePaths(activity).length > 0 || shouldAutoExpandTerminalTool(activity, toolOutputDefaultMode)))
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
     const userChangedExpansionRef = useRef(false)
@@ -616,37 +618,32 @@ export const TimelineToolCallCard = memo(({
     return (
         <div
             id={getTimelineActivityDomId(activity.id)}
-            className="assistant-tool-call-card px-0.5 py-0"
+            className="assistant-tool-call-card py-0"
             data-assistant-tool-call={displayMode}
         >
             <button
                 type="button"
                 onClick={handlePrimaryAction}
                 title={opensRelatedCommand ? 'Go to original command' : undefined}
+                data-assistant-action-row="true"
                 className={cn(
-                    'group relative flex w-full min-w-0 items-center overflow-hidden text-left transition-colors',
-                    minimal
-                        ? 'min-h-7 gap-1.5 rounded-md px-0.5'
-                        : isTerminalLikeTool
-                            ? 'min-h-6 gap-1.5 rounded-md px-1 py-0.5'
-                            : 'min-h-7 gap-2 rounded-md px-1.5 py-1',
+                    ASSISTANT_ACTION_ROW_CLASS, 'group relative overflow-hidden transition-colors',
                     canExpandBody || opensRelatedCommand ? 'hover:bg-[var(--surface-hover)]' : 'cursor-default'
                 )}
             >
-                <span className={cn(
-                    'relative inline-flex shrink-0 items-center justify-center',
-                    minimal ? `h-6 w-6 ${getMinimalStatusIconClassName(status)}` : `h-4 w-4 ${getMinimalStatusIconClassName(status)}`
+                <span data-assistant-action-icon="true" className={cn(
+                    ASSISTANT_ACTION_ICON_CLASS, 'relative', getMinimalStatusIconClassName(status)
                 )}>
                     {getActivityIcon(activity)}
                 </span>
                 <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
-                        <p className={cn(
+                        <p data-assistant-action-title="true" className={cn(
                             'min-w-0 flex-1 truncate',
                             minimal
-                                ? 'text-[12px] leading-6'
+                                ? 'text-[12px] leading-5'
                                 : actionTitle
-                                    ? cn('text-[12px] font-medium', isTerminalLikeTool ? 'leading-4' : 'leading-5')
+                                    ? 'text-[12px] font-medium leading-5'
                                     : 'font-mono text-[11px] leading-5',
                             isTerminalLikeTool
                                 ? actionTitle ? 'whitespace-nowrap text-sparkle-text-secondary' : minimal ? 'whitespace-nowrap font-mono text-sparkle-text-secondary' : 'whitespace-nowrap font-mono text-[color-mix(in_srgb,var(--status-success)_44%,var(--color-text))]'
@@ -920,6 +917,7 @@ export const TimelineToolCallCard = memo(({
                     )) : null}
                 </div>
             </AnimatedHeight>
+            {pluginAppView ? <PluginAppView key={pluginAppViewIdentity(pluginAppView)} view={pluginAppView} /> : null}
         </div>
     )
 }, (prev, next) => {

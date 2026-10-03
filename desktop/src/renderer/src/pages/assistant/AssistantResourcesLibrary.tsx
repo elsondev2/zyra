@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { ArrowUpRight, Copy, ExternalLink, FileClock, Globe2, Image as ImageIcon, X } from 'lucide-react'
 import { usePreviewVirtualWindow } from '@/components/ui/file-preview/usePreviewVirtualWindow'
 import { MarkdownSiteIcon, resolveExternalMarkdownHost } from '@/components/ui/markdown/InlineTargets'
 import { cn } from '@/lib/utils'
 import type { AssistantResource, AssistantResourceSource } from './assistant-resource-index'
+import { assistantResourceCaption } from './assistant-resource-labels'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 
 export type ResourceKindFilter = 'all' | 'images' | 'links'
@@ -47,8 +48,7 @@ const ResourceLibraryTile = memo(function ResourceLibraryTile({
             type="button"
             role="option"
             aria-selected={selected}
-            onClick={() => onSelect(resource)}
-            onDoubleClick={() => onOpen(resource)}
+            onClick={() => { onSelect(resource); onOpen(resource) }}
             className={cn(
                 'group/library-tile flex h-[166px] min-w-0 flex-col overflow-hidden border bg-[color-mix(in_srgb,var(--color-bg)_97%,black)] text-left outline-none transition-[border-color,background-color,box-shadow] duration-100',
                 selected
@@ -73,7 +73,7 @@ const ResourceLibraryTile = memo(function ResourceLibraryTile({
             </span>
             <span className="flex min-h-0 flex-1 flex-col px-2.5 py-1.5">
                 <span className="truncate text-[10px] font-medium text-sparkle-text-secondary">{resource.title}</span>
-                <span className="mt-0.5 truncate font-mono text-[7px] text-sparkle-text-muted/45">{resourceLocation(resource)}</span>
+                <span className="mt-0.5 truncate text-[7px] text-sparkle-text-muted/45">{assistantResourceCaption(resource)}</span>
                 <span className="mt-auto flex items-center gap-1.5 pt-1">
                     <span className="min-w-0 flex-1 truncate text-[7px] text-sparkle-text-muted/45">{resource.occurrenceCount} mention{resource.occurrenceCount === 1 ? '' : 's'}</span>
                     <span className="font-mono text-[7px] text-sparkle-text-muted/55">#{resource.latestTurnNumber}</span>
@@ -84,6 +84,7 @@ const ResourceLibraryTile = memo(function ResourceLibraryTile({
 })
 
 export function AssistantResourcesLibrary({
+    active,
     resources,
     allResources,
     selectedResourceId,
@@ -103,6 +104,7 @@ export function AssistantResourcesLibrary({
     onOpenTurn,
     onOpenDiff
 }: {
+    active: boolean
     resources: AssistantResource[]
     allResources: AssistantResource[]
     selectedResourceId: string | null
@@ -131,6 +133,7 @@ export function AssistantResourcesLibrary({
     const rowHeight = 178
     const rowCount = Math.ceil(resources.length / columnCount)
     const { range, scrollElementRef, scrollToIndex } = usePreviewVirtualWindow({
+        active,
         rowCount,
         rowHeight,
         restoreKey: `assistant-resource-library:${kindFilter}:${sourceFilter}:${turnFilter}`,
@@ -139,7 +142,8 @@ export function AssistantResourcesLibrary({
     })
     const renderedResources = resources.slice(range.start * columnCount, Math.min(resources.length, range.end * columnCount))
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (!active) return
         const element = libraryRef.current
         if (!element || typeof ResizeObserver === 'undefined') return
         const update = () => setLibraryWidth(element.clientWidth)
@@ -147,7 +151,7 @@ export function AssistantResourcesLibrary({
         const observer = new ResizeObserver(update)
         observer.observe(element)
         return () => observer.disconnect()
-    }, [])
+    }, [active])
 
     useEffect(() => {
         if (!selectedResourceId) return

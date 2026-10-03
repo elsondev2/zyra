@@ -6,9 +6,6 @@ export type PreviewFileSearchEntry = Pick<DevScopeIndexedPathEntry,
     'path' | 'parentPath' | 'relativePath' | 'name' | 'type' | 'extension' | 'isHidden' | 'depth'
 >
 
-const warmIndexRequests = new Map<string, Promise<void>>()
-const warmIndexReady = new Set<string>()
-
 function normalizePath(pathValue: string): string {
     return String(pathValue || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
 }
@@ -85,32 +82,6 @@ export function searchLoadedPreviewTree(
         .map((match) => match.entry)
 }
 
-export function warmPreviewFileSearchIndex(projectPath: string): Promise<void> {
-    const normalizedProjectPath = normalizePath(projectPath)
-    const projectKey = normalizePathKey(normalizedProjectPath)
-    if (!projectKey || warmIndexReady.has(projectKey) || typeof window === 'undefined' || !window.devscope) {
-        return Promise.resolve()
-    }
-    const existing = warmIndexRequests.get(projectKey)
-    if (existing) return existing
-
-    const request = window.devscope.searchIndexedPaths({
-        scopePath: normalizedProjectPath,
-        term: '__zyra_search_catalog_warm__',
-        limit: 1,
-        includeFiles: true,
-        includeDirectories: true,
-        includeAncestors: false,
-        showHidden: false
-    }).then((result) => {
-        if (result.success) warmIndexReady.add(projectKey)
-    }).finally(() => {
-        if (warmIndexRequests.get(projectKey) === request) warmIndexRequests.delete(projectKey)
-    })
-    warmIndexRequests.set(projectKey, request)
-    return request
-}
-
 export function usePreviewFileSearch({
     projectPath,
     scopePath,
@@ -133,18 +104,6 @@ export function usePreviewFileSearch({
     const capturedQueryRef = useRef('')
 
     useEffect(() => {
-        const normalizedProjectPath = normalizePath(projectPath)
-        if (!normalizedProjectPath) return
-        const warm = () => { void warmPreviewFileSearchIndex(normalizedProjectPath) }
-        if (typeof window.requestIdleCallback === 'function') {
-            const idleId = window.requestIdleCallback(warm, { timeout: 1200 })
-            return () => window.cancelIdleCallback(idleId)
-        }
-        const timeoutId = window.setTimeout(warm, 240)
-        return () => window.clearTimeout(timeoutId)
-    }, [projectPath])
-
-    useEffect(() => {
         const normalizedQuery = query.trim().toLowerCase()
         const normalizedProjectPath = normalizePath(projectPath)
         const normalizedScopePath = normalizePath(scopePath || projectPath)
@@ -160,27 +119,30 @@ export function usePreviewFileSearch({
         setSearching(true)
         setError(null)
 
-        void window.devscope.searchIndexedPaths({
-            scopePath: normalizedScopePath,
-            term: normalizedQuery,
-            limit,
-            includeFiles: true,
-            includeDirectories: true,
-            includeAncestors: false,
-            showHidden
-        }).then((result) => {
-            if (requestSequenceRef.current !== requestId) return
-            if (!result.success) {
-                setError(result.error || 'File search failed.')
-                return
-            }
-            setEntries(result.entries || [])
-        }).catch((searchError: unknown) => {
-            if (requestSequenceRef.current !== requestId) return
-            setError(searchError instanceof Error ? searchError.message : 'File search failed.')
-        }).finally(() => {
-            if (requestSequenceRef.current === requestId) setSearching(false)
-        })
+        const timer = window.setTimeout(() => {
+            void window.devscope.searchIndexedPaths({
+                scopePath: normalizedScopePath,
+                term: normalizedQuery,
+                limit,
+                includeFiles: true,
+                includeDirectories: true,
+                includeAncestors: false,
+                showHidden
+            }).then((result) => {
+                if (requestSequenceRef.current !== requestId) return
+                if (!result.success) {
+                    setError(result.error || 'File search failed.')
+                    return
+                }
+                setEntries(result.entries || [])
+            }).catch((searchError: unknown) => {
+                if (requestSequenceRef.current !== requestId) return
+                setError(searchError instanceof Error ? searchError.message : 'File search failed.')
+            }).finally(() => {
+                if (requestSequenceRef.current === requestId) setSearching(false)
+            })
+        }, 180)
+        return () => window.clearTimeout(timer)
     }, [limit, loadedTree, projectPath, query, scopePath, showHidden])
 
     useEffect(() => {

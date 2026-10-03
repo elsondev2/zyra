@@ -24,6 +24,7 @@ const projectGitOverviewCache = new Map<string, { expiresAt: number; promise: Pr
 
 export interface GitStatusDetailedOptions {
     includeStats?: boolean
+    includeIgnored?: boolean
 }
 
 export function applyStatusStats(
@@ -164,7 +165,12 @@ export async function getGitStatusDetailed(
     try {
         const git = createGit(projectPath)
         const repoContext = await getRepoContext(git, projectPath)
-        const stdout = await git.raw(['-c', 'status.relativePaths=true', 'status', '--porcelain=v1', '--ignored', '-z'])
+        // Enumerating ignored directories can traverse entire dependency and build trees.
+        // Keep that expensive view opt-in; normal status only needs changed and untracked files.
+        const stdout = await git.raw([
+            '-c', 'status.relativePaths=true', 'status', '--porcelain=v1', '-z',
+            ...(options?.includeIgnored ? ['--ignored'] : ['--untracked-files=normal'])
+        ])
         const details = parseStatusEntries(stdout, repoContext.projectRelativeToRepo)
 
         if (options?.includeStats !== false && details.length > 0) {
@@ -374,19 +380,20 @@ async function readProjectGitOverview(projectPath: string): Promise<ProjectGitOv
             }
         }
 
-        const [statusMap, unpushedCommits, remotes] = await Promise.all([
+        const [statusMap, remoteOverview] = await Promise.all([
             getGitStatus(projectPath),
-            getUnpushedCommits(projectPath),
-            git.getRemotes(true).catch(() => [])
+            git.getRemotes(true).catch(() => []).then(async remotes => {
+                const hasRemote = hasOriginRemote(remotes)
+                return { hasRemote, unpushedCount: await countUnpushedForOverview(git, hasRemote) }
+            })
         ])
-        const hasRemote = hasOriginRemote(remotes)
 
         return {
             path: projectPath,
             isGitRepo: true,
             changedCount: countTrackedChanges(statusMap),
-            unpushedCount: unpushedCommits.length,
-            hasRemote
+            unpushedCount: remoteOverview.unpushedCount,
+            hasRemote: remoteOverview.hasRemote
         }
     } catch (err) {
         return {
@@ -398,6 +405,21 @@ async function readProjectGitOverview(projectPath: string): Promise<ProjectGitOv
             error: toErrorMessage(err, 'Failed to inspect repository')
         }
     }
+}
+
+async function countUnpushedForOverview(git: ReturnType<typeof createGit>, hasOrigin: boolean): Promise<number> {
+    const upstream = (await git.raw([
+        'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'
+    ]).catch(() => '')).trim()
+    let base = upstream
+    if (!base && hasOrigin) {
+        const branch = (await git.raw(['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim()
+        if (branch && branch !== 'HEAD') base = `origin/${branch}`
+    }
+    if (!base) return 0
+    const rawCount = await git.raw(['rev-list', '--count', `${base}..HEAD`]).catch(() => '')
+    const count = Number.parseInt(rawCount.trim(), 10)
+    return Number.isFinite(count) && count > 0 ? count : 0
 }
 
 export async function getProjectGitOverview(projectPath: string): Promise<ProjectGitOverview> {
@@ -425,7 +447,7 @@ export async function getProjectGitOverview(projectPath: string): Promise<Projec
 
 export async function getProjectsGitOverview(
     projectPaths: string[],
-    maxConcurrent: number = 5
+    maxConcurrent: number = 2
 ): Promise<ProjectGitOverview[]> {
     const uniquePaths = Array.from(
         new Set(

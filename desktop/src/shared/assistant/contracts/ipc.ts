@@ -46,6 +46,9 @@ export const ASSISTANT_IPC = {
     listModels: 'devscope:assistant:listModels',
     listProjects: 'devscope:assistant:listProjects',
     getPluginCatalog: 'devscope:assistant:getPluginCatalog',
+    getPluginMcpConnections: 'devscope:assistant:getPluginMcpConnections',
+    connectPluginMcp: 'devscope:assistant:connectPluginMcp',
+    disconnectPluginMcp: 'devscope:assistant:disconnectPluginMcp',
     startPluginDownload: 'devscope:assistant:startPluginDownload',
     getPluginDownload: 'devscope:assistant:getPluginDownload',
     cancelPluginDownload: 'devscope:assistant:cancelPluginDownload',
@@ -55,6 +58,9 @@ export const ASSISTANT_IPC = {
     setPluginSet: 'devscope:assistant:setPluginSet',
     refreshChatPluginScope: 'devscope:assistant:refreshChatPluginScope',
     setPluginState: 'devscope:assistant:setPluginState',
+    setPluginAppViewSettings: 'devscope:assistant:setPluginAppViewSettings',
+    readPluginAppView: 'devscope:assistant:readPluginAppView',
+    callPluginAppViewTool: 'devscope:assistant:callPluginAppViewTool',
     rollbackPlugin: 'devscope:assistant:rollbackPlugin',
     createProject: 'devscope:assistant:createProject',
     associateProjectFolder: 'devscope:assistant:associateProjectFolder',
@@ -108,6 +114,10 @@ export const ASSISTANT_IPC = {
     realtimeVoiceEvent: 'devscope:assistant:realtimeVoice:event',
     getVoiceTranscriptionState: 'devscope:assistant:getVoiceTranscriptionState',
     transcribeVoice: 'devscope:assistant:transcribeVoice',
+    saveVoiceHistory: 'devscope:assistant:saveVoiceHistory',
+    listVoiceHistory: 'devscope:assistant:listVoiceHistory',
+    getFailedVoiceRecording: 'devscope:assistant:getFailedVoiceRecording',
+    deleteVoiceHistory: 'devscope:assistant:deleteVoiceHistory',
     eventStream: 'devscope:assistant:event'
 } as const
 
@@ -401,6 +411,24 @@ export interface AssistantTranscribeVoiceInput {
     mimeType: 'audio/wav'
     sampleRateHz: 24_000
     durationMs: number
+}
+
+export interface AssistantVoiceHistoryEntry {
+    id: string
+    createdAt: string
+    engine: 'browser' | 'codex'
+    status: 'success' | 'failed'
+    durationMs: number
+    transcript: string | null
+    error: string | null
+    hasRecording: boolean
+}
+
+export interface AssistantSaveVoiceHistoryInput {
+    engine: 'browser'
+    recording: AssistantTranscribeVoiceInput
+    transcript?: string
+    error?: string
 }
 
 export interface AssistantEventStreamPayload {

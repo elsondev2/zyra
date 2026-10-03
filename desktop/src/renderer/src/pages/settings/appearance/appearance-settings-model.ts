@@ -1,3 +1,11 @@
+import {
+    DEFAULT_APPEARANCE_ANIMATION_SPEED,
+    DEFAULT_APPEARANCE_ANIMATION_SCALE,
+    DEFAULT_APPEARANCE_CODE_FONT,
+    DEFAULT_APPEARANCE_CODE_SCALE,
+    DEFAULT_APPEARANCE_CONTRAST_SCALE,
+    DEFAULT_APPEARANCE_INTERFACE_SCALE
+} from '@/lib/settings'
 import type {
     AppearanceCodeFont,
     AppearanceCustomTheme,
@@ -20,6 +28,11 @@ export type AppearancePreferences = Pick<Settings,
     | 'appearanceCustomThemeActive'
     | 'appearanceUiFont'
     | 'appearanceCodeFont'
+    | 'appearanceInterfaceScale'
+    | 'appearanceCodeScale'
+    | 'appearanceContrastScale'
+    | 'appearanceAnimationSpeed'
+    | 'appearanceAnimationScale'
     | 'accentColor'
 >
 
@@ -80,6 +93,24 @@ export function createThemePresetPatch(
     }
 }
 
+/** Selecting a preset card is an intent to use that appearance now, not only save it for later. */
+export function createActiveThemePresetPatch(
+    settings: AppearancePreferences,
+    appearance: 'light' | 'dark',
+    theme: Theme,
+    dependencies: AppearanceModelDependencies
+): AppearanceSettingsPatch {
+    return {
+        appearanceThemeMode: appearance,
+        ...(appearance === 'light'
+            ? { appearanceLightTheme: theme as LightTheme }
+            : { appearanceDarkTheme: theme as DarkTheme }),
+        theme,
+        appearanceCustomThemeActive: false,
+        accentColor: dependencies.getPresetAccent(theme)
+    }
+}
+
 export function createUseSavedCustomThemePatch(
     customTheme: AppearanceCustomTheme,
     dependencies: AppearanceModelDependencies
@@ -134,7 +165,12 @@ export function createResetAppearancePatch(
         appearanceDarkTheme: defaultDarkTheme,
         appearanceCustomThemeActive: false,
         appearanceUiFont: defaultUiFont,
-        appearanceCodeFont: 'system-mono',
+        appearanceCodeFont: DEFAULT_APPEARANCE_CODE_FONT,
+        appearanceInterfaceScale: DEFAULT_APPEARANCE_INTERFACE_SCALE,
+        appearanceCodeScale: DEFAULT_APPEARANCE_CODE_SCALE,
+        appearanceContrastScale: DEFAULT_APPEARANCE_CONTRAST_SCALE,
+        appearanceAnimationSpeed: DEFAULT_APPEARANCE_ANIMATION_SPEED,
+        appearanceAnimationScale: DEFAULT_APPEARANCE_ANIMATION_SCALE,
         theme,
         accentColor: dependencies.getPresetAccent(theme)
     }
@@ -151,5 +187,10 @@ export function hasAppearanceChanges(
         || settings.appearanceDarkTheme !== defaultDarkTheme
         || settings.appearanceCustomThemeActive
         || settings.appearanceUiFont !== defaultUiFont
-        || settings.appearanceCodeFont !== 'system-mono'
+        || settings.appearanceCodeFont !== DEFAULT_APPEARANCE_CODE_FONT
+        || settings.appearanceInterfaceScale !== DEFAULT_APPEARANCE_INTERFACE_SCALE
+        || settings.appearanceCodeScale !== DEFAULT_APPEARANCE_CODE_SCALE
+        || settings.appearanceContrastScale !== DEFAULT_APPEARANCE_CONTRAST_SCALE
+        || settings.appearanceAnimationSpeed !== DEFAULT_APPEARANCE_ANIMATION_SPEED
+        || settings.appearanceAnimationScale !== DEFAULT_APPEARANCE_ANIMATION_SCALE
 }

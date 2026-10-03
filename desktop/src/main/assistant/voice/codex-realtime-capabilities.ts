@@ -43,7 +43,7 @@ export function createChatGptRealtimeCapabilityReport(
         expires_at: new Date(Date.parse(observedAt) + 30 * 60 * 1000).toISOString(),
         experimental_adapter: true,
         notes: [
-            'Zyra signals ChatGPT Frameless Bidi WebRTC directly through Pi OAuth.',
+            'Zyra signals ChatGPT Frameless Bidi WebRTC directly through Zyra OAuth.',
             'The owning renderer exclusively controls media and the oai-events data channel.'
         ],
         realtime: {

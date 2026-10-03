@@ -12,7 +12,7 @@ export function PluginDownloadPanel({ state, displayName, onCancel, onRetry }: {
     onCancel: () => void
     onRetry: () => void
 }) {
-    const visible = Boolean(state.name && !['idle', 'ready', 'installing'].includes(state.phase))
+    const visible = Boolean(state.name && !['idle', 'ready'].includes(state.phase))
     const retainedState = useRef<{ state: PluginDownloadState; displayName?: string } | null>(null)
     if (visible) retainedState.current = { state, displayName }
     const displayedState = visible ? state : retainedState.current?.state
@@ -32,6 +32,8 @@ function PluginDownloadStatus({ state, displayName, onCancel, onRetry }: {
     const downloading = state.phase === 'preparing' && progress?.phase === 'downloading'
     const label = state.phase === 'failed' ? state.error || 'Could not prepare this Plugin.'
         : state.phase === 'cancelling' ? 'Cancelling…'
+        : state.phase === 'installing' ? 'Installing…'
+        : state.phase === 'connecting' ? `Connecting${state.connectingServer ? ` ${state.connectingServer}` : ''}… Complete any account sign-in to continue.`
         : progress?.phase === 'inspecting' ? 'Checking this release…'
         : downloading && progress.totalFiles ? `Downloading and verifying ${progress.completedFiles} of ${progress.totalFiles} files`
         : 'Finding this release…'
@@ -40,11 +42,11 @@ function PluginDownloadStatus({ state, displayName, onCancel, onRetry }: {
             <h2>{displayName || state.name}</h2>
             <div className="plugin-directory-actions">
                 {state.phase === 'failed' ? <button type="button" className="plugin-button" onClick={onRetry}>Retry</button> : null}
-                <button type="button" className="plugin-text-button" disabled={state.phase === 'cancelling'} onClick={onCancel}>{state.phase === 'failed' ? 'Dismiss' : 'Cancel'}</button>
+                {!['installing', 'connecting'].includes(state.phase) ? <button type="button" className="plugin-text-button" disabled={state.phase === 'cancelling'} onClick={onCancel}>{state.phase === 'failed' ? 'Dismiss' : 'Cancel'}</button> : null}
             </div>
         </div>
         <p className="plugin-description" role={state.phase === 'failed' ? 'alert' : 'status'}>{label}</p>
-        {state.phase === 'preparing' ? <>
+        {['preparing', 'installing', 'connecting'].includes(state.phase) ? <>
             <progress aria-label="Plugin preparation progress" max={downloading && progress.totalFiles ? progress.totalFiles : undefined} value={downloading && progress.totalFiles ? progress.completedFiles : undefined} />
             {downloading && progress ? <p className="plugin-meta">{size(progress.completedBytes)} / {size(progress.totalBytes)}{progress.cacheHits ? ` · ${progress.cacheHits} files reused` : ''}</p> : null}
         </> : null}

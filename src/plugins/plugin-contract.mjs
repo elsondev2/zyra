@@ -32,7 +32,7 @@ export const ZYRA_PLUGIN_INSTALLATION_STATES = Object.freeze([
 
 export const ZYRA_PLUGIN_CONTRIBUTION_SUPPORT = Object.freeze({
   skills: 'supported',
-  mcp: 'planned',
+  mcp: 'supported',
   commands: 'planned',
   apps: 'planned',
   agents: 'unsupported',

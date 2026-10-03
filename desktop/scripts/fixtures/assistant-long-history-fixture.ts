@@ -1,5 +1,5 @@
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantSnapshot, AssistantThread } from '../../src/shared/assistant/contracts'
-import { createDefaultSnapshot } from '../../src/main/assistant/projector'
+import { createDefaultAssistantSnapshot } from '../../src/shared/assistant/projector'
 
 const BASE_TIME = Date.parse('2026-07-16T08:00:00.000Z')
 const iso = (sequence: number) => new Date(BASE_TIME + sequence * 10).toISOString()
@@ -69,7 +69,7 @@ export function createAssistantLongHistoryFixture(turnCount = 1000, toolOutputCh
         pendingLabRequest: null, archived: false, createdAt: iso(0), updatedAt: iso(sequence), activeThreadId: thread.id,
         threadIds: [thread.id], threads: [thread]
     }
-    const snapshot = createDefaultSnapshot()
+    const snapshot = createDefaultAssistantSnapshot()
     snapshot.selectedSessionId = session.id
     snapshot.sessions = [session]
     return snapshot

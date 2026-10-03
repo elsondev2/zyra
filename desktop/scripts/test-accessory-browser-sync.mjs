@@ -43,7 +43,7 @@ const fixturePlugin = {
             if (args.path === 'file-preview-modal') return { loader: 'tsx', contents: 'export default function FilePreviewModal(){ return null }' }
             if (args.path === 'use-file-preview') return { loader: 'tsx', contents: `export function useFilePreview(){ const noop=()=>undefined; return { previewFile:null, previewTabs:[], activePreviewTabId:null, previewContent:'', loadingPreview:false, previewTruncated:false, previewSize:0, previewBytes:0, previewModifiedAt:null, previewMediaItems:[], openPreview:async()=>undefined, openPreviewInNewTab:async()=>undefined, setActivePreviewTab:noop, closePreviewTab:noop, reorderPreviewTabs:noop, closePreview:noop } }` }
             if (args.path === 'developer-toast') return { loader: 'tsx', contents: `export function useAssistantInspectorDeveloperToast(){ return { developerToast:null, showDeveloperToast:()=>undefined, dismissDeveloperToast:()=>undefined } } export function AssistantInspectorDeveloperToast(){ return null }` }
-            if (args.path === 'header-context') return { loader: 'tsx', resolveDir: desktop, contents: `import { Fragment } from 'react'; export function AccessoryHeaderPortal({children}){ return <Fragment>{children}</Fragment> }` }
+            if (args.path === 'header-context') return { loader: 'tsx', resolveDir: desktop, contents: `import { createPortal } from 'react-dom'; export function AccessoryHeaderPortal({children}){ return createPortal(children, document.getElementById('fixture-header-slot')) }` }
             return { loader: 'tsx', contents: 'export function IncognitoIcon(){ return null } export function AssistantBrowserPageIcon(){ return null }' }
         })
     }
@@ -61,7 +61,7 @@ try {
         plugins: [fixturePlugin],
         logLevel: 'silent'
     })
-    await writeFile(join(directory, 'index.html'), '<!doctype html><html><body><script src="./fixture.js"></script></body></html>')
+    await writeFile(join(directory, 'index.html'), '<!doctype html><html><head><style>.flex{display:flex}.flex-1{flex:1 1 0%}.min-w-0{min-width:0}.shrink-0{flex-shrink:0}.overflow-x-auto{overflow-x:auto}.sticky{position:sticky}.right-0{right:0}.w-7{width:28px}.h-7{height:28px}.px-1{padding-inline:4px}.gap-1{gap:4px}</style></head><body><script src="./fixture.js"></script></body></html>')
     const main = join(directory, 'main.cjs')
     await writeFile(main, `const { app, BrowserWindow } = require('electron');
 const deadline=setTimeout(()=>{console.error('Accessory Browser React synchronization test timed out');app.exit(1)},15000);

@@ -53,6 +53,19 @@ test('fleet inherits authenticated Claude and custom provider models', () => {
   }
 })
 
+test('live aliases and generation policy accept new models and reject retired candidates', () => {
+  const router = new ModelRouter({ catalog: [catalogEntry('gpt-5.6-sol'), catalogEntry('gpt-6.1-sol')] });
+  assert.equal(router.route({ model: 'sol' }).selectedKey, 'openai-codex/gpt-6.1-sol');
+  assert.equal(router.route({ model: { prefer: 'openai-codex/gpt-6.1-sol', allowPreviousGenerations: false } }).selectedKey, 'openai-codex/gpt-6.1-sol');
+  assert.equal(router.route({ model: { prefer: 'sol', allowPreviousGenerations: false } }).selectedKey, 'openai-codex/gpt-6.1-sol');
+  router.setCatalog([catalogEntry('gpt-6.1-sol', { eligible: false, availability: 'unavailable' }), catalogEntry('gpt-5.6-sol')]);
+  assert.equal(router.route({ model: 'sol' }).selectedKey, 'openai-codex/gpt-5.6-sol');
+  assert.throws(() => router.route({ model: { prefer: 'sol', allowPreviousGenerations: false } }), FleetModelRouteError);
+  const web = attenuateAgentCapabilities({ tools: ['read', 'web_search', 'web_fetch'], permissionMode: 'full-access', writeScope: ['src'] });
+  assert.deepEqual(web.tools, ['read']);
+  assert(web.denied.some(item => item.tool === 'web_search'));
+})
+
 test('child capability attenuation denies recursive/control tools and unenforceable read-only shell access', () => {
   const result = attenuateAgentCapabilities({
     tools: ['read', 'bash', 'edit', 'browser-control', 'agent', 'workflow'],
@@ -345,7 +358,7 @@ test('a final assistant answer on the last allowed tool turn succeeds', async ()
 })
 
 test('context forks clone the Pi session manager and never move the live root manager', async () => {
-  const { SessionManager } = await import('@earendil-works/pi-coding-agent')
+  const { SessionManager } = await import('../src/runtime/engine/src/index.js')
   const project = await mkdtemp(path.join(os.tmpdir(), 'zyra-isolated-context-fork-'))
   const rootManager = SessionManager.create(project, project)
   rootManager.appendMessage({ role: 'user', content: [{ type: 'text', text: 'root question' }], timestamp: Date.now() })

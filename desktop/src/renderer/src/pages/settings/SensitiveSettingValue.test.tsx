@@ -48,8 +48,8 @@ assert.match(account, /accountDetailsOpen \? overview\.accountId : ''/, 'collaps
 
 const skills = source('./SkillsSettings.tsx')
 assert.doesNotMatch(skills, /title="When changes apply"/)
-assert.match(skills, /Project skills still win over personal skills[\s\S]*\/reload/)
-assert.match(skills, /source\.priority \+ 1/)
+assert.match(skills, /info="Project skills win over personal skills[\s\S]*\/reload/, 'priority details stay in the info tip')
+assert.match(skills, /enabledSources\.map\(\(source, index\)[\s\S]*\{index \+ 1\}/, 'source order numbers appear in the edit view')
 
 const providerIcon = source('./SettingsProviderIcon.tsx')
 assert.match(providerIcon, /provider-logos\/pi\.svg/)

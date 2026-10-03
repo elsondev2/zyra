@@ -1,8 +1,9 @@
 import type { RuntimeActivationStatus } from '../runtime-activation'
+import type { BrowserExtensionRecord } from '../browser-extensions'
 import type { BrowserRecordingOverlayCommand, BrowserRecordingOverlayPresentation, BrowserRecordingOverlayState } from './browser-recording-overlay'
 import type { NativeOverlayApi } from './native-overlay'
 import type { AgentRoleModels, AgentRoleModelInput, DelegationPreferencesUpdate, DelegationSettingsSnapshot } from '../onboarding/contracts'
-import type { ModelProviderInput, ModelProviderConnection } from '../onboarding/contracts'
+import type { ModelProviderInput, ModelProviderConnection, ModelHarnessConnectInput, HarnessDetection } from '../onboarding/contracts'
 import type {
     AssistantApprovalResponseInput,
     AssistantAccountOverviewPayload,
@@ -40,6 +41,7 @@ import type {
     AssistantInstallInspectedPluginInput,
     AssistantModelInfo,
     AssistantPluginCatalog,
+    AssistantPluginMcpConnectionStatus,
     AssistantPluginInspection,
     AssistantPluginScopeDiff,
     AssistantPlaygroundResultPayload,
@@ -68,6 +70,9 @@ import type {
     AssistantSetPlaygroundRootInput,
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
+    AssistantSetPluginAppViewSettingsInput,
+    AssistantReadPluginAppViewInput,
+    AssistantCallPluginAppViewToolInput,
     AssistantSetSessionProjectInput,
     AssistantUpdateSessionConfigurationInput,
     AssistantSessionTurnUsageResultPayload,
@@ -77,6 +82,8 @@ import type {
     AssistantHistoryPageResultPayload,
     AssistantTurnDetailResultPayload,
     AssistantTranscribeVoiceInput,
+    AssistantSaveVoiceHistoryInput,
+    AssistantVoiceHistoryEntry,
     AssistantUpdateProjectInput,
     AssistantVoiceTranscriptionState,
     AssistantUserInputResponseInput,
@@ -106,6 +113,7 @@ import type {
     DevScopeFileItem,
     DevScopeFileTreeNode,
     DevScopeFolderItem,
+    DevScopeGitHubLocalMatch,
     DevScopeIndexedPathSearchInput,
     DevScopeIndexedPathSearchResult,
     DevScopeIndexedProject,
@@ -151,6 +159,7 @@ import type {
     AccountConnectionStatusInput,
     BeginOnboardingReviewInput,
     CancelOnboardingReviewInput,
+    ChatGptDeviceCode,
     CommitOnboardingStepInput,
     DisconnectOpenAIInput,
     NavigateOnboardingInput,
@@ -179,7 +188,7 @@ export * from './font-contracts'
 export * from '../browser-downloads'
 
 export type DevScopeOk<T = Record<string, unknown>> = { success: true } & T
-export type DevScopeErr = { success: false; error: string }
+export type DevScopeErr = { success: false; error: string; code?: string }
 export type DevScopeResult<T = Record<string, unknown>> = DevScopeOk<T> | DevScopeErr
 
 export type DevScopeProtectedMediaStatus = {
@@ -205,6 +214,13 @@ export type DevScopeBrowserHistoryEntry = {
     faviconUrl: string | null
     lastVisitedAt: string
     visitCount: number
+}
+
+export type DevScopeBrowserBookmark = {
+    url: string
+    title: string
+    faviconUrl: string | null
+    savedAt: string
 }
 
 export type DevScopeBrowserHistoryRecordInput = {
@@ -561,9 +577,13 @@ export interface DevScopeOnboardingApi {
     getAgentRoleModels: () => Promise<DevScopeResult<{ models: AgentRoleModels }>>
     setAgentRoleModel: (input: AgentRoleModelInput) => Promise<DevScopeResult<{ models: AgentRoleModels }>>
     listModelProviders: () => Promise<DevScopeResult<{ connections: ModelProviderConnection[] }>>
+    detectHarness: () => Promise<DevScopeResult<HarnessDetection>>
+    connectHarness: (input: ModelHarnessConnectInput) => Promise<DevScopeResult<{ connection: ModelProviderConnection }>>;
     getAuthStatus: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     getConnectionsStatus: (input?: AccountConnectionStatusInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
+    getChatGptDeviceCode: () => Promise<DevScopeResult<{ deviceCode: ChatGptDeviceCode | null }>>
     connectChatGpt: (input?: AccountConnectionAnalyticsInput) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    cancelChatGpt: () => Promise<DevScopeResult<{ cancelled: boolean }>>
     connectApiKey: (apiKey: string, input?: AccountConnectionAnalyticsInput) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     disconnectOpenAI: (input: DisconnectOpenAIInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
     updateAppearance: (input: UpdateOnboardingAppearanceInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
@@ -631,6 +651,9 @@ export interface DevScopeAssistantApi {
     listModels: (forceRefresh?: boolean) => Promise<DevScopeResult<{ models: AssistantModelInfo[] }>>
     listProjects: () => Promise<DevScopeResult<{ catalog: AssistantProjectCatalog }>>
     getPluginCatalog: () => Promise<DevScopeResult<{ catalog: AssistantPluginCatalog }>>
+    getPluginMcpConnections: (pluginId: string) => Promise<DevScopeResult<{ connections: AssistantPluginMcpConnectionStatus[] }>>
+    connectPluginMcp: (pluginId: string, serverName: string) => Promise<DevScopeResult<{ result: { toolCount: number; authenticated: boolean } }>>
+    disconnectPluginMcp: (pluginId: string, serverName: string) => Promise<DevScopeResult>
     startPluginDownload: (input: AssistantStartPluginDownloadInput) => Promise<DevScopeResult<{ download: AssistantPluginDownload }>>
     getPluginDownload: (input: AssistantPluginDownloadInput) => Promise<DevScopeResult<{ download: AssistantPluginDownload }>>
     cancelPluginDownload: (input: AssistantPluginDownloadInput) => Promise<DevScopeResult>
@@ -643,6 +666,9 @@ export interface DevScopeAssistantApi {
         diff: AssistantPluginScopeDiff
     }>>
     setPluginState: (input: AssistantSetPluginStateInput) => Promise<DevScopeResult<{ catalog: AssistantPluginCatalog }>>
+    setPluginAppViewSettings: (input: AssistantSetPluginAppViewSettingsInput) => Promise<DevScopeResult<{ catalog: AssistantPluginCatalog }>>
+    readPluginAppView: (input: AssistantReadPluginAppViewInput) => Promise<DevScopeResult<{ view: { html: string; csp: { connectDomains: string[]; resourceDomains: string[] } } }>>
+    callPluginAppViewTool: (input: AssistantCallPluginAppViewToolInput) => Promise<DevScopeResult<{ result: Record<string, unknown> }>>
     rollbackPlugin: (input: AssistantRollbackPluginInput) => Promise<DevScopeResult<{ catalog: AssistantPluginCatalog }>>
     createProject: (input: AssistantCreateProjectInput, candidateId?: string) => Promise<DevScopeResult<{ project: AssistantProject }>>
     associateProjectFolder: (input: AssistantAssociateProjectFolderInput) => Promise<DevScopeResult<{ project: AssistantProject }>>
@@ -704,6 +730,10 @@ export interface DevScopeAssistantApi {
     onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
     getVoiceTranscriptionState: () => Promise<DevScopeResult<{ state: AssistantVoiceTranscriptionState }>>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<DevScopeResult<{ text: string }>>
+    saveVoiceHistory: (input: AssistantSaveVoiceHistoryInput) => Promise<DevScopeResult>
+    listVoiceHistory: () => Promise<DevScopeResult<{ entries: AssistantVoiceHistoryEntry[] }>>
+    getFailedVoiceRecording: (id: string) => Promise<DevScopeResult<{ audioBase64: string | null }>>
+    deleteVoiceHistory: (id: string) => Promise<DevScopeResult>
     onEvent: (callback: (event: AssistantEventStreamPayload) => void) => () => void
 }
 
@@ -728,6 +758,7 @@ export interface DevScopeApi {
     selectProjectIconFile: () => Promise<DevScopeResult<{ filePath?: string; cancelled?: boolean }>>
     getUserHomePath: () => Promise<DevScopeResult<{ path: string }>>
     scanProjects: (folderPath: string, options?: { forceRefresh?: boolean }) => Promise<DevScopeResult<{ projects: DevScopeProject[]; folders: DevScopeFolderItem[]; files: DevScopeFileItem[]; cached?: boolean; cachedAt?: number }>>
+    discoverLocalGitHubProjects: (paths: string[]) => Promise<DevScopeResult<{ matches: DevScopeGitHubLocalMatch[]; repositoryCount: number }>>
     openInExplorer: (path: string) => Promise<DevScopeResult>
     openInTerminal: (path: string, preferredShell?: 'powershell' | 'cmd', initialCommand?: string) => Promise<DevScopeResult>
     listInstalledIdes: () => Promise<DevScopeResult<{ ides: DevScopeInstalledIde[] }>>
@@ -788,7 +819,7 @@ export interface DevScopeApi {
     getGitStatus: (projectPath: string) => Promise<DevScopeResult<{ status: Record<string, DevScopeGitFileStatus | undefined> }>>
     getGitStatusDetailed: (
         projectPath: string,
-        options?: { includeStats?: boolean }
+        options?: { includeStats?: boolean; includeIgnored?: boolean }
     ) => Promise<DevScopeResult<{ entries: DevScopeGitStatusDetail[] }>>
     getGitStatusEntryStats: (
         projectPath: string,
@@ -921,6 +952,14 @@ export interface DevScopeApi {
     closePreviewTerminal: (input: string | (DevScopePreviewTerminalAccess & { sessionId: string })) => Promise<DevScopeResult<{ closed: boolean }>>
     onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void, workspaceCapability?: string) => () => void
     getBrowserPreviewConfig: () => Promise<DevScopeResult<DevScopeBrowserPreviewConfig>>
+    listBrowserExtensions: () => Promise<DevScopeResult<{ extensions: BrowserExtensionRecord[] }>>
+    installBrowserExtension: () => Promise<DevScopeResult<{ extension: BrowserExtensionRecord }>>
+    inspectBrowserExtensionFromWebStore: (urlOrId: string) => Promise<DevScopeResult<{ extension: BrowserExtensionRecord }>>
+    approveBrowserExtensionFromWebStore: (id: string) => Promise<DevScopeResult<{ extension: BrowserExtensionRecord }>>
+    discardBrowserExtensionFromWebStore: (id: string) => Promise<DevScopeResult<{ discarded: boolean }>>
+    setBrowserExtensionEnabled: (input: { id: string; enabled: boolean }) => Promise<DevScopeResult<{ extension: BrowserExtensionRecord }>>
+    removeBrowserExtension: (id: string) => Promise<DevScopeResult<{ removed: boolean }>>
+    reloadBrowserExtension: (id: string) => Promise<DevScopeResult<{ extension: BrowserExtensionRecord }>>
     getBrowserPageIcon: (pageUrl: string) => Promise<DevScopeResult<{ dataUrl: string | null }>>
     listBrowserDownloads: () => Promise<DevScopeResult<{ downloads: BrowserDownloadRecord[] }>>
     actOnBrowserDownload: (action: BrowserDownloadAction) => Promise<DevScopeResult<BrowserDownloadActionResult>>
@@ -929,6 +968,9 @@ export interface DevScopeApi {
     listBrowserDownloadsFolder: () => Promise<DevScopeResult<{ entries: BrowserDownloadsFolderEntry[] }>>
     actOnBrowserDownloadsFolderEntry: (action: BrowserDownloadsFolderAction) => Promise<DevScopeResult<BrowserDownloadsFolderActionResult>>
     getBrowserHistory: (input?: { query?: string; limit?: number }) => Promise<DevScopeResult<{ entries: DevScopeBrowserHistoryEntry[] }>>
+    getBrowserBookmarks: () => Promise<DevScopeResult<{ entries: DevScopeBrowserBookmark[] }>>
+    saveBrowserBookmark: (input: { url: string; title?: string | null; faviconUrl?: string | null }) => Promise<DevScopeResult<{ entry: DevScopeBrowserBookmark | null }>>
+    removeBrowserBookmark: (url: string) => Promise<DevScopeResult<{ removed: boolean }>>
     getBrowserSearchSuggestions: (input: { query: string }) => Promise<DevScopeResult<{ suggestions: string[]; provider: 'Google' }>>
     scanExternalBrowserHistoryProfiles: () => Promise<DevScopeResult<ExternalBrowserHistoryScanResult>>
     importExternalBrowserHistory: (input: ExternalBrowserHistoryImportInput) => Promise<DevScopeResult<{ result: ExternalBrowserHistoryImportResult }>>
@@ -953,7 +995,7 @@ export interface DevScopeApi {
     hardReloadBrowserPreview: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
     setBrowserPreviewZoom: (input: DevScopeBrowserGuestTargetInput & { factor: number }) => Promise<DevScopeResult<{ factor: number }>>
     setBrowserPreviewColorScheme: (input: DevScopeBrowserGuestTargetInput & { colorScheme: DevScopeBrowserColorScheme }) => Promise<DevScopeResult>
-    openBrowserPreviewDevTools: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
+    openBrowserPreviewDevTools: (input: DevScopeBrowserGuestTargetInput & { mode?: 'docked' | 'popout' }) => Promise<DevScopeResult>
     captureBrowserPreviewScreenshot: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ artifact: DevScopeBrowserCaptureArtifact }>>
     stageBrowserPreviewArtifactForAssistant: (artifactId: string) => Promise<DevScopeResult<{ reference: string }>>
     openBrowserPreviewArtifact: (artifactId: string) => Promise<DevScopeResult>

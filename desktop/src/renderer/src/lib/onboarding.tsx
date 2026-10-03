@@ -16,6 +16,7 @@ type OnboardingContextValue = {
     refresh: () => Promise<void>
     getAuthStatus: () => Promise<OnboardingAuthStatus>
     connectChatGpt: () => Promise<OnboardingAuthStatus>
+    cancelChatGpt: () => Promise<boolean>
     connectApiKey: (apiKey: string) => Promise<OnboardingAuthStatus>
     updateAppearance: (input: UpdateOnboardingAppearanceInput) => Promise<OnboardingSnapshot>
     commitStep: (input: CommitOnboardingStepInput) => Promise<OnboardingSnapshot>
@@ -27,7 +28,7 @@ type OnboardingContextValue = {
 const OnboardingContext = createContext<OnboardingContextValue | null>(null)
 
 function requestError(result: { success: false; error: string } | null, fallback: string): Error {
-    return new Error(result?.error || fallback)
+    return Object.assign(new Error(result?.error || fallback), { code: result && 'code' in result ? result.code : undefined })
 }
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
@@ -85,6 +86,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             const result = await window.devscope.onboarding.connectChatGpt()
             if (!result.success) throw requestError(result, 'Could not connect ChatGPT.')
             return result.status
+        },
+        cancelChatGpt: async () => {
+            const result = await window.devscope.onboarding.cancelChatGpt()
+            if (!result.success) throw requestError(result, 'Could not cancel ChatGPT sign-in.')
+            return result.cancelled
         },
         connectApiKey: async (apiKey) => {
             const result = await window.devscope.onboarding.connectApiKey(apiKey)

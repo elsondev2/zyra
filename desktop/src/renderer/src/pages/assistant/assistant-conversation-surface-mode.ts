@@ -23,6 +23,19 @@ export type AssistantComposerConnectionPresentationInput = {
     reconnectPending?: boolean
 }
 
+export function isAssistantComposerTurnActive(input: {
+    newChatHandoffActive: boolean
+    selectedSessionIsDraft: boolean
+    isThreadWorking: boolean
+    optimisticPromptSending: boolean
+    optimisticPromptAwaitingUserMessage: boolean
+}): boolean {
+    return !input.newChatHandoffActive
+        && (input.optimisticPromptSending
+            || input.optimisticPromptAwaitingUserMessage
+            || (!input.selectedSessionIsDraft && input.isThreadWorking))
+}
+
 export function resolveAssistantComposerConnectionPresentation(
     input: AssistantComposerConnectionPresentationInput
 ): { connected: boolean; connecting: boolean; reconnectPending: boolean } {

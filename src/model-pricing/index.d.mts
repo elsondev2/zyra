@@ -1,0 +1,12 @@
+export type PriceRates = { input: number; output: number; cacheRead: number | null; cacheWrite: number | null };
+export type ModelPricing = { tiers: Record<string, { short: PriceRates; long: PriceRates | null; inputTokensAbove: number }>; fetchedAt?: string };
+export type PricingSnapshot = { version: number; source: string; fetchedAt: string; models: Record<string, ModelPricing> };
+export type CostEstimate = { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; source: string; serviceTier: string; pricingFetchedAt: string };
+export function getPricingSnapshot(): PricingSnapshot;
+export function isModelPricing(value: unknown): value is ModelPricing;
+export function isPricingSnapshot(value: unknown): value is PricingSnapshot;
+export function installPricingSnapshot(snapshot: PricingSnapshot): void;
+export function installModelCatalogPricing(models: readonly unknown[]): void;
+export function getModelPricing(model: string, snapshot?: PricingSnapshot): ModelPricing | null;
+export function estimateModelCost(model: string, usage: unknown, serviceTier?: string | null, pricing?: ModelPricing | null): CostEstimate | null;
+export function runtimeModelCost(model: string, pricing?: ModelPricing | null): { input: number; output: number; cacheRead: number; cacheWrite: number; pricing: ModelPricing | null };

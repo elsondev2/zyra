@@ -142,6 +142,7 @@ export function AccountResetCreditsSection({
             <SettingsDialog
                 open={resetsOpen}
                 title={selectedCredit ? 'Approve banked reset' : 'Banked resets'}
+                className="[&>header]:border-b-0"
                 onClose={closeResetManager}
                 contentClassName="!space-y-0"
                 footer={selectedCredit ? (
@@ -238,7 +239,7 @@ function ResetCreditList({
                     ))}
                 </div>
             ) : (
-                <div className="flex min-h-24 flex-col items-center justify-center border-y border-[var(--settings-divider)] px-5 text-center">
+                <div className="flex min-h-24 flex-col items-center justify-center px-5 text-center">
                     <RotateCcw size={15} className="mb-1.5 text-[var(--settings-text-muted)]" />
                     <p className="text-[12px] font-medium text-[var(--settings-text)]">No reset credits</p>
                     <p className="mt-0.5 text-[10px] leading-4 text-[var(--settings-text-muted)]">No banked resets are available.</p>

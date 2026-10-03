@@ -1,0 +1,6 @@
+interface:
+  display_name: "Zyra Tools"
+  short_description: "Use connected browser, Chrome and computer tools"
+  default_prompt: "Use $zyra-tools to verify this behavior on the requested app or browser surface."
+policy:
+  allow_implicit_invocation: true

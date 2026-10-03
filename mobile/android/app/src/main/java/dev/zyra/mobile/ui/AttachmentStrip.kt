@@ -72,19 +72,19 @@ private fun decodeLocalImage(file: File, size: Int): ImageBitmap? = runCatching 
             TextButton(onClick = { picker.launch(arrayOf("image/*")) }, enabled = !state.preparing && state.items.size < 12) { Text("Add photos") }
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        if (state.items.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+        if (state.items.isNotEmpty()) LazyRow(Modifier.height(72.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
             items(state.items, key = { it.attachment.id }) { item ->
-                Column(Modifier.width(120.dp)) {
+                Column(Modifier.width(88.dp)) {
                     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                    Box(Modifier.size(width = 120.dp, height = 90.dp)) {
+                    Box(Modifier.size(width = 88.dp, height = 64.dp)) {
                         if (item.attachment.mimeType.startsWith("image/")) LocalImage(controller.store.file(item.attachment.id), item.attachment.name, 256, Modifier.fillMaxSize().clickable { preview = item.attachment.id }, ContentScale.Crop)
                         else Column(Modifier.fillMaxSize().clickable { preview = item.attachment.id }.padding(10.dp), verticalArrangement = Arrangement.Center) {
                             DesktopFileIcon(item.attachment.name, modifier = Modifier.size(24.dp))
                             Text(item.attachment.name, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
                         }
-                        FilledIconButton(onClick = { controller.remove(item.attachment.id) }, modifier = Modifier.align(Alignment.TopEnd).size(32.dp),
+                        FilledIconButton(onClick = { controller.remove(item.attachment.id) }, modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
                             colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-                            AppIcon(R.drawable.ic_x, "Remove " + item.attachment.name, Modifier.size(16.dp))
+                            AppIcon(R.drawable.ic_x, "Remove " + item.attachment.name, Modifier.size(14.dp))
                         }
                         if (!item.ready && item.error == null) LinearProgressIndicator(progress = { item.offset.toFloat() / item.attachment.size.coerceAtLeast(1) }, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                     }

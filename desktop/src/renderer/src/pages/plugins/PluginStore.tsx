@@ -1,6 +1,7 @@
 import { openDesktopLink } from '@/lib/desktop-links'
 import { useMemo, useState, type ReactNode } from 'react'
-import { ChevronRight, ExternalLink, Info, MessageSquarePlus, Plug, Search } from 'lucide-react'
+import { ChevronRight, ExternalLink, Info, Plug, Search } from 'lucide-react'
+import { UseInChatIcon } from './plugin-presentation'
 import type { AssistantPluginCatalog } from '@shared/assistant/contracts'
 import catalog from '@shared/plugins/openai-directory.json'
 import { PluginDialog } from './PluginDialog'
@@ -71,26 +72,35 @@ export function PluginStore({ canInstall, busy, installedCatalog, loading, insta
             {installed.length && installedCatalog ? <ul className="plugin-store-installed-grid">{installed.slice(0, 6).map((plugin) => {
                 const release = getPluginRelease(installedCatalog, plugin)
                 const name = release?.manifest.interface.displayName || plugin.name
-                return <li key={plugin.id}><button type="button" className="plugin-row-content" onClick={() => onSelectInstalled(plugin.id)} aria-label={`Manage ${name}`}>
-                    <Plug size={20} className="plugin-row-icon" strokeWidth={1.5} /><span className="plugin-row-copy"><strong>{name}</strong><span>{plugin.state === 'active' ? `Version ${release?.version || 'unavailable'}` : plugin.state}</span></span>
-                </button>{plugin.state === 'active' && release?.skills.length ? <button type="button" className="plugin-icon-button" disabled={busy} aria-label={`Use ${name} in a new Chat`} title="Use in Chat" onClick={() => onUseInChat(plugin.id)}><MessageSquarePlus size={16} /></button> : null}</li>
+                const entry = catalog.entries.find(entry => entry.name === plugin.name && plugin.sourceId === `openai-catalog:${entry.name}`)
+                const showChatAction = plugin.state === 'active' && Boolean(release?.skills.length || release?.manifest.contributions.mcp)
+                return <li key={plugin.id} className="plugin-store-item"><button type="button" className="plugin-row-content" onClick={() => onSelectInstalled(plugin.id)} aria-label={`Manage ${name}`}>
+                    {entry ? <StoreIcon entry={entry} /> : <Plug size={22} className="plugin-row-icon" strokeWidth={1.5} />}<span className="plugin-row-copy"><strong>{name}</strong><span>{plugin.state === 'active' ? entry?.description || release?.manifest.interface.shortDescription || release?.manifest.description : plugin.state}</span></span>
+                    {!showChatAction ? <ChevronRight size={15} className="plugin-row-chevron" /> : null}
+                </button>{showChatAction ? <button type="button" className="plugin-icon-button" disabled={busy} aria-label={`Use ${name} in a new Chat`} title="Use in Chat" onClick={() => onUseInChat(plugin.id)}><UseInChatIcon size={16} /></button> : null}</li>
             })}</ul> : null}
         </section> : null}
         {error && !catalogInfoOpen ? <p role="alert" className="plugin-notice">{error}</p> : null}
         {groups.length ? groups.map((group) => <section className="plugin-store-category" key={group.name} aria-label={group.name}>
             <div className="plugin-store-source"><h2>{group.name}</h2><span>{group.entries.length}</span></div>
-            <ul className="plugin-store-grid">{group.entries.map((entry) => <li key={entry.name}>
-                <button type="button" className="plugin-row-content" onClick={() => onOpenEntry(entry.name)} aria-label={`View ${entry.displayName}`}>
-                    <StoreIcon entry={entry} /><span className="plugin-row-copy"><strong>{entry.displayName}</strong><span>{entry.description || entry.category}</span></span>{installedEntry(entry) ? <span className="plugin-meta">Installed</span> : <ChevronRight size={15} className="plugin-row-chevron" />}
-                </button>
-            </li>)}</ul>
+            <ul className="plugin-store-grid">{group.entries.map((entry) => {
+                const plugin = installedEntry(entry)
+                const chatPlugin = plugin?.state === 'active' && (entry.hasSkills || entry.hasMcp) ? plugin : null
+                return <li key={entry.name} className="plugin-store-item">
+                    <button type="button" className="plugin-row-content" onClick={() => onOpenEntry(entry.name)} aria-label={`View ${entry.displayName}`}>
+                        <StoreIcon entry={entry} /><span className="plugin-row-copy"><strong>{entry.displayName}</strong><span>{entry.description || entry.category}</span></span>
+                        {!chatPlugin ? <ChevronRight size={15} className="plugin-row-chevron" /> : null}
+                    </button>
+                    {chatPlugin ? <button type="button" className="plugin-icon-button" disabled={busy} aria-label={`Use ${entry.displayName} in a new Chat`} title="Use in Chat" onClick={() => onUseInChat(chatPlugin.id)}><UseInChatIcon size={16} /></button> : null}
+                </li>
+            })}</ul>
         </section>) : <DirectoryEmpty title="No matching Plugins" description="Try another name or category." />}
         {catalogInfoOpen ? <PluginDialog title="About this catalog" onClose={() => setCatalogInfoOpen(false)} footer={<>
             {canInstall ? <button type="button" className="plugin-text-button" disabled={busy} onClick={() => { setCatalogInfoOpen(false); onImportFolder() }}>Import local Plugin</button> : null}
             <button type="button" className="plugin-button" onClick={() => void openSource(catalog.source)}>View source <ExternalLink size={14} /></button>
         </>}>
             {error ? <p role="alert" className="plugin-notice">{error}</p> : null}
-            <dl className="plugin-facts"><dt>Source</dt><dd>OpenAI Plugin repository</dd><dt>Checked</dt><dd>{catalog.checkedAt.slice(0, 10)}</dd><dt>Plugins</dt><dd>{catalog.entries.length}</dd><dt>Excluded</dt><dd>{catalog.externalEntryCount} externally hosted entries</dd><dt>MCP / app views</dt><dd>Unavailable in Zyra</dd></dl>
+            <dl className="plugin-facts"><dt>Source</dt><dd>OpenAI Plugin repository</dd><dt>Checked</dt><dd>{catalog.checkedAt.slice(0, 10)}</dd><dt>Plugins</dt><dd>{catalog.entries.length}</dd><dt>Excluded</dt><dd>{catalog.externalEntryCount} externally hosted entries</dd><dt>MCP</dt><dd>Supported after connection</dd><dt>App views</dt><dd>Supported when a connected MCP server provides one</dd></dl>
             <p className="plugin-help mt-5">Zyra downloads Plugins to its own storage. Each release requires review; installation runs no code.</p>
         </PluginDialog> : null}
     </>

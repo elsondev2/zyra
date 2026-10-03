@@ -25,23 +25,25 @@ import dev.zyra.mobile.data.*
     var consumedRevision by rememberSaveable { mutableIntStateOf(state.newChatDraftRevision) }
     var machinePicker by remember { mutableStateOf(false) }
     var projectPicker by remember { mutableStateOf(false) }
+    var permissionPicker by remember { mutableStateOf(false) }
     val attachments by vm.attachments.state.collectAsStateWithLifecycle()
     val dictationEnabled by vm.preferences.dictation.collectAsStateWithLifecycle()
     val machineId = NewChatDraft.machine(state.machines.map { it.id }, selectedMachine, state.machineFilter ?: state.machine?.id)
     val machine = state.machines.find { it.id == machineId }
+    var draftPermission by rememberSaveable(machineId) { mutableStateOf("approval-required") }
     val paths = state.machineProjects[machineId].orEmpty()
     val mark: (String) -> ProjectMark? = { state.projectArtwork["$machineId:$it"] }
     val choices = projectChoices(paths, mark)
     val project = NewChatDraft.project(choices, selectedProject)
     val connected = state.machineStatus[machineId] == ConnectionState.Connected
-    val composer = state.copy(machine = machine, session = SessionView(), draft = draft, busy = project == null,
+    val composer = state.copy(machine = machine, session = SessionView(config = ChatConfiguration(runtimeMode = draftPermission)), draft = draft, busy = project == null,
         connection = if (connected) ConnectionState.Connected else ConnectionState.Offline)
     LaunchedEffect(machineId, paths) { machineId?.let { vm.loadProjectArtworkFor(it, paths.take(96)) } }
     LaunchedEffect(state.newChatDraftRevision) {
-        if (consumedRevision != state.newChatDraftRevision) { draft = ""; consumedRevision = state.newChatDraftRevision }
+        if (consumedRevision != state.newChatDraftRevision) { draft = ""; draftPermission = "approval-required"; consumedRevision = state.newChatDraftRevision }
     }
     fun enter(action: String) {
-        if (machineId != null && project != null) vm.createFromDraft(machineId, project, draft, action)
+        if (machineId != null && project != null) vm.createFromDraft(machineId, project, draft, action, runtimeMode = draftPermission)
     }
     Column(Modifier.fillMaxSize()) {
         NewChatTopBar(machine?.name ?: "Computer", vm::back) { machinePicker = true }
@@ -49,9 +51,24 @@ import dev.zyra.mobile.data.*
             project?.takeUnless(::isPersonalChat)?.let(mark), project == null || isPersonalChat(project),
             if (paths.isEmpty()) { if (connected) "No projects available on this computer" else "Your projects will appear when this computer connects" } else null,
             { projectPicker = true }, Modifier.weight(1f))
+        TextButton(onClick = { permissionPicker = true }, modifier = Modifier.padding(horizontal = 12.dp)) {
+            AppIcon(when (draftPermission) {
+                "full-access" -> R.drawable.ic_lock_open
+                "edits-only" -> R.drawable.ic_pencil
+                "auto-review" -> R.drawable.ic_shield_check
+                else -> R.drawable.ic_lock
+            }, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(permissionLabel(draftPermission))
+            Spacer(Modifier.width(6.dp))
+            AppIcon(R.drawable.ic_chevron_down, "Choose permissions", Modifier.size(12.dp))
+        }
         ChatComposerContent(composer, AttachmentState(optimize = attachments.optimize),
             ComposerActions({ draft = it.take(60000) }, { enter("send") }, {}, { enter("models") }, { enter("photos") }, vm.attachments::optimize,
                 voice = { enter("voice") }, dictate = { enter("dictation") }, camera = { enter("camera") }, files = { enter("files") }), dictationEnabled = dictationEnabled, allowUnboundControls = true)
+    }
+    if (permissionPicker) ZyraSheet("Permissions", { permissionPicker = false }) {
+        PermissionControls(draftPermission, connected = true) { draftPermission = it; permissionPicker = false }
     }
     if (machinePicker) ZyraSheet("Computer", { machinePicker = false }) {
         state.machines.forEach { pc -> ZyraSettingRow(R.drawable.ic_monitor, pc.name,

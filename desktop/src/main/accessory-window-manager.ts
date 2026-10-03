@@ -19,7 +19,6 @@ import type { BrowserSessionMode } from '../shared/browser-view'
 import { desktopWebLink } from '../shared/desktop-link-policy'
 import { ipcMain } from './ipc/trusted-ipc'
 
-const MAX_BROWSER_TABS = 8
 const MAX_POINT = 100_000
 
 type AccessoryWindowRecord = {
@@ -56,7 +55,7 @@ function stateCopy(state: AccessoryWindowState): AccessoryWindowState {
 }
 
 function normalizeKind(value: unknown): AccessoryKind {
-    if (value === 'browser' || value === 'terminal' || value === 'files') return value
+    if (value === 'browser' || value === 'terminal' || value === 'files' || value === 'devscope') return value
     throw new Error('Accessory kind is invalid.')
 }
 
@@ -274,7 +273,8 @@ export class AccessoryWindowManager {
 
     private syncBrowserTabs(event: IpcMainInvokeEvent, input: AccessoryBrowserTabsInput): { state: AccessoryWindowState } {
         const record = this.requireOwnedBrowserRecord(event, input?.workspaceId)
-        const tabs = (Array.isArray(input?.tabs) ? input.tabs : []).slice(0, MAX_BROWSER_TABS).map((tab) => normalizeBrowserTab(tab, record.state.sessionMode))
+        if (JSON.stringify(input).length > 2_000_000) throw new Error('Browser tab update is too large.')
+        const tabs = (Array.isArray(input?.tabs) ? input.tabs : []).map((tab) => normalizeBrowserTab(tab, record.state.sessionMode))
         if (new Set(tabs.map((tab) => tab.id)).size !== tabs.length) throw new Error('Browser tab identities must be unique.')
         const incomingIds = new Set(tabs.map((tab) => tab.id))
         for (const departedId of [...record.departedBrowserTabIds]) {
@@ -448,7 +448,6 @@ export class AccessoryWindowManager {
         if (!source || source.window.isDestroyed() || !provisional || provisional.window.isDestroyed()) throw new Error('The Browser transfer owner closed during the drop.')
         if (destination.state.sessionMode !== session.tab.sessionMode) throw new Error('Normal and incognito Browser tabs cannot share a window.')
         if (destination.state.browserTabs.some((tab) => tab.id === session.tab.id)) throw new Error('That Browser window already contains this tab.')
-        if (destination.state.browserTabs.length >= MAX_BROWSER_TABS) throw new Error('Close a Browser tab in the destination before merging another one.')
         const index = this.browserDropIndex(destination.state.id, screenX)
         destination.state.browserTabs.splice(index, 0, { ...session.tab })
         destination.state.activeBrowserTabId = session.tab.id

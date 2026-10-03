@@ -21,8 +21,8 @@ if (!existsSync(windowsIcon)) {
   throw new Error(`The shared Zyra release icon is missing: ${windowsIcon}`);
 }
 const outputDirectory = path.resolve(root, String(args.output || path.join("dist", "tui", `v${version}`)));
-const buildRoot = path.join(root, "dist", ".tui-build");
-const piBunOAuthModule = resolvePiBunOAuthModule();
+const buildRoot = path.join(root, "dist", ".tui-build", `run-${process.pid}`);
+const runtimeBunOAuthModule = resolveRuntimeBunOAuthModule();
 const resources = await collectResources();
 const hash = hashResources(resources);
 const payload = {
@@ -42,7 +42,7 @@ try {
     const output = path.join(outputDirectory, assetName);
     const entry = path.join(buildRoot, `entry-${target}.mjs`);
     const standaloneModule = relativeImport(entry, path.join(root, "src", "standalone-entry.mjs"));
-    const bunOAuthModule = relativeImport(entry, piBunOAuthModule);
+    const bunOAuthModule = relativeImport(entry, runtimeBunOAuthModule);
     await writeFile(entry, [
       `import { registerBunOAuthFlows } from ${JSON.stringify(bunOAuthModule)};`,
       `import { runZyraStandalone } from ${JSON.stringify(standaloneModule)};`,
@@ -94,6 +94,7 @@ async function collectResources() {
     "THIRD_PARTY_LICENSES.txt",
     "install.ps1",
     "install.sh",
+    "src/harness-config-plugin.mjs",
   ];
   for (const directory of ["analytics", "prompts", "agents", "workflows", "commands", "themes", "skills"]) {
     files.push(...await walk(directory));
@@ -106,7 +107,14 @@ async function collectResources() {
   // The console executable and installer integration use the exact same ICO as
   // Desktop. Embed the bytes under a neutral asset path, not Desktop code.
   resources.push({ relativePath: STANDALONE_WINDOWS_ICON_RESOURCE, content: await readFile(windowsIcon) });
-  return resources.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  for (const [directory, prefix] of [["src/runtime/engine/src/modes/interactive/theme", "runtime-engine/theme"], ["src/runtime/engine/src/core/export-html", "runtime-engine/export-html"], ["src/runtime/engine/src/modes/interactive/assets", "runtime-engine/assets"], ["src/runtime/terminal/native", "runtime-terminal/native"]]) {
+ for (const file of await walk(directory)) {
+ if (/\.(?:json|html|js|css|png|svg|node)$/.test(file)) resources.push({ relativePath: prefix + "/" + path.relative(directory, file).replaceAll("\\", "/"), content: await readFile(path.join(root, file)) });
+ }
+ }
+ resources.push({ relativePath: "runtime-engine/README.md", content: await readFile(path.join(root, "src/runtime/engine/README.md")) });
+ resources.push({relativePath: "runtime-engine/package.json", content: await readFile(path.join(root, "src/runtime/engine/package.json"))});
+ return resources.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
 async function walk(relativeDirectory) {
@@ -155,24 +163,8 @@ function relativeImport(fromFile, targetFile) {
   return relative;
 }
 
-function resolvePiBunOAuthModule() {
-  const piEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
-  let directory = path.dirname(piEntry);
-  while (true) {
-    const candidate = path.join(
-      directory,
-      "node_modules",
-      "@earendil-works",
-      "pi-ai",
-      "dist",
-      "bun-oauth.js",
-    );
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
-  }
-  throw new Error("The installed Pi runtime does not provide its standalone Bun OAuth registrar.");
+function resolveRuntimeBunOAuthModule() {
+ return fileURLToPath(new URL("../src/runtime/providers/src/bun-oauth.js", import.meta.url));
 }
 
 function parseArgs(values) {

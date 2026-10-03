@@ -48,6 +48,11 @@ try {
   for (const [p, bytes] of source) assert.deepEqual(await readFile(path.join(result.packageRoot, p)), bytes)
   assert.equal(calls.length, 6)
   await rm(result.packageRoot, { recursive: true })
+  for (const contribution of ['hasMcp', 'hasApps']) {
+    const onlyTools = await downloadCatalogPlugin({ stagingRoot: root, entry: { ...entry, hasSkills: false, [contribution]: true }, commit, fetchImpl: fetcher() })
+    assert.ok(onlyTools.packageRoot, `${contribution}-only packages pass the downloader gate`)
+    await rm(onlyTools.packageRoot, { recursive: true })
+  }
   const cache = new PluginDownloadCache()
   const progress = []
   const cachedRun = (options = {}) => downloadCatalogPlugin({ stagingRoot: root, entry, commit, cache, fetchImpl: fetcher(), onProgress: value => progress.push(value), ...options })

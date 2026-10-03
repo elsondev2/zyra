@@ -1,7 +1,7 @@
 import type { AssistantPluginInspection } from '@shared/assistant/contracts'
 import { PluginDialog } from './PluginDialog'
 
-const labels: Record<string, string> = { skills: 'Skills', mcp: 'MCP connections', apps: 'App views', hooks: 'Hooks', agents: 'Agents', commands: 'Commands', browserExtensions: 'Browser extensions', scheduledTasks: 'Scheduled tasks' }
+const labels: Record<string, string> = { skills: 'Skills', mcp: 'MCP connections', apps: 'Provider-hosted connections', hooks: 'Hooks', agents: 'Agents', commands: 'Commands', browserExtensions: 'Browser extensions', scheduledTasks: 'Scheduled tasks' }
 
 export function AssistantPluginInstallDialog({ inspection, packageLabel, installing, error, onCancel, onInstall, onInstallAndUse, inline = false }: {
     inspection: AssistantPluginInspection
@@ -19,17 +19,18 @@ export function AssistantPluginInstallDialog({ inspection, packageLabel, install
     const capabilities = manifest.interface.capabilities.length ? manifest.interface.capabilities : manifest.declaredCapabilityCeiling
     const unavailable = release.contributions.filter(entry => entry.support !== 'supported').map(entry => labels[entry.kind] || entry.kind)
     const hasSkills = release.skills.length > 0 && release.contributions.some(entry => entry.kind === 'skills' && entry.support === 'supported')
+    const hasSupported = hasSkills || release.contributions.some(entry => entry.kind === 'mcp' && entry.support === 'supported')
     const footer = <>
         <button type="button" className="plugin-text-button" disabled={installing} onClick={onCancel}>Cancel</button>
-        <button type="button" className={`plugin-button${onInstallAndUse && hasSkills ? '' : ' plugin-button-primary'}`} disabled={installing} onClick={onInstall}>{installing ? 'Installing…' : 'Install'}</button>
-        {onInstallAndUse && hasSkills ? <button type="button" className="plugin-button plugin-button-primary" disabled={installing} onClick={onInstallAndUse}>Install &amp; new Chat</button> : null}
+        <button type="button" className={`plugin-button${onInstallAndUse && hasSupported ? '' : ' plugin-button-primary'}`} disabled={installing} onClick={onInstall}>{installing ? 'Installing…' : 'Install'}</button>
+        {onInstallAndUse && hasSupported ? <button type="button" className="plugin-button plugin-button-primary" disabled={installing} onClick={onInstallAndUse}>Install &amp; new Chat</button> : null}
     </>
     const body = <>
         <p className="plugin-description">{manifest.interface.shortDescription || manifest.description || 'No description provided.'}</p>
         <p className="plugin-review-meta">{manifest.interface.developerName || manifest.author?.name || 'Unknown publisher'} · {manifest.license || 'License not provided'}</p>
-        <p className="plugin-description">{hasSkills ? `${release.skills.length} ${release.skills.length === 1 ? 'Skill available' : 'Skills available'} in Zyra` : 'No supported Skills in this release.'}</p>
+        <p className="plugin-description">{hasSkills ? `${release.skills.length} ${release.skills.length === 1 ? 'Skill' : 'Skills'} available in Zyra` : null}{hasSkills && manifest.contributions.mcp ? ' · ' : null}{manifest.contributions.mcp ? 'MCP servers available after connection' : null}{!hasSupported ? 'No supported contributions in this release.' : null}</p>
         {unavailable.length ? <p className="plugin-help">Unavailable in Zyra: {unavailable.join(', ')}. These will not run or connect accounts.</p> : null}
-        <p className="plugin-help">Installation does not change Project availability or add Plugins to existing Chats.</p>
+        <p className="plugin-help">Active Plugins are available automatically in existing and new regular Chats. Account connections and tool calls still require permission.</p>
         {release.containsExecutableFiles ? <p className="plugin-help">Includes code. Installation does not run it; later actions require Chat permissions.</p> : null}
         <details className="plugin-review-details">
             <summary>Release details</summary>

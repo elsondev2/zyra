@@ -2,9 +2,9 @@
 
 ## Source and scope
 
-The Pi model runtime supplies built-in and configured model entries. Zyra's runtime availability checks filter that catalog; `listAvailableModels` projects provider-qualified IDs, labels, descriptions, supported efforts, and context windows into the Desktop/Browser model list.
+Zyra owns model discovery and the runtime under `src/runtime/`. `src/openai-model-catalog.mjs` fetches account-visible models directly from OpenAI and ChatGPT endpoints. Endpoint results replace the catalog, including an empty result, so retired models are removed. A provider outage retains the last valid account-specific cache. `listAvailableModels` projects provider-qualified IDs, labels, supported reasoning efforts, input modes, and context windows into Desktop and Browser.
 
-A local Pi `models.json` entry can register a model before the provider catalog includes it. There is no supported `latest` flag in that config. Adding a model does not verify account access; availability checks remain responsible for that.
+Desktop refreshes the catalog in the background with a 15-minute freshness window and supports a manual refresh. `models.updated` reaches the shared store and settings caches. New endpoint IDs are registered with the owned transport without waiting for a package release. Configured non-OpenAI providers retain their own metadata and availability checks; adding a custom entry does not verify account access.
 
 ## Ordering and the Latest badge
 

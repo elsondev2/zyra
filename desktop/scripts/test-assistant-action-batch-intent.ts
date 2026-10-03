@@ -81,7 +81,7 @@ const compactedPayload = JSON.parse(serializeAssistantActivityPayload({
 assert.equal(compactedPayload.actionBatchIntent, 'Reviewing timeline behavior', 'oversized Action evidence keeps the settled batch title')
 
 const bridgeSource = readFileSync(new URL('../../src/zyra-ui-bridge.mjs', import.meta.url), 'utf8')
-const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 const sdkSource = readFileSync(new URL('../../src/zyra-sdk.mjs', import.meta.url), 'utf8')
 assert.match(bridgeSource, /if \(isActionBatchIntentEvent\(normalized\)\)[\s\S]*return;/, 'the live marker is consumed before transport')
 assert.match(bridgeSource, /normalized\.actionBatchIntent = activeActionBatchIntent/, 'following live tool events carry the active intent')

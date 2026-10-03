@@ -28,6 +28,7 @@ const dependencySets = Object.freeze([
   { scope: "Zyra Desktop", directory: path.join(root, "desktop") },
 ]);
 
+const ownedRuntime = { provenance: JSON.parse(await readFile(path.join(root, "src/runtime/provenance.json"), "utf8")), license: await readFile(path.join(root, "src/runtime/engine/LICENSE"), "utf8") };
 const packages = await collectPackages();
 const manifest = buildManifest(packages);
 const manifestHash = sha256(JSON.stringify(manifest));
@@ -137,6 +138,7 @@ async function collectPackages() {
 function buildManifest(packageMap) {
   return {
     schemaVersion: 1,
+ ownedRuntime: { provenance: ownedRuntime.provenance, licenseHash: sha256(ownedRuntime.license) },
     runtimes: { bun: BUN_RUNTIME_VERSION, node: NODE_RELEASE_RUNTIME_VERSION },
     spdxLicenseList: SPDX_LICENSE_LIST_VERSION,
     packages: [...packageMap.values()].map((entry) => ({
@@ -206,6 +208,11 @@ function renderBundle({ packages: packageMap, manifestHash: hash, bunLicense: bu
     "the Bun runtime embedded in standalone TUI executables, and the Node.js runtime packaged with",
     "the Windows Desktop app. Electron and Chromium place their upstream license files beside the",
     "packaged application. The Windows .NET sidecar carries its runtime notices beside the sidecar.",
+    "",
+    "Maintained Zyra runtime source derived from Pi",
+    "=============================================",
+    "Source and imported component versions: src/runtime/provenance.json",
+    normalizeText(ownedRuntime.license).trimEnd(),
     "",
     "Bun runtime",
     "===========",

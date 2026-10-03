@@ -64,7 +64,7 @@ export interface AgentRunState {
     activity: AgentActivityState | null
     worktree: { directory: string; branch: string | null; status?: string; retained?: boolean } | null
     usage: AssistantTurnUsage & { requests?: number; cost?: number }
-    result: { text: string; warnings?: string[]; truncated?: boolean } | null
+    result: { text: string; warnings?: string[]; truncated?: boolean; source?: { agentRunId: string; attemptId: string; label: string }; untrusted?: boolean; transcriptRef?: Record<string, unknown> } | null
     error: { code?: string; name?: string; message: string; retryable?: boolean; details?: Record<string, unknown> } | null
     createdAt: string
     queuedAt: string

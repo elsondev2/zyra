@@ -5,6 +5,7 @@ import type { DevScopeBrowserBackgroundCategory, DevScopeBrowserHistoryRecordInp
 import type { ExternalBrowserHistoryImportInput } from '../../../shared/external-browser-history-contracts'
 import { fetchBrowserLinkPreview } from './browser-link-preview'
 import { BrowserHistoryStore, getBrowserHistoryFilePath } from '../../browser-history-store'
+import { BrowserBookmarksStore, getBrowserBookmarksFilePath } from '../../browser-bookmarks-store'
 import { fetchGoogleBrowserSearchSuggestions } from '../../browser-new-tab-service'
 import { getBrowserAdBlockService } from '../../browser-adblock-service'
 import { getBrowserBackgroundService } from '../../browser-background-service'
@@ -35,6 +36,7 @@ const pendingLinkPreviews = new Map<string, Promise<DevScopeBrowserLinkPreview |
 const queuedLinkPreviewTasks: Array<() => void> = []
 let activeLinkPreviewTasks = 0
 let browserHistoryStore: BrowserHistoryStore | null = null
+let browserBookmarksStore: BrowserBookmarksStore | null = null
 let externalBrowserHistoryService: ExternalBrowserHistoryService | null = null
 let browserProfileFlushTimer: ReturnType<typeof setTimeout> | null = null
 let browserProfileFlushPromise: Promise<void> | null = null
@@ -43,6 +45,11 @@ let browserProfileInitialized = false
 function getBrowserHistoryStore(): BrowserHistoryStore {
     if (!browserHistoryStore) browserHistoryStore = new BrowserHistoryStore(getBrowserHistoryFilePath(app.getPath('userData')))
     return browserHistoryStore
+}
+
+function getBrowserBookmarksStore(): BrowserBookmarksStore {
+    if (!browserBookmarksStore) browserBookmarksStore = new BrowserBookmarksStore(getBrowserBookmarksFilePath(app.getPath('userData')))
+    return browserBookmarksStore
 }
 
 export function recordGlobalBrowserHistory(input: DevScopeBrowserHistoryRecordInput) {
@@ -412,6 +419,30 @@ export async function handleGetBrowserHistory(
     } catch (error: unknown) {
         log.error('[BrowserPreview] Failed to read Browser history:', error)
         return { success: false as const, error: error instanceof Error ? error.message : 'Failed to read Browser history.' }
+    }
+}
+
+export async function handleGetBrowserBookmarks(_event: IpcMainInvokeEvent) {
+    try {
+        return { success: true as const, entries: await getBrowserBookmarksStore().list() }
+    } catch (error) {
+        return { success: false as const, error: error instanceof Error ? error.message : 'Could not read bookmarks.' }
+    }
+}
+
+export async function handleSaveBrowserBookmark(_event: IpcMainInvokeEvent, input: { url: string; title?: string | null; faviconUrl?: string | null }) {
+    try {
+        return { success: true as const, entry: await getBrowserBookmarksStore().save(input) }
+    } catch (error) {
+        return { success: false as const, error: error instanceof Error ? error.message : 'Could not save bookmark.' }
+    }
+}
+
+export async function handleRemoveBrowserBookmark(_event: IpcMainInvokeEvent, url: string) {
+    try {
+        return { success: true as const, removed: await getBrowserBookmarksStore().remove(url) }
+    } catch (error) {
+        return { success: false as const, error: error instanceof Error ? error.message : 'Could not remove bookmark.' }
     }
 }
 

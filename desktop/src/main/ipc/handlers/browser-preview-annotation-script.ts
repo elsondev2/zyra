@@ -259,7 +259,9 @@ async function runBrowserPreviewAnnotation(theme: DevScopeBrowserAnnotationTheme
         // A recognizable eraser, consistent with the rest of Zyra's tools.
         clearButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3a2.4 2.4 0 0 1 0-3.4l10.6-10.6a2.4 2.4 0 0 1 3.4 0l4.6 4.6a2.4 2.4 0 0 1 0 3.4L11 21H7Z"/><path d="m5 11 9 9M11 21h10"/></svg>'
         clearButton.addEventListener('click', clear)
-        const cancelButton = makeButton('×', 'Cancel annotation', 'icon')
+        const cancelButton = makeButton('', 'Cancel annotation', 'icon')
+        cancelButton.setAttribute('aria-label', 'Cancel annotation')
+        cancelButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>'
         toolbar.append(divider, clearButton, cancelButton)
         setTool('select')
 

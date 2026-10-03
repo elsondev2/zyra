@@ -1,3 +1,5 @@
+import { estimateModelCost } from '../../../src/model-pricing/index.mjs';
+import { assistantMessageCost } from '../../../src/model-pricing/message-cost.mjs';
 import { createHash } from 'node:crypto';
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 const time = value => typeof value === 'number' ? value : Date.parse(value);
@@ -9,7 +11,7 @@ export function usageRecord(harness, row, state = {}) {
       state.session = payload.id; state.cwd = payload.cwd;
       if (payload.forked_from_id || payload.source?.subagent?.thread_spawn) { state.forkDetected = true; }
     }
-    if (row.type === 'turn_context') { state.model = payload.model || state.model; state.cwd = payload.cwd || state.cwd; }
+    if (row.type === 'turn_context') { state.model = payload.model || state.model; state.serviceTier = payload.service_tier || payload.serviceTier || state.serviceTier; state.cwd = payload.cwd || state.cwd; }
     if (payload.type !== 'token_count' || !payload.info?.last_token_usage || !state.model) return null;
     const usage = payload.info.last_token_usage, timestamp = time(row.timestamp);
     const signature = JSON.stringify(payload.info.total_token_usage || usage);
@@ -20,22 +22,22 @@ export function usageRecord(harness, row, state = {}) {
     if (state.forkDetected) return null;
     const input = number(usage.input_tokens), cached = Math.min(input, number(usage.cached_input_tokens)), written = Math.min(input-cached,number(usage.cache_write_input_tokens));
     return record(harness, state.cwd, state.model, timestamp, state.session + ':' + signature,
-      input - cached - written, cached, written, number(usage.output_tokens), number(usage.reasoning_output_tokens), null);
+      input - cached - written, cached, written, number(usage.output_tokens), number(usage.reasoning_output_tokens), null, state.serviceTier);
   }
   if (harness === 'zyra') {
     if (row.type === 'session') { state.cwd = row.cwd || state.cwd; state.session = row.id; }
     const message = row.message;
     if (row.type !== 'message' || message?.role !== 'assistant' || !message.usage) return null;
     const usage = message.usage;
-    return record(harness, state.cwd, message.model || 'Unknown model', time(row.timestamp || message.timestamp), row.id || message.id || state.session + ':' + row.timestamp,
-      number(usage.input), number(usage.cacheRead), number(usage.cacheWrite), number(usage.output), number(usage.reasoningTokens), typeof usage.cost === 'object' ? usage.cost?.total : usage.cost);
+    return record(harness, state.cwd, message.provider ? `${message.provider}/${message.model}` : message.model || 'Unknown model', time(row.timestamp || message.timestamp), row.id || message.id || state.session + ':' + row.timestamp,
+      number(usage.input), number(usage.cacheRead), number(usage.cacheWrite), number(usage.output), number(usage.reasoning ?? usage.reasoningTokens), assistantMessageCost(message)?.total, assistantMessageCost(message)?.serviceTier, assistantMessageCost(message)?.source);
   }
   if (harness === 'claude') {
     state.cwd = row.cwd || state.cwd;
     const message = row.message;
     if (row.type !== 'assistant' || !message?.usage) return null;
     const usage = message.usage;
-    return record(harness, state.cwd, message.model || 'Unknown model', time(row.timestamp), (message.id || row.uuid || row.timestamp) + ':' + (row.requestId || ''),
+    return record(harness, state.cwd, message.provider ? `${message.provider}/${message.model}` : message.model || 'Unknown model', time(row.timestamp), (message.id || row.uuid || row.timestamp) + ':' + (row.requestId || ''),
       number(usage.input_tokens), number(usage.cache_read_input_tokens), number(usage.cache_creation_input_tokens), number(usage.output_tokens), 0, row.costUSD);
   }
   if (harness === 'opencode') {
@@ -45,24 +47,23 @@ export function usageRecord(harness, row, state = {}) {
   }
   return null;
 }
-function record(harness, cwd, model, timestamp, id, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, reasoningTokens, cost) {
+function record(harness, cwd, model, timestamp, id, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, reasoningTokens, cost, serviceTier, costSource) {
   if (!cwd || !Number.isFinite(timestamp) || !(inputTokens + cachedInputTokens + cacheWriteTokens + outputTokens)) return null;
   return { harness, cwd, model: String(model).slice(0, 160), timestamp, id: hash(harness + ':' + id), inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens,
-    reasoningTokens: Math.min(reasoningTokens, outputTokens), reportedCostUsd: typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null };
+    serviceTier, costSource, reasoningTokens: Math.min(reasoningTokens, outputTokens), reportedCostUsd: typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null };
 }
-// Standard API token rates, checked 2026-09-15 against the linked primary sources.
-// Unknown models remain unpriced. These are not subscription charges or invoices.
-export const pricingSources = ['https://developers.openai.com/api/docs/models/gpt-5.5', 'https://developers.openai.com/api/docs/models/gpt-5.4', 'https://platform.claude.com/docs/en/about-claude/pricing'];
-const rates = { 'gpt-5.5': [5,.5,5,30], 'gpt-5.4': [2.5,.25,2.5,15],
-  'claude-sonnet-4-6': [3,.3,3.75,15], 'claude-sonnet-4-5': [3,.3,3.75,15], 'claude-haiku-4-5': [1,.1,1.25,5], 'claude-opus-4-6': [5,.5,6.25,25] };
+export const pricingSources = ['https://developers.openai.com/api/docs/pricing', 'https://platform.claude.com/docs/en/about-claude/pricing'];
+// Existing Claude fallback stays separate until its cache-write duration is known.
+const claudeRates = { 'claude-sonnet-4-6': [3,.3,3.75,15], 'claude-sonnet-4-5': [3,.3,3.75,15], 'claude-haiku-4-5': [1,.1,1.25,5], 'claude-opus-4-6': [5,.5,6.25,25] };
 export function priceRecord(row) {
-  const model = row.model.toLowerCase().split('/').pop().replace(/-\d{8}$/, '');
-  const rate = rates[model];
-  // Cache-write duration is not always recorded; do not guess a Claude write tier.
-  if (!rate || (model.startsWith('claude-') && row.cacheWriteTokens > 0)) return null;
-  // GPT long-context tiers can change input/output prices; omit unknown-tier rows.
-  if (model.startsWith('gpt-') && row.inputTokens + row.cachedInputTokens > 272000) return null;
-  return (row.inputTokens*rate[0] + row.cachedInputTokens*rate[1] + row.cacheWriteTokens*rate[2] + row.outputTokens*rate[3])/1e6;
+  if (row.responseCount > 1) return null;
+  const model = row.model.toLowerCase();
+  const estimate = estimateModelCost(model, { ...row, inputIncludesCachedTokens: false }, row.serviceTier);
+  if (estimate) return estimate.total;
+  const key = model.replace(/^anthropic\//, '').replace(/-\d{8}$/, '');
+  const rate = claudeRates[key];
+  if (!rate || row.cacheWriteTokens > 0) return null;
+  return (row.inputTokens*rate[0]+row.cachedInputTokens*rate[1]+row.outputTokens*rate[3])/1e6;
 }
 const usageFields = ['responses','inputTokens','cachedInputTokens','cacheWriteTokens','outputTokens','reasoningTokens','totalTokens','reportedCostUsd','estimatedCostUsd','reportedResponses','estimatedResponses','unpricedResponses'];
 const emptyUsage = () => Object.fromEntries(usageFields.map(field => [field, 0]));
@@ -77,7 +78,8 @@ function addUsage(group, row) {
   for (const field of ['inputTokens','cachedInputTokens','cacheWriteTokens','outputTokens','reasoningTokens']) group[field] += number(row[field]);
   group.totalTokens = group.inputTokens + group.cachedInputTokens + group.cacheWriteTokens + group.outputTokens;
   const estimate = priceRecord(row);
-  if (row.reportedCostUsd != null && (row.reportedCostUsd > 0 || estimate != null)) { group.reportedCostUsd += row.reportedCostUsd; group.reportedResponses++; }
+  if (row.costSource === 'api-equivalent' && row.reportedCostUsd != null && (row.reportedCostUsd > 0 || estimate === 0)) { group.estimatedCostUsd += row.reportedCostUsd; group.estimatedResponses++; }
+  else if (row.reportedCostUsd != null && (row.reportedCostUsd > 0 || estimate === 0)) { group.reportedCostUsd += row.reportedCostUsd; group.reportedResponses++; }
   else if (estimate == null) group.unpricedResponses++;
   else { group.estimatedCostUsd += estimate; group.estimatedResponses++; }
 }

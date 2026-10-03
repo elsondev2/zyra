@@ -5,6 +5,8 @@ import os from 'node:os';
 import { usageRecord, aggregateUsage, pricingSources, usagePeriod } from './usage-records.mjs';
 import { workspaceScope, within } from './workspace-scope.mjs';
 import { readOpenCodeUsage } from './usage-opencode.mjs';
+import { refreshModelPricing } from '../../../src/model-pricing/refresh.mjs';
+import { getPricingSnapshot } from '../../../src/model-pricing/index.mjs';
 
 const DAY = 86400000, SLICE = 1024*1024, MAX_RECORDS = 40000, MAX_CACHE = 16*1024*1024;
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -12,6 +14,7 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 export class UsageIndex {
   constructor({directory, home = os.homedir(), env = process.env, roots} = {}) {
     this.file = directory ? path.join(directory,'usage-index-v1.json') : null;
+    this.pricingDirectory = directory; this.env = env; this.fixtureRoots = Boolean(roots);
     this.roots = roots || {codex:[path.join(env.CODEX_HOME || path.join(home,'.codex'),'sessions')],claude:[path.join(env.CLAUDE_CONFIG_DIR || path.join(home,'.claude'),'projects')],opencode:[path.join(env.XDG_DATA_HOME || path.join(home,'.local','share'),'opencode','storage','message')]};
     this.openCodeDatabase = roots ? null : path.join(env.XDG_DATA_HOME || path.join(home,'.local','share'),'opencode','opencode.db');
     this.cache = null; this.pending = Promise.resolve();
@@ -19,8 +22,9 @@ export class UsageIndex {
   read(input) { const task = this.pending.then(()=>this.load(input)); this.pending = task.catch(()=>{}); return task; }
   async load({harness = 'zyra', projects = [], zyraChats = null, hiddenProjects = [], allProjects = false, now = Date.now()}) {
     if (!['zyra','codex','claude','opencode','all'].includes(harness)) throw new Error('Choose a usage source.');
+    await refreshModelPricing({ directory: this.pricingDirectory, env: this.env, cacheOnly: this.fixtureRoots });
     if (!this.cache) {
-      try { if (!this.file || (await stat(this.file)).size > MAX_CACHE) throw new Error(); const saved=JSON.parse(await readFile(this.file,'utf8')); this.cache=saved.version===2 && saved.files && typeof saved.files==='object' ? saved.files : {}; this.limited=saved.version===2 && saved.limited===true; } catch { this.cache={}; }
+      try { if (!this.file || (await stat(this.file)).size > MAX_CACHE) throw new Error(); const saved=JSON.parse(await readFile(this.file,'utf8')); this.cache=saved.version===3 && saved.files && typeof saved.files==='object' ? saved.files : {}; this.limited=saved.version===3 && saved.limited===true; } catch { this.cache={}; }
     }
     const period = usagePeriod(now), since = Date.parse(period.start), scope = await workspaceScope(hiddenProjects), permission = new Map();
     const roots = {...this.roots,zyra:projects.map(project=>path.join(project,'.zyra','sessions'))};
@@ -66,12 +70,12 @@ export class UsageIndex {
       indexing ||= pending;
     }
     // Retain bounded recent numeric records; no raw transcript line is serialized.
-    this.boundCache(since); const saved=JSON.stringify({version:2,files:this.cache,limited:this.limited===true});
+    this.boundCache(since); const saved=JSON.stringify({version:3,files:this.cache,limited:this.limited===true});
     if (dirty && Buffer.byteLength(saved)<=MAX_CACHE && this.file) {
       await mkdir(path.dirname(this.file),{recursive:true}); await writeFile(this.file+'.tmp',saved,{mode:0o600}); await rename(this.file+'.tmp',this.file);
     }
     return {...aggregateUsage(accepted,period),harness,days:30,sources,indexing,limited:this.limited===true,partial:sources.some(source=>source.partial || source.state==='unavailable'),bytesRead,fetchedAt:new Date(now).toISOString(),
-      scope:'Shared projects only',pricing:{kind:'api-equivalent',verifiedAt:'2026-09-15',sources:pricingSources},
+      scope:'Shared projects only',pricing:{kind:'api-equivalent',verifiedAt:getPricingSnapshot().fetchedAt,sources:pricingSources},
       note:'Recorded model costs and standard API estimates are not subscription charges. Unknown rates, cache-write tiers and long-context tiers remain unpriced.' + (sources.some(source=>source.partial) ? ' Forked Codex ledgers are excluded because copied parent usage cannot be distinguished reliably.' : '')};
   }
   boundCache(since) {

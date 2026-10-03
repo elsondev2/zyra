@@ -13,6 +13,7 @@ export interface DirectorySkill {
     source: string
     scope: string
     pluginId?: string
+    pluginName?: string
     version?: string
     manualOnly: boolean
 }
@@ -36,6 +37,7 @@ export function directorySkills(catalog: AssistantPluginCatalog | null, resource
             source: release.manifest.interface.displayName || plugin.name,
             scope: 'Plugin',
             pluginId: plugin.id,
+            pluginName: plugin.name,
             version: release.version,
             manualOnly: skill.disableModelInvocation
         }))

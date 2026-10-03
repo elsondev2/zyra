@@ -3,13 +3,14 @@ import type { FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 
 export function buildSettingsChoiceItems<T extends string>(
     value: T,
-    options: ReadonlyArray<{ value: T; label: string; icon?: ReactNode }>,
+    options: ReadonlyArray<{ value: T; label: string; hint?: string; icon?: ReactNode }>,
     onChange: (value: T) => void,
     disabled = false
 ): FileActionsMenuItem[] {
     return options.map(option => ({
         id: option.value,
         label: option.label,
+        hint: option.hint,
         icon: option.icon,
         checked: option.value === value,
         disabled,

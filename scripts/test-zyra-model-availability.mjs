@@ -5,7 +5,7 @@ import {
   getFilteredAvailableModels,
   refreshModelAvailability,
 } from "../src/model-availability.mjs";
-import { PI_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
+import { TRANSPORT_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
 
 class FakeModelRegistry {
   constructor(models) {
@@ -74,7 +74,7 @@ async function testPendingPiSupportStaysVisibleWithoutProbe() {
     {
       provider: "openai-codex",
       id: "gpt-5.6-luna",
-      zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
+      zyraCompatibility: { status: TRANSPORT_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
     },
   ]);
   let fetchCalls = 0;

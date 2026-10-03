@@ -213,7 +213,7 @@ function PreviewWindowedHeader({
     const isCompactHtmlHeader = isHtml && headerWidth < 1024
     const isVeryCompactHtmlHeader = isHtml && headerWidth < 820
     const isUltraCompactHtmlHeader = isHtml && headerWidth < 680
-    const visibleFileName = formatPreviewFileName(file.name, headerWidth < 760 ? 26 : headerWidth < 980 ? 36 : 52)
+    const visibleFileName = formatPreviewFileName(file.displayName || file.name, headerWidth < 760 ? 26 : headerWidth < 980 ? 36 : 52)
 
     const controlGroupClass = 'flex items-center gap-0.5 rounded-md border border-white/10 bg-white/[0.035] p-0.5 shrink-0'
     const showWindowedEditMenu = previewModeEnabled && isEditable
@@ -279,7 +279,7 @@ function PreviewWindowedHeader({
                             className="size-4 shrink-0"
                         />
                         <div className="flex min-w-0 items-center gap-1">
-                            <h3 className="truncate text-[13px] font-semibold text-sparkle-text" title={file.name}>
+                            <h3 className="truncate text-[13px] font-semibold text-sparkle-text" title={file.displayName || file.name}>
                                 {visibleFileName}
                             </h3>
                             <button

@@ -215,6 +215,19 @@ assert.equal(
 assert.equal(clientCommands[1].messages.every((message: any) => message.type === 'session.context.append'), true)
 assert.equal(clientCommands[1].messages.every((message: any) => message.channel === 'speakable'), true)
 assert.equal(clientCommands[1].canonicalMessageId, 'canonical-spoken-result')
+await directRuntime.requestSpeech('Verified background facts.', undefined, 'private-task-result')
+const privateResultCommand = directRuntimeEvents.filter(event => event.type === 'client.command').at(-1)!
+assert.equal(privateResultCommand.voiceTaskId, 'private-task-result')
+assert.equal(privateResultCommand.canonicalMessageId, undefined)
+assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, privateResultCommand, {
+    adapterSessionId: 'adapter-session-1', realtimeSessionId: 'rtc_test_voice', realtimeSessionGeneration: 7
+}), true)
+assert.equal(rendererCommandMessages.at(-1)?.includes('voiceTaskId'), false, 'private task IDs stay in the local bridge')
+assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, {
+    ...privateResultCommand, canonicalMessageId: 'already-written-answer'
+}, {
+    adapterSessionId: 'adapter-session-1', realtimeSessionId: 'rtc_test_voice', realtimeSessionGeneration: 7
+}), false, 'a private result must not also claim to replay a visible answer')
 const directComposerResponse = directRuntimeEvents.find((event) => event.type === 'composer.response.done')
 assert.equal(directComposerResponse?.text, 'Typed response.')
 assert.equal(directComposerResponse?.canonicalMessageId, 'canonical-typed-response-1')
@@ -1085,7 +1098,7 @@ const assistantServiceSource = readFileSync(
     'utf8'
 )
 const zyraRuntimeSource = readFileSync(
-    new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url),
+    new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url),
     'utf8'
 )
 const liveTranscriptSource = readFileSync(
@@ -1205,7 +1218,7 @@ assert.match(conversationPaneSource, /VOICE_TIMELINE_RESERVE_PX = 500/u)
 assert.match(conversationPaneSource, /VOICE_SCROLL_BUTTON_BOTTOM_PX = 78/u)
 assert.doesNotMatch(conversationPaneSource, /voiceTimelineInsetFrameRef/u, 'Voice startup must not relayout the virtual timeline on every animation frame')
 assert.match(timelineRowsSource, /usesProviderNativeStreaming = message\.modality === 'voice'/u)
-assert.match(assistantServiceSource, /Approval received\. The primary agent is continuing\./u)
+assert.match(assistantServiceSource, /Approval received\. I can continue now\./u)
 assert.match(
     assistantServiceSource,
     /const executionConfiguration = requireCanonicalVoiceExecutionConfiguration\(input\.executionConfiguration\)/u,
@@ -1247,11 +1260,9 @@ assert.match(
     /event\.type === 'realtime\.delegation\.requested'[\s\S]{0,180}routeVoiceStrongRequest\(event\)/u,
     'spoken primary-agent work must start from the provider delegation instead of a transcript keyword guess'
 )
-assert.match(
-    assistantServiceSource,
-    /private async submitVoiceTaskNarration[\s\S]{0,900}committer\.commit\([\s\S]{0,500}providerItemId: `voice-result:\$\{taskId\}`[\s\S]{0,500}requestSpeech/u,
-    'primary-task narration becomes canonical before its spoken replay'
-)
+const privateNarrationSource = assistantServiceSource.split('private async submitVoiceTaskNarration')[1]!.split('private async readCanonicalVoiceContinuity')[0]!
+assert.doesNotMatch(privateNarrationSource, /committer\.commit/u, 'background results must not be pre-written as visible answers')
+assert.match(privateNarrationSource, /requestSpeech[\s\S]*voiceTaskId: taskId/u, 'the actual foreground reply stays linked to its private task')
 assert.match(
     assistantServiceSource,
     /this\.disposeRequested = true[\s\S]{0,2500}await this\.canonicalVoiceSetupPromise\?\.catch/u,

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { LoaderCircle, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import type { AccessoryWindowState } from '@shared/accessories'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { AccessoryWindowHeader } from './AccessoryWindowHeader'
@@ -8,12 +9,15 @@ import { AccessoryHeaderProvider } from './AccessoryHeaderContext'
 const AccessoryBrowser = lazy(() => import('./AccessoryBrowser').then(module => ({ default: module.AccessoryBrowser })))
 const AccessoryFiles = lazy(() => import('./AccessoryFiles').then(module => ({ default: module.AccessoryFiles })))
 const AccessoryTerminal = lazy(() => import('./AccessoryTerminal').then(module => ({ default: module.AccessoryTerminal })))
+const AccessoryDevScope = lazy(() => import('./AccessoryDevScope'))
 
 export default function AccessoryWindowPage() {
+    const navigate = useNavigate()
     const [state, setState] = useState<AccessoryWindowState | null>(null)
     const [error, setError] = useState('')
     const [confirmClose, setConfirmClose] = useState(false)
     const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null)
+    const [terminalSidebarWidth, setTerminalSidebarWidth] = useState(196)
     const alive = useRef(false)
     const updates = useRef(0)
     const previewOpen = useRef(false)
@@ -57,16 +61,17 @@ export default function AccessoryWindowPage() {
             else if (updates.current === revision) setState(result.state)
         }).catch(cause => { if (alive.current) setError(cause instanceof Error ? cause.message : 'Could not acknowledge the browser request.') })
     }, [])
-    const title = state?.kind === 'browser' ? state.sessionMode === 'incognito' ? 'Incognito Browser' : 'Browser' : state?.kind === 'terminal' ? 'Terminal' : state?.kind === 'files' ? 'File Explorer' : 'Accessories'
+    const title = state?.kind === 'browser' ? state.sessionMode === 'incognito' ? 'Incognito Browser' : 'Browser' : state?.kind === 'terminal' ? 'Terminal' : state?.kind === 'files' ? 'File Explorer' : state?.kind === 'devscope' ? 'DevScope' : 'Accessories'
     return <AccessoryHeaderProvider value={headerSlot}><div className="flex h-screen min-h-0 flex-col overflow-hidden bg-sparkle-bg text-sparkle-text">
-        <AccessoryWindowHeader title={title} onClose={close} slotRef={setHeaderSlot} separated={state?.kind === 'terminal' || state?.kind === 'files'} />
+        <AccessoryWindowHeader title={title} onClose={close} onTitleClick={state?.kind === 'devscope' ? () => navigate('/accessories') : undefined} slotRef={setHeaderSlot} separated={state?.kind === 'terminal' || state?.kind === 'files' || state?.kind === 'devscope'} titleSectionWidth={state?.kind === 'terminal' ? terminalSidebarWidth : undefined} />
         <main className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden theme-adaptive">
             {error ? <div role="alert" className="absolute bottom-3 left-3 right-3 z-[90] flex items-center gap-3 rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-3 py-2 text-[12px]"><span className="min-w-0 flex-1">{error}</span><button type="button" aria-label="Dismiss accessory error" onClick={() => setError('')}><X size={14} /></button></div> : null}
             <Suspense fallback={<AccessoryLoading />}>
                 {!state ? !error ? <AccessoryLoading /> : null : state.kind === 'browser'
                     ? <AccessoryBrowser workspaceId={state.id} sessionMode={state.sessionMode} request={state.requests[0] || null} onRequestHandled={handled} onError={showError} onPreviewOpenChange={previewChanged} />
-                    : state.kind === 'terminal' ? <AccessoryTerminal workspaceId={state.id} rootPath={state.rootPath} onError={showError} />
-                        : <AccessoryFiles workspaceId={state.id} rootPath={state.rootPath} onError={showError} onPreviewOpenChange={previewChanged} />}
+                    : state.kind === 'terminal' ? <AccessoryTerminal workspaceId={state.id} rootPath={state.rootPath} onSidebarWidthChange={setTerminalSidebarWidth} />
+                        : state.kind === 'devscope' ? <AccessoryDevScope />
+                            : <AccessoryFiles workspaceId={state.id} rootPath={state.rootPath} onError={showError} onPreviewOpenChange={previewChanged} />}
             </Suspense>
         </main>
         <ConfirmModal isOpen={confirmClose} title={`Close ${title}?`} message="Save any edits first. Closing this window discards unsaved file changes." confirmLabel="Close window" variant="warning" onCancel={() => setConfirmClose(false)} onConfirm={() => { allowClose.current = true; setConfirmClose(false); void window.devscope.window.close() }} />

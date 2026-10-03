@@ -4,6 +4,7 @@ import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { useSettings } from '@/lib/settings'
 import { getTimelineActivityDomId } from './assistant-timeline-helpers'
+import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS } from './assistant-action-row-layout'
 
 export function formatAssistantActionTime(value: string): string {
     const date = new Date(value)
@@ -42,20 +43,21 @@ export function AssistantTimelineActionShell(props: {
                 disabled={!actionable}
                 onClick={props.onToggle}
                 aria-expanded={canToggle ? props.expanded : undefined}
+                data-assistant-action-row="true"
                 className={cn(
-                    'flex min-h-7 w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors',
+                    ASSISTANT_ACTION_ROW_CLASS, 'transition-colors',
                     actionable ? 'hover:bg-[var(--surface-hover)]' : 'cursor-default'
                 )}
             >
-                <span className={cn(
-                    'inline-flex size-4 shrink-0 items-center justify-center',
+                <span data-assistant-action-icon="true" className={cn(
+                    ASSISTANT_ACTION_ICON_CLASS,
                     props.status === 'running' ? 'text-[color-mix(in_srgb,var(--status-warning)_72%,var(--color-text))]'
                         : props.status === 'failed' ? 'text-[color-mix(in_srgb,var(--status-danger)_72%,var(--color-text))]'
                             : 'text-sparkle-text-muted'
                 )}>
                     {props.status === 'running' ? <Loader2 size={13} className="animate-spin" /> : props.icon}
                 </span>
-                <span className={cn(
+                <span data-assistant-action-title="true" className={cn(
                     'min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-sparkle-text-secondary group-hover/action:text-sparkle-text',
                     props.status === 'running' && 'assistant-title-shimmer'
                 )}>

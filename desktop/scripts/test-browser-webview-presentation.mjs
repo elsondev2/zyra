@@ -12,6 +12,7 @@ try {
     const bundle = await build({
         entryPoints: [join(desktop, 'scripts/fixtures/browser-webview-presentation.tsx')],
         bundle: true, write: false, format: 'iife', jsx: 'automatic', platform: 'browser',
+        define: { 'import.meta.hot': 'undefined' },
         alias: { '@': join(desktop, 'src/renderer/src') }
     })
     const html = join(directory, 'index.html')

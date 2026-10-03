@@ -51,7 +51,6 @@ export async function selectAssistantStoreSession(
         const snapshot = warmSelection.snapshot
         return {
             error: null,
-            commandPending: true,
             selectionRequestId,
             selectionRequestSessionId: sessionId,
             selectionTransitionKey: transitionKey,
@@ -78,7 +77,6 @@ export async function selectAssistantStoreSession(
                 : current.snapshot
             return {
                 error: message,
-                commandPending: false,
                 selectionTransitionKey: null,
                 selectionRequestSessionId: null,
                 snapshot,
@@ -137,7 +135,6 @@ export async function selectAssistantStoreSession(
         context.setState((current) => (
             current.selectionRequestId === selectionRequestId
                 ? {
-                    commandPending: false,
                     selectionTransitionKey: null,
                     selectionRequestSessionId: null
                 }

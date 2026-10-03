@@ -104,30 +104,31 @@ export function useIndexedProjectFileSearch({
         }
 
         let cancelled = false
-        void window.devscope.searchIndexedPaths({
-            scopePath: projectRootPath,
-            term: parsedFileSearch.term,
-            extensionFilters: parsedFileSearch.extension ? [parsedFileSearch.extension] : [],
-            limit: 420,
-            includeFiles: true,
-            includeDirectories: true,
-            showHidden
-        }).then((result) => {
-            if (cancelled) return
-            if (!result?.success) {
-                setIndexedSearchTree([])
-                return
-            }
-            const nextTree = buildIndexedSearchTree(projectRootPath, result.entries || [], result.ancestors || [])
-            setIndexedSearchTree(nextTree)
-        }).catch(() => {
-            if (!cancelled) {
-                setIndexedSearchTree([])
-            }
-        })
+        const timer = window.setTimeout(() => {
+            void window.devscope.searchIndexedPaths({
+                scopePath: projectRootPath,
+                term: parsedFileSearch.term,
+                extensionFilters: parsedFileSearch.extension ? [parsedFileSearch.extension] : [],
+                limit: 420,
+                includeFiles: true,
+                includeDirectories: true,
+                showHidden
+            }).then((result) => {
+                if (cancelled) return
+                if (!result?.success) {
+                    setIndexedSearchTree([])
+                    return
+                }
+                const nextTree = buildIndexedSearchTree(projectRootPath, result.entries || [], result.ancestors || [])
+                setIndexedSearchTree(nextTree)
+            }).catch(() => {
+                if (!cancelled) setIndexedSearchTree([])
+            })
+        }, 180)
 
         return () => {
             cancelled = true
+            window.clearTimeout(timer)
         }
     }, [hasFileSearch, parsedFileSearch.extension, parsedFileSearch.term, projectRootPath, showHidden])
 

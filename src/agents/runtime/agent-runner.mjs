@@ -29,11 +29,22 @@ export class AgentRunner {
         writeScope: run.writeScope,
         successCriteria: run.successCriteria,
         controlClient: options.controlClient,
+        threadClient: options.threadClient,
         controlLease: options.controlLease,
       });
       if (options.signal?.aborted) throw abortError(options.signal.reason);
-      options.onLinked?.({ ...linked, host });
-      const result = await host.run(buildDelegatedPrompt(run), { signal: options.signal });
+      await options.onLinked?.({ ...linked, host });
+      const result = await host.run(buildDelegatedPrompt(run), { signal: options.signal, delegation: {
+        messageId: `agent-delegation:${run.attemptId}`,
+        senderThreadId: options.senderThreadId || run.parentAgentRunId || run.fleetId,
+        senderCanonicalThreadId: options.senderCanonicalThreadId,
+        senderLabel: options.senderLabel || 'Zyra',
+        recipientThreadId: linked.sessionId,
+        text: run.goal,
+        origin: 'delegation',
+        taskLabel: run.label,
+        createdAt: new Date().toISOString(),
+      } });
       return { ...result, host };
     } catch (error) {
       host.dispose();

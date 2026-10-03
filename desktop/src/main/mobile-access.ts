@@ -121,10 +121,15 @@ export class MobileAccessManager {
         try {
             await client.connect()
             const [{ projects }, catalog] = await Promise.all([client.request('catalog.projects'), this.service().listProjects()])
-            const choices = catalog.catalog.projects.filter(project => !project.archived).map(project => ({ name: project.name, paths: [project.homePath, ...project.folders.map(folder => folder.path)] }))
+            const choices = catalog.catalog.projects.filter(project => !project.archived).map(project => ({
+                name: project.name,
+                paths: [project.homePath, ...project.folders.map(folder => folder.path)],
+                iconPath: project.folders[0]?.path || project.homePath,
+                folders: project.folders.map(folder => ({ label: folder.label, path: folder.path }))
+            }))
             const represented = new Set(choices.flatMap(choice => choice.paths).map(path => path.toLowerCase()))
             for (const path of [...new Set<string>([this.defaultProject, ...projects, ...hiddenPaths])]) {
-                if (!represented.has(path.toLowerCase())) choices.push({ name: path === this.defaultProject ? 'Other chats' : basename(path), paths: [path] })
+                if (!represented.has(path.toLowerCase())) choices.push({ name: path === this.defaultProject ? 'Other chats' : basename(path), paths: [path], iconPath: path, folders: [] })
             }
             return choices.sort((a, b) => a.name.localeCompare(b.name))
         } finally { client.close() }

@@ -90,6 +90,8 @@ export default function SyntaxPreview({
     const monacoLanguage = resolveMonacoLanguage(language)
     const isLargeFile = safeContent.length > 300_000
     const modelPath = modelPathOverride || toMonacoModelPath(filePath)
+    const compactLayout = typeof window !== 'undefined' && window.innerWidth < 980
+    const placeholderFontSize = compactLayout ? Math.max(10, (fontSize ?? 13) - 1) : fontSize
 
     return (
         <div
@@ -99,7 +101,7 @@ export default function SyntaxPreview({
             data-syntax-preview-model-path={modelPath}
         >
             <Suspense
-                fallback={<CodePreviewPlaceholder onReadable={measurement.current.readable} content={safeContent} fontSize={fontSize} wordWrap={wordWrap} />}
+                fallback={<CodePreviewPlaceholder onReadable={measurement.current.readable} content={safeContent} fontSize={placeholderFontSize} wordWrap={wordWrap} lineNumberStart={lineNumberStart} lineHeight={compactLayout ? 18 : 20} paddingTop={compactLayout ? 10 : 14} paddingBottom={compactLayout ? 10 : 14} />}
             >
                 <MonacoEditorComponent
                     value={safeContent}

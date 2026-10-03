@@ -9,6 +9,7 @@ import {
 import type { TimelineDisplayRow } from './assistant-timeline-helpers'
 import {
     ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT,
+    ASSISTANT_TIMELINE_FOLLOW_END_EVENT,
     didAssistantTimelineWorkComplete,
     type AssistantTimelineDisclosureToggleDetail
 } from './assistant-timeline-scroll-events'
@@ -53,6 +54,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     rows: TimelineDisplayRow[]
     windowKey: string
     focusMessageId?: string | null
+    followLatestRequestKey?: string | null
     listRef: RefObject<LegendListRef | null>
     scrollContainerRef?: RefObject<HTMLDivElement | null>
     contentInsetEndAdjustment: number
@@ -99,6 +101,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     const lastUpwardIntentAtRef = useRef(Number.NEGATIVE_INFINITY)
     const lastDownwardIntentAtRef = useRef(Number.NEGATIVE_INFINITY)
     const userNavigationAwayRef = useRef(false)
+    const handledFollowRequestRef = useRef<{ windowKey: string; key: string | null }>({ windowKey: props.windowKey, key: null })
     const previousRowsRef = useRef(props.rows)
     const previousCompletionWindowKeyRef = useRef(props.windowKey)
     const scrollModeRef = useRef<AssistantTimelineScrollMode>('following-end')
@@ -212,6 +215,28 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         setScrollMode((current) => current === nextMode ? current : nextMode)
     }, [])
 
+    const followLatest = useCallback((animated = false) => {
+        clearCompletionEndFollow()
+        cancelEndAlignment()
+        cancelStartupAlignment()
+        stopInitialHistoryBackfill()
+        cancelDisclosureAnchor()
+        window.clearTimeout(disclosureTimerRef.current)
+        disclosureTimerRef.current = 0
+        setDisclosureLayoutActive(false)
+        userNavigationAwayRef.current = false
+        lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+        lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+        scrollbarDragActiveRef.current = false
+        scrollbarDragDirectionRef.current = null
+        coldWindowRef.current.cold = false
+        setColdHistoryReadyKey(props.windowKey)
+        updateScrollMode('following-end')
+        settleInitialPresentation(props.windowKey, props.onInitialLayout)
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches || document.body.classList.contains('zyra-reduce-motion')
+        void props.listRef.current?.scrollToEnd({ animated: animated && !reduceMotion })
+    }, [cancelDisclosureAnchor, cancelEndAlignment, cancelStartupAlignment, clearCompletionEndFollow, props.listRef, props.onInitialLayout, props.windowKey, settleInitialPresentation, stopInitialHistoryBackfill, updateScrollMode])
+
     const requestInitialHistoryBackfill = useCallback((targetWindowKey: string) => {
         if (
             activeWindowKeyRef.current !== targetWindowKey
@@ -322,6 +347,16 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         if (!props.focusMessageId) return
         stopFollowingForUserNavigation()
     }, [props.focusMessageId, stopFollowingForUserNavigation])
+
+    useLayoutEffect(() => {
+        if (handledFollowRequestRef.current.windowKey !== props.windowKey) {
+            handledFollowRequestRef.current = { windowKey: props.windowKey, key: null }
+        }
+        const key = props.followLatestRequestKey
+        if (!key || handledFollowRequestRef.current.key === key) return
+        handledFollowRequestRef.current.key = key
+        followLatest()
+    }, [followLatest, props.followLatestRequestKey, props.windowKey])
 
     useLayoutEffect(() => {
         const shouldSnap = shouldSnapRendererPresentation(
@@ -633,6 +668,8 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             cancelDisclosureAnchor()
             stopFollowingForUserNavigation()
         }
+        const handleFollowEnd = (event: Event) => followLatest((event as CustomEvent<{ animated?: boolean }>).detail?.animated === true)
+        scrollElement.addEventListener(ASSISTANT_TIMELINE_FOLLOW_END_EVENT, handleFollowEnd)
         scrollElement.addEventListener(ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT, handleDisclosureToggle)
         scrollElement.addEventListener(ASSISTANT_TIMELINE_USER_JUMP_EVENT, handleUserJump)
         scrollElement.addEventListener('pointerdown', handleTimelinePointerDown, { passive: true })
@@ -645,6 +682,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         window.addEventListener('pointerup', finishScrollbarDrag, { passive: true })
         window.addEventListener('pointercancel', finishScrollbarDrag, { passive: true })
         return () => {
+            scrollElement.removeEventListener(ASSISTANT_TIMELINE_FOLLOW_END_EVENT, handleFollowEnd)
             scrollElement.removeEventListener(ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT, handleDisclosureToggle)
             scrollElement.removeEventListener(ASSISTANT_TIMELINE_USER_JUMP_EVENT, handleUserJump)
             scrollElement.removeEventListener('pointerdown', handleTimelinePointerDown)
@@ -662,6 +700,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     }, [
         beginDisclosureLayout,
         cancelDisclosureAnchor,
+        followLatest,
         props.hasNewer,
         props.hasOlder,
         props.loadOlderError,
@@ -788,7 +827,9 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
                     layout: !disclosureLayoutActive
                 }
             } : false}
-            maintainScrollAtEndThreshold={0.12}
+            // Follow is explicitly owned by send/latest intent, not by geometry
+            // after a tall prompt or late measurement moves the end farther away.
+            maintainScrollAtEndThreshold={scrollMode === 'following-end' ? Number.POSITIVE_INFINITY : 0.12}
             contentInsetEndAdjustment={props.contentInsetEndAdjustment}
             ListHeaderComponent={header}
             estimatedHeaderSize={44}

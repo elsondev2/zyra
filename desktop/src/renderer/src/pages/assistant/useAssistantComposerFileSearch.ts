@@ -63,7 +63,7 @@ export function useAssistantComposerFileSearch(input: {
             }).finally(() => {
                 if (requestSequenceRef.current === requestId) setLoading(false)
             })
-        }, input.query.trim() ? 55 : 0)
+        }, input.query.trim() ? 180 : 0)
 
         return () => window.clearTimeout(timer)
     }, [input.active, input.query, rootsSignature])

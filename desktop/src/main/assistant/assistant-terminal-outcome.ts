@@ -1,4 +1,5 @@
 import type { AssistantTurnOutcome } from '../../shared/assistant/contracts'
+import { readAssistantInterruption } from '../../shared/assistant/interruption'
 
 export type TerminalAssistantMessageOutcome = {
     turnId: string
@@ -25,7 +26,7 @@ function canonicalAssistantMessageSourceId(message: Record<string, unknown> | nu
     if (canonicalMessageId) return canonicalMessageId
     const timestamp = Number(message?.['timestamp'])
     return Number.isFinite(timestamp) && timestamp > 0
-        ? `pi-message:assistant:${Math.trunc(timestamp)}`
+        ? `zyra-message:assistant:${Math.trunc(timestamp)}`
         : fallback
 }
 
@@ -53,6 +54,7 @@ export function resolveZyraTerminalOutcome(
     event: Record<string, unknown>,
     messageOutcome: TerminalAssistantMessageOutcome | null
 ): AssistantTurnOutcome {
+    if (readAssistantInterruption(event['interruption']) && event['outcome'] === 'interrupted') return 'interrupted'
     if (messageOutcome) return messageOutcome.outcome
     if (type === 'agent_end') return 'completed'
     const outcome = String(event['outcome'] || '').trim().toLowerCase()

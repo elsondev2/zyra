@@ -2,14 +2,19 @@ import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { Check, CheckCircle2, ChevronDown, CircleDashed, Folder, FolderPlus, MessageSquare, MoreHorizontal, Search, Undo2, X } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDown, CircleDashed, Folder, FolderPlus, MessageSquare, MoreHorizontal, Pin, Search, Undo2, X } from 'lucide-react'
 import type { AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { cn } from '@/lib/utils'
+import { SettingsProviderIcon } from '../settings/SettingsProviderIcon'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
+import { useStableSidebarGroups } from './useStableSidebarGroups'
+import { getSidebarSettlementActivityKey, isSidebarSettlementCurrent, upgradeSidebarSettlementOverrides, type SettlementOverride, type SettlementOverrides } from './assistant-sidebar-settlement'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
+import { AssistantAgentPresenceIndicator } from './AssistantAgentPresenceIndicator'
 import { assistantSessionMobileDevices, isAssistantSessionOpenInTui } from './assistant-tui-presence'
+import { resolveAssistantInboxModelPresentation } from './assistant-model-labels'
 import { resolveAssistantAgentInboxSettledInitialCount } from './assistant-agent-inbox-settled-window'
 import {
     formatAssistantSidebarRelativeTime,
@@ -29,9 +34,7 @@ const SETTLED_OVERRIDES_KEY = 'assistant:agent-inbox-settled-overrides:v1'
 const AUTO_SETTLE_AFTER_MS = 3 * 24 * 60 * 60 * 1000
 const SETTLED_PAGE_COUNT = 25
 
-type RowStatus = 'approval' | 'input' | 'working' | 'failed' | 'done' | 'ready'
-type SettlementOverride = { state: 'active' | 'settled'; activityAt: string }
-type SettlementOverrides = Record<string, SettlementOverride>
+type RowStatus = 'approval' | 'input' | 'working' | 'failed' | 'stopped' | 'done' | 'ready'
 type SidebarItem = {
     session: AssistantSession
     thread: AssistantThread | null
@@ -40,6 +43,7 @@ type SidebarItem = {
     activityAt: string
     status: RowStatus
     active: boolean
+    pinned: boolean
     settled: boolean
     tuiOpen: boolean
     mobileDevices: string[]
@@ -47,6 +51,7 @@ type SidebarItem = {
 
 type Props = {
     sessions: AssistantSession[]
+    pinnedSessionIds?: ReadonlySet<string>
     activeSessionId: string | null
     activeThreadId: string | null
     commandPending: boolean
@@ -66,7 +71,8 @@ function readSettlementOverrides(): SettlementOverrides {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
         return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, SettlementOverride] => {
             const override = entry[1] as Partial<SettlementOverride> | null
-            return Boolean(override && (override.state === 'active' || override.state === 'settled') && typeof override.activityAt === 'string')
+            return Boolean(override && (override.state === 'active' || override.state === 'settled') && typeof override.activityAt === 'string'
+                && (override.activityKey === undefined || typeof override.activityKey === 'string'))
         }))
     } catch {
         return {}
@@ -92,13 +98,15 @@ function resolveRowStatus(thread: AssistantThread | null, isSelectedThread: bool
         case 'Failed':
         case 'Stale': return 'failed'
         case 'Done': return 'done'
+        case 'Stopped': return 'stopped'
         default: return 'ready'
     }
 }
 
 function isEffectivelySettled(item: Omit<SidebarItem, 'settled'>, overrides: SettlementOverrides): boolean {
+    if (item.pinned) return false
     const override = overrides[item.session.id]
-    if (override?.activityAt === item.activityAt) return override.state === 'settled'
+    if (override && isSidebarSettlementCurrent(item.session, override)) return override.state === 'settled'
     if (item.status !== 'ready') return false
     const activity = getSortableTimestamp(item.activityAt)
     return activity > 0 && Date.now() - activity >= AUTO_SETTLE_AFTER_MS
@@ -150,6 +158,7 @@ function topStatus(item: SidebarItem): ReactNode {
     if (item.status === 'approval') return <span className="font-medium text-amber-300">Approval</span>
     if (item.status === 'input') return <span className="font-medium text-indigo-300">Input</span>
     if (item.status === 'failed') return <span className="font-medium text-red-300">Failed</span>
+    if (item.status === 'stopped') return <span className="font-medium text-sparkle-text-muted">Stopped</span>
     if (item.status === 'done') return <span className="inline-flex items-center gap-1 font-medium text-emerald-300"><CheckCircle2 size={16} /><span>Done</span></span>
     return formatAssistantSidebarRelativeTime(item.activityAt)
 }
@@ -159,7 +168,8 @@ function getAgentInboxMenuItems(item: SidebarItem, onToggleSettlement: (item: Si
     return [
         {
             id: settle ? 'settle' : 'unsettle',
-            label: settle ? 'Settle chat' : 'Un-settle chat',
+            label: item.pinned ? 'Unpin chat to settle' : settle ? 'Settle chat' : 'Un-settle chat',
+            disabled: item.pinned,
             icon: settle ? <Check size={13} /> : <Undo2 size={13} />,
             onSelect: () => onToggleSettlement(item)
         },
@@ -167,29 +177,35 @@ function getAgentInboxMenuItems(item: SidebarItem, onToggleSettlement: (item: Si
     ]
 }
 
-function InboxRowActions({ item, action, onAction, props, showLabel = false }: {
+function InboxRowActions({ item, action, onAction, props, showLabel = false, inFlow = false }: {
     item: SidebarItem
     action: 'settle' | 'unsettle'
     onAction: (item: SidebarItem) => void
     props: Props
     showLabel?: boolean
+    inFlow?: boolean
 }) {
     const menuItems = getAgentInboxMenuItems(item, onAction, props)
     return (
         <div className={cn(
-            'pointer-events-none absolute right-0 top-1/2 z-[1] translate-x-1 -translate-y-1/2 opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:pointer-events-auto group-focus-within/agent-inbox-row:pointer-events-auto group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:pointer-events-auto group-hover/agent-inbox-row:translate-x-0 group-focus-within/agent-inbox-row:translate-x-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-0 group-hover/agent-inbox-row:opacity-100 group-focus-within/agent-inbox-row:opacity-100 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-100 focus-within:pointer-events-auto focus-within:translate-x-0 focus-within:opacity-100 motion-reduce:transition-none',
-            showLabel ? 'w-[4.75rem]' : 'w-[3.25rem]'
+            'pointer-events-none z-[1] translate-x-1 opacity-0 duration-150 ease-out group-hover/agent-inbox-row:pointer-events-auto group-focus-visible/agent-inbox-row:pointer-events-auto group-has-[:focus-visible]/agent-inbox-row:pointer-events-auto group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:pointer-events-auto group-hover/agent-inbox-row:translate-x-0 group-focus-visible/agent-inbox-row:translate-x-0 group-has-[:focus-visible]/agent-inbox-row:translate-x-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-0 group-hover/agent-inbox-row:opacity-100 group-focus-visible/agent-inbox-row:opacity-100 group-has-[:focus-visible]/agent-inbox-row:opacity-100 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:translate-x-0 has-[:focus-visible]:opacity-100 motion-reduce:transition-none',
+            inFlow
+                ? 'relative grid min-w-0 shrink-0 grid-cols-[0fr] overflow-hidden transition-[grid-template-columns,margin-left,opacity,transform] group-hover/agent-inbox-row:ml-1.5 group-focus-visible/agent-inbox-row:ml-1.5 group-has-[:focus-visible]/agent-inbox-row:ml-1.5 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:ml-1.5 group-hover/agent-inbox-row:grid-cols-[1fr] group-focus-visible/agent-inbox-row:grid-cols-[1fr] group-has-[:focus-visible]/agent-inbox-row:grid-cols-[1fr] group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:grid-cols-[1fr]'
+                : 'absolute right-0 top-1/2 -translate-y-1/2 transition-[opacity,transform]',
+            !inFlow && (showLabel ? 'w-[4.75rem]' : 'w-[3.25rem]')
         )}>
-            <div className="relative flex items-center justify-end gap-0.5">
+            <div className="relative flex min-w-0 items-center gap-0.5 overflow-hidden">
                 <button
                     type="button"
-                    aria-label={action === 'settle' ? 'Settle chat' : 'Un-settle chat'}
+                    aria-label={item.pinned ? 'Unpin chat to settle' : action === 'settle' ? 'Settle chat' : 'Un-settle chat'}
+                    title={item.pinned ? 'Unpin chat to settle' : undefined}
+                    disabled={item.pinned}
                     onClick={(event) => {
                         event.preventDefault()
                         event.stopPropagation()
                         onAction(item)
                     }}
-                    className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                    className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-sparkle-text-muted transition-colors enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-sparkle-text disabled:cursor-default disabled:opacity-35"
                 >
                     {action === 'settle' ? <Check size={12} /> : <Undo2 size={12} />}
                     {showLabel ? <span>{action === 'settle' ? 'Settle' : 'Un-settle'}</span> : null}
@@ -199,6 +215,7 @@ function InboxRowActions({ item, action, onAction, props, showLabel = false }: {
                     title={`${getSessionDisplayTitle(item.session)} actions`}
                     triggerIcon={<MoreHorizontal size={14} />}
                     presentation="portal"
+                    rootClassName="flex shrink-0 items-center"
                     density="compact"
                     buttonClassName="h-6 w-6 rounded-md text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                     openButtonClassName="rounded-md bg-[var(--surface-hover)] text-sparkle-text opacity-100"
@@ -210,34 +227,36 @@ function InboxRowActions({ item, action, onAction, props, showLabel = false }: {
 
 function AgentInboxCard({ item, onSettle, props }: { item: SidebarItem; onSettle: (item: SidebarItem) => void; props: Props }) {
     const title = getSessionDisplayTitle(item.session)
+    const model = resolveAssistantInboxModelPresentation(item.thread?.model)
     const receded = (item.status === 'ready' || item.status === 'working' || item.status === 'approval' || item.status === 'input') && !item.active
     const activate = () => void props.onSelectSession(item.session.id)
     const menuItems = getAgentInboxMenuItems(item, onSettle, props)
     return (
-        <li data-agent-inbox-layout-id={item.session.id} className="list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]">
-            <div role="button" tabIndex={0} onClick={activate} onDoubleClick={() => void props.onRename(item.session)} onContextMenu={(event) => props.onOpenContextMenu(event, item.session, menuItems)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate() } }} className={cn('group/agent-inbox-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none', item.active ? 'bg-[var(--surface-active)] text-sparkle-text' : receded ? 'text-sparkle-text-muted/75 hover:bg-[var(--surface-hover)] hover:text-sparkle-text' : 'bg-transparent text-sparkle-text hover:bg-[var(--surface-hover)]', (item.status === 'working' || item.status === 'approval' || item.status === 'input') && !item.active && 'opacity-70 transition-opacity hover:opacity-100')} title={[title, item.projectPath, item.thread?.model, item.thread?.lastError].filter(Boolean).join('\n')}>
+        <li data-agent-inbox-layout-id={item.session.id} className="list-none py-0.5">
+            <div role="button" aria-current={item.active ? 'page' : undefined} tabIndex={0} onClick={activate} onDoubleClick={() => void props.onRename(item.session)} onContextMenu={(event) => props.onOpenContextMenu(event, item.session, menuItems)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate() } }} className={cn('group/agent-inbox-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none', item.active ? 'bg-[var(--surface-active)] text-sparkle-text' : receded ? 'text-sparkle-text-muted/75 hover:bg-[var(--surface-hover)] hover:text-sparkle-text' : 'bg-transparent text-sparkle-text hover:bg-[var(--surface-hover)]', (item.status === 'working' || item.status === 'approval' || item.status === 'input') && !item.active && 'opacity-70 transition-opacity hover:opacity-100')} title={[title, item.projectPath, model.modelName, item.thread?.lastError].filter(Boolean).join('\n')}>
                 <div className="relative z-10 h-[4.875rem] px-2.5 py-2">
                     <div className="flex h-5 min-w-0 items-center gap-1.5">
                         <ProjectMark group={item.project} />
                         <span className={cn('min-w-0 flex-1 truncate text-xs text-sparkle-text-secondary/85', receded ? 'font-normal' : 'font-medium')}>{item.project.label}</span>
-                        <div className="relative ml-auto flex h-6 min-w-[5.75rem] shrink-0 items-center justify-end gap-1 pl-1 text-xs">
-                            <span className="shrink-0 transition-opacity duration-150 ease-out group-hover/agent-inbox-row:opacity-0 group-focus-within/agent-inbox-row:opacity-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-0 motion-reduce:transition-none">
+                        <div className="relative ml-auto flex h-6 min-w-0 shrink-0 items-center justify-end gap-1 pl-1 text-xs">
+                            <span className="shrink-0">
                                 <span className="whitespace-nowrap tabular-nums text-sparkle-text-muted/65">{topStatus(item)}</span>
                             </span>
-                            <InboxRowActions item={item} action="settle" onAction={onSettle} props={props} showLabel />
+                            <InboxRowActions item={item} action="settle" onAction={onSettle} props={props} inFlow />
                         </div>
                     </div>
-                    <div className={cn('mt-1 flex min-w-0', item.tuiOpen && item.mobileDevices.length > 0 ? 'pr-12' : (item.tuiOpen || item.mobileDevices.length > 0) && 'pr-6')}>
+                    <div className="mt-1 flex min-w-0">
                         <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm', receded ? 'font-normal text-sparkle-text-secondary/80' : 'font-medium text-sparkle-text')} />
                     </div>
-                    {item.tuiOpen || item.mobileDevices.length > 0 ? (
-                        <span className="absolute bottom-1.5 right-2 inline-flex">
+                    <div className="mt-0.5 flex h-4 min-w-0 items-center gap-1.5 text-xs text-sparkle-text-muted/75">
+                        {model.provider ? <span role="img" aria-label={`${model.provider} model provider`} className="inline-flex shrink-0"><SettingsProviderIcon provider={model.provider === 'anthropic' ? 'claude' : model.provider === 'google' ? 'gemini' : model.provider} size={13} /></span> : null}
+                        <span className="min-w-0 flex-1 truncate whitespace-nowrap">{model.modelName || 'Assistant'}</span>
+                        {item.pinned ? <span aria-label="Pinned chat" title="Pinned chat" className="inline-flex shrink-0"><Pin size={12} /></span> : null}
+                        {item.thread?.source === 'subagent' || item.tuiOpen || item.mobileDevices.length > 0 ? <span className="inline-flex shrink-0 items-center" data-assistant-presence-group>
+                            <AssistantAgentPresenceIndicator thread={item.thread} />
                             {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
                             {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
-                        </span>
-                    ) : null}
-                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-sparkle-text-muted/75">
-                        <span className="min-w-0 flex-1 truncate whitespace-nowrap">{item.thread?.model || 'Assistant'}</span>
+                        </span> : null}
                     </div>
                 </div>
             </div>
@@ -250,21 +269,25 @@ function AgentInboxSlimRow({ item, action, onAction, props }: { item: SidebarIte
     const activate = () => void props.onSelectSession(item.session.id)
     const menuItems = getAgentInboxMenuItems(item, onAction, props)
     return (
-        <li data-agent-inbox-layout-id={item.session.id} className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]">
-            <div role="button" tabIndex={0} onClick={activate} onDoubleClick={() => void props.onRename(item.session)} onContextMenu={(event) => props.onOpenContextMenu(event, item.session, menuItems)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate() } }} className={cn('group/agent-inbox-row relative flex h-9 w-full cursor-pointer items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left outline-none select-none', item.active ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-muted/70 hover:bg-[var(--surface-hover)] hover:text-sparkle-text')} title={title}>
+        <li data-agent-inbox-layout-id={item.session.id} className="list-none">
+            <div role="button" aria-current={item.active ? 'page' : undefined} tabIndex={0} onClick={activate} onDoubleClick={() => void props.onRename(item.session)} onContextMenu={(event) => props.onOpenContextMenu(event, item.session, menuItems)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate() } }} className={cn('group/agent-inbox-row relative flex h-9 w-full cursor-pointer items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left outline-none select-none', item.active ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-muted/70 hover:bg-[var(--surface-hover)] hover:text-sparkle-text')} title={title}>
                 <ProjectMark group={item.project} dimmed={!item.active} />
                 <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm group-hover/agent-inbox-row:text-sparkle-text', item.active ? 'text-sparkle-text' : 'text-sparkle-text-muted/70')} />
-                <div className="relative ml-auto flex h-6 min-w-[4.5rem] shrink-0 items-center justify-end gap-1.5">
-                    {item.tuiOpen || item.mobileDevices.length > 0 ? (
-                        <span className="inline-flex shrink-0 transition-transform duration-150 ease-out group-hover/agent-inbox-row:-translate-x-6 group-focus-within/agent-inbox-row:-translate-x-6 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:-translate-x-6 motion-reduce:transition-none">
+                <div className="relative ml-auto flex h-6 min-w-0 shrink-0 items-center justify-end">
+                    {item.status !== 'ready' ? <span className="mr-1 inline-flex shrink-0 text-sparkle-text-muted" title={item.status === 'done' ? 'New response' : item.status}>
+                        {item.status === 'working' ? <CircleDashed size={13} /> : item.status === 'done' ? <CheckCircle2 size={13} /> : <span className="text-[10px]">{item.status}</span>}
+                    </span> : null}
+                    {item.thread?.source === 'subagent' || item.tuiOpen || item.mobileDevices.length > 0 ? (
+                        <span className="mr-1.5 inline-flex shrink-0 items-center" data-assistant-presence-group>
+                            <AssistantAgentPresenceIndicator thread={item.thread} />
                             {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
                             {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
                         </span>
                     ) : null}
-                    <span className="shrink-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:translate-x-1 group-focus-within/agent-inbox-row:translate-x-1 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-1 group-hover/agent-inbox-row:opacity-0 group-focus-within/agent-inbox-row:opacity-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-0 motion-reduce:transition-none">
+                    <span className="max-w-20 shrink-0 overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:max-w-0 group-focus-visible/agent-inbox-row:max-w-0 group-has-[:focus-visible]/agent-inbox-row:max-w-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:max-w-0 group-hover/agent-inbox-row:translate-x-1 group-focus-visible/agent-inbox-row:translate-x-1 group-has-[:focus-visible]/agent-inbox-row:translate-x-1 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-1 group-hover/agent-inbox-row:opacity-0 group-focus-visible/agent-inbox-row:opacity-0 group-has-[:focus-visible]/agent-inbox-row:opacity-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-0 motion-reduce:transition-none">
                         <span className="whitespace-nowrap text-xs tabular-nums text-sparkle-text-muted/55">{formatAssistantSidebarRelativeTime(item.activityAt)}</span>
                     </span>
-                    <InboxRowActions item={item} action={action} onAction={onAction} props={props} />
+                    <InboxRowActions item={item} action={action} onAction={onAction} props={props} inFlow />
                 </div>
             </div>
         </li>
@@ -289,6 +312,13 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
     const layoutAnimationsRef = useRef(new Map<string, Animation>())
 
     const visibleSessions = useMemo(() => props.sessions.filter((session) => !session.archived && !isAssistantDraftSession(session)), [props.sessions])
+    useEffect(() => {
+        setSettlementOverrides(current => {
+            const next = upgradeSidebarSettlementOverrides(current, visibleSessions)
+            if (next !== current) writeSettlementOverrides(next)
+            return next
+        })
+    }, [visibleSessions])
     const projectGroups = useMemo(() => groupSessionsByProject(visibleSessions, props.projectIconOverrides), [props.projectIconOverrides, visibleSessions])
     const projectQuery = projectSearch.trim().toLocaleLowerCase()
     const filteredProjectGroups = projectGroups.filter((group) => !projectQuery || [group.label, group.path].join(' ')
@@ -323,6 +353,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 session,
                 thread,
                 active,
+                pinned: props.pinnedSessionIds?.has(session.id) === true,
                 activityAt,
                 tuiOpen: isAssistantSessionOpenInTui(session),
                 mobileDevices: assistantSessionMobileDevices(session),
@@ -334,22 +365,26 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 : resolveRowStatus(thread, active && thread?.id === props.activeThreadId)
             const unsettled = { ...base, status }
             return { ...unsettled, settled: isEffectivelySettled(unsettled, settlementOverrides) }
-        }), [props.activeSessionId, props.activeThreadId, props.pendingControlThreadIds, projectByPath, scope, settlementOverrides, visibleSessions])
+        }), [props.activeSessionId, props.activeThreadId, props.pendingControlThreadIds, props.pinnedSessionIds, projectByPath, scope, settlementOverrides, visibleSessions])
 
-    const activeWorkItems = useMemo(() => items
-        .filter((item) => !item.settled && item.status !== 'ready')
-        .sort((left, right) => getSortableTimestamp(right.session.createdAt) - getSortableTimestamp(left.session.createdAt) || left.session.id.localeCompare(right.session.id)), [items])
-    const recentItems = useMemo(() => items
-        .filter((item) => !item.settled && item.status === 'ready')
+    const desiredPriority = useMemo(() => items
+        .filter((item) => !item.settled && (item.pinned || item.status !== 'ready'))
+        .sort((left, right) => Number(right.pinned) - Number(left.pinned) || getSortableTimestamp(right.session.createdAt) - getSortableTimestamp(left.session.createdAt) || left.session.id.localeCompare(right.session.id)), [items])
+    const desiredRecent = useMemo(() => items
+        .filter((item) => !item.pinned && !item.settled && item.status === 'ready')
         .sort((left, right) => getSortableTimestamp(right.activityAt) - getSortableTimestamp(left.activityAt) || left.session.id.localeCompare(right.session.id)), [items])
     const settledItems = useMemo(() => items.filter((item) => item.settled).sort((left, right) => getSortableTimestamp(right.activityAt) - getSortableTimestamp(left.activityAt) || left.session.id.localeCompare(right.session.id)), [items])
     const settledVisibleCount = settledInitialCount + settledAdditionalCount
     const visibleSettled = settledItems.slice(0, settledVisibleCount)
-    const renderedSettled = settledExpanded ? visibleSettled : visibleSettled.filter((item) => item.active)
+    const desiredSettled = settledExpanded ? visibleSettled : visibleSettled.filter((item) => item.active)
+    const stableLayout = useStableSidebarGroups([desiredPriority, desiredRecent, desiredSettled])
+    const [priorityItems, recentItems, renderedSettled] = stableLayout.groups
+    // An explicit pin/unpin must move immediately, even while hover holds status-driven moves.
+    useLayoutEffect(() => stableLayout.release(), [props.pinnedSessionIds, stableLayout.release])
     const hiddenSettledCount = settledItems.length - visibleSettled.length
     const scopedProject = scope === ALL_PROJECTS ? null : projectByPath.get(scope) || null
     const layoutKey = [
-        activeWorkItems.map((item) => `${item.session.id}:card:${item.status}`).join(','),
+        priorityItems.map((item) => `${item.session.id}:card:${item.status}`).join(','),
         recentItems.map((item) => `${item.session.id}:recent`).join(','),
         renderedSettled.map((item) => `${item.session.id}:settled`).join(','),
         settledExpanded ? 'settled-open' : 'settled-closed'
@@ -404,13 +439,11 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 const enteringAnimation = row.animate([
                     {
                         transform: 'translate3d(0, 6px, 0)',
-                        opacity: 0,
-                        clipPath: 'inset(0 0 10px 0 round 6px)'
+                        opacity: 0.85
                     },
                     {
                         transform: 'translate3d(0, 0, 0)',
-                        opacity: 1,
-                        clipPath: 'inset(0 0 0 0 round 6px)'
+                        opacity: 1
                     }
                 ], {
                     duration: 240,
@@ -433,13 +466,11 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
             const animation = row.animate([
                 {
                     transform: `translate3d(0, ${deltaY}px, 0)`,
-                    opacity: revealHeight > 0.5 ? 0.78 : 0.9,
-                    clipPath: `inset(0 0 ${revealHeight}px 0 round 6px)`
+                    opacity: 0.9
                 },
                 {
                     transform: 'translate3d(0, 0, 0)',
-                    opacity: 1,
-                    clipPath: 'inset(0 0 0 0 round 6px)'
+                    opacity: 1
                 }
             ], {
                 duration: 280,
@@ -462,11 +493,15 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
         layoutAnimationsRef.current.clear()
     }, [])
 
-    const setSettlement = (item: SidebarItem, state: SettlementOverride['state']) => setSettlementOverrides((current) => {
-        const next = { ...current, [item.session.id]: { state, activityAt: item.activityAt } }
-        writeSettlementOverrides(next)
-        return next
-    })
+    const setSettlement = (item: SidebarItem, state: SettlementOverride['state']) => {
+        if (item.pinned) return
+        stableLayout.release()
+        setSettlementOverrides((current) => {
+            const next = { ...current, [item.session.id]: { state, activityAt: item.activityAt, activityKey: getSidebarSettlementActivityKey(item.session) } }
+            writeSettlementOverrides(next)
+            return next
+        })
+    }
 
     return (
         <>
@@ -506,17 +541,19 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 </div>
             ) : null}
             </div>
-            <div ref={scrollRef} className="assistant-chat-scrollbar assistant-sidebar-scrollbar min-h-0 flex-1 overflow-y-scroll overflow-x-hidden pr-0.5">
+            <div ref={scrollRef} onPointerEnter={stableLayout.hold} onPointerLeave={stableLayout.release}
+                onFocusCapture={stableLayout.hold} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) stableLayout.release() }}
+                className="assistant-chat-scrollbar assistant-sidebar-scrollbar min-h-0 flex-1 overflow-y-scroll overflow-x-hidden pr-0.5">
                 <ul ref={listRef} role="list" className="flex flex-col gap-px">
-                    {activeWorkItems.length > 0 ? (
+                    {priorityItems.length > 0 ? (
                         <li className="list-none">
                             <div className="mb-1 flex w-full items-center gap-2 px-2.5 text-left">
-                                <span className="text-xs font-medium text-sparkle-text-muted/50">Active work</span>
+                                <span className="text-xs font-medium text-sparkle-text-muted/50">Priority</span>
                                 <span className="h-px flex-1 bg-[var(--surface-divider)]/60" />
                             </div>
                         </li>
                     ) : null}
-                    {activeWorkItems.map((item) => <AgentInboxCard key={`${item.session.id}:card`} item={item} onSettle={(target) => setSettlement(target, 'settled')} props={props} />)}
+                    {priorityItems.map((item) => <AgentInboxCard key={`${item.session.id}:card`} item={item} onSettle={(target) => setSettlement(target, 'settled')} props={props} />)}
                     {recentItems.length > 0 ? (
                         <li className="list-none">
                             <div className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5 text-left">

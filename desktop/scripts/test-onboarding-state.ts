@@ -164,6 +164,42 @@ async function verifyOpenAiConnectionContract() {
     assert.equal((await chatAuth.getStatus()).verified, true)
     assert.equal(chatStatusCalls, callsAfterConnect, 'a just-verified connection must make the Continue checkpoint instant')
 
+    let resolveLoginStarted!: () => void
+    const loginStarted = new Promise<void>(resolve => { resolveLoginStarted = resolve })
+    let cancelledLoginWrites = 0
+    let cancelledLoginCalls = 0
+    const cancellableAuth = new OpenAIConnectionService({
+        now,
+        openExternal: () => undefined,
+        loadAccount: async () => ({
+            buildChatGptAccountStatus: async () => ({ provider: 'openai-codex', status: { configured: cancelledLoginWrites > 0 }, usage: cancelledLoginWrites > 0 ? {} : undefined })
+        }),
+        loadSdk: async () => ({
+            loginZyraAuth: async (_provider: string, options: Record<string, unknown>) => {
+                cancelledLoginCalls += 1
+                if (cancelledLoginCalls === 1) {
+                    const signal = options.signal as AbortSignal
+                    resolveLoginStarted()
+                    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+                }
+                cancelledLoginWrites += 1
+            },
+            configureZyraOpenAIApiKey: async () => ({ model: 'openai/gpt-5.6-luna' }),
+            verifyZyraOpenAIApiAuth: async () => ({ model: 'openai/gpt-5.6-luna' }),
+            getZyraAuthStatus: async () => ({ provider: 'openai-codex', status: { configured: cancelledLoginWrites > 0 } }),
+            removeZyraAuth: async () => undefined
+        })
+    })
+    const cancelledAttempt = cancellableAuth.connectChatGpt('device-code')
+    const rejectedAttempt = assert.rejects(cancelledAttempt, (failure: unknown) => Boolean(failure && typeof failure === 'object' && 'code' in failure && failure.code === 'ZYRA_OAUTH_CANCELLED'))
+    await loginStarted
+    assert.equal(await cancellableAuth.cancelChatGpt(), true)
+    await rejectedAttempt
+    assert.equal(cancelledLoginWrites, 0)
+    assert.equal(cancellableAuth.getChatGptDeviceCode(), null)
+    assert.equal((await cancellableAuth.connectChatGpt()).verified, true, 'a new sign-in can start after cancellation')
+    assert.equal(cancelledLoginWrites, 1)
+
     const usageFallback = new OpenAIConnectionService({
         now,
         openExternal: () => undefined,

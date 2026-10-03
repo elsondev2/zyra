@@ -26,15 +26,9 @@ export function CommandPaletteProvider({ children }: ProviderProps) {
     const close = useCallback(() => setIsOpen(false), [])
     const toggle = useCallback(() => setIsOpen(v => !v), [])
 
-    // Global keyboard shortcut: Ctrl/Cmd + K
+    // App commands are dispatched once by AppMenuCommandHost.
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            const isCmdOrCtrl = e.metaKey || e.ctrlKey
-            if (isCmdOrCtrl && e.key.toLowerCase() === 'k') {
-                // avoid triggering inside inputs when modifiers present deliberately allow (common apps allow)
-                e.preventDefault()
-                toggle()
-            }
             if (e.key === 'Escape' && !e.defaultPrevented) {
                 close()
             }

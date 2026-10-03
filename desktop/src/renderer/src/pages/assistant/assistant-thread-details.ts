@@ -191,7 +191,8 @@ export function summarizeAssistantThreadUsage(
         ? usageNumber(latestUsage.sessionCostUsd)
         : 0
     const costUsd = reportedCost > 0 ? reportedCost : persistedSessionCost > 0 ? persistedSessionCost : null
-    const costSource = costUsd != null ? 'recorded' as const : 'unavailable' as const
+    const costSource = costUsd == null ? 'unavailable' as const
+        : exactTotals?.costSource === 'api-equivalent' || latestUsage?.costSource === 'api-equivalent' ? 'estimated' as const : 'recorded' as const
 
     return {
         turnCount: threadTurns.length,

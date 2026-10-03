@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { AssistantVoiceTranscriptionState } from '@shared/assistant/contracts'
 import { useSettings } from '@/lib/settings'
-import { SettingsProviderIcon } from './SettingsProviderIcon'
 import { SettingsButton, SettingsRow, SettingsSection, SettingsSegmented, SettingsSwitch } from './settings-layout'
 
 export function VoiceTranscriptionSettings() {
@@ -27,7 +26,7 @@ export function VoiceTranscriptionSettings() {
         }
     }, [])
     useEffect(() => {
-        if (settings.assistantTranscriptionEnabled && settings.assistantTranscriptionEngine === 'codex') void loadTranscriptionState()
+        if (settings.assistantTranscriptionEnabled) void loadTranscriptionState()
         else setTranscriptionStateLoading(false)
         return () => { requestRef.current += 1 }
     }, [loadTranscriptionState, settings.assistantTranscriptionEnabled, settings.assistantTranscriptionEngine])
@@ -47,16 +46,15 @@ export function VoiceTranscriptionSettings() {
         {settings.assistantTranscriptionEngine === 'codex' ? (<SettingsRow
             title="ChatGPT transcription"
             description="Transcribe voice notes with your connected ChatGPT account."
-            icon={<SettingsProviderIcon provider="chatgpt" />}
             status={chatGptVoiceStatus.label}
             statusTone={chatGptVoiceStatus.tone}
             statusTitle={chatGptVoiceStatus.title}
-            control={<SettingsButton variant="ghost" onClick={() => void loadTranscriptionState()} disabled={!settings.assistantTranscriptionEnabled || settings.assistantTranscriptionEngine !== 'codex' || transcriptionStateLoading}><RefreshCw size={12} className={transcriptionStateLoading ? 'animate-spin motion-reduce:animate-none' : ''} />Refresh status</SettingsButton>}
+            control={<SettingsButton variant="ghost" className="!size-7 !px-0" aria-label="Refresh ChatGPT transcription status" title="Refresh status" onClick={() => void loadTranscriptionState()} disabled={!settings.assistantTranscriptionEnabled || settings.assistantTranscriptionEngine !== 'codex' || transcriptionStateLoading}><RefreshCw size={12} className={transcriptionStateLoading ? 'animate-spin motion-reduce:animate-none' : ''} /></SettingsButton>}
         />) : (<SettingsRow
             title="Browser dictation"
-            description="Use live speech recognition when your browser supports it."
-            status={browserSpeechAvailable ? 'Available' : 'Unavailable'}
-            statusTone={browserSpeechAvailable ? 'ready' : 'warning'}
+            description="Use live speech recognition when available. If it fails, the recording is transcribed with your connected ChatGPT account."
+            status={browserSpeechAvailable ? 'Available' : transcriptionState?.status === 'ready' ? 'ChatGPT fallback' : 'Unavailable'}
+            statusTone={browserSpeechAvailable || transcriptionState?.status === 'ready' ? 'ready' : 'warning'}
         />)}
         </>) : null}
     </SettingsSection>

@@ -60,6 +60,7 @@ export type AssistantComposerHandlersArgs = {
     setActiveBranchIndex: SetNumberState
     onSwitchBranch: (branchName: string) => Promise<void>
     selectedModel: string
+    selectedModelInputModes?: string[]
     setSelectedModel: SetStringState
     selectedRuntimeMode: AssistantRuntimeMode
     setSelectedRuntimeMode: Dispatch<SetStateAction<AssistantRuntimeMode>>

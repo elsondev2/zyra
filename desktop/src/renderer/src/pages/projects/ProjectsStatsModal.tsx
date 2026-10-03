@@ -97,7 +97,7 @@ export function ProjectsStatsModal({
                                     <div key={project.path} className="rounded-xl border border-sparkle-border p-3 bg-sparkle-bg/40 hover:bg-sparkle-bg/60 transition-colors">
                                         <div className="mb-2 flex items-start gap-2.5">
                                             <div className="rounded-lg border border-white/10 bg-sparkle-card p-2 shadow-inner shrink-0">
-                                                <ProjectIcon projectType={project.type} framework={project.frameworks?.[0]} size={18} />
+                                                <ProjectIcon projectType={project.type} framework={project.frameworks?.[0]} size={18} mode="technology" />
                                             </div>
                                             <div className="min-w-0 flex-1">
                                                 <button
@@ -159,7 +159,7 @@ export function ProjectsStatsModal({
                                 <div key={framework.name} className="rounded-lg border border-sparkle-border bg-sparkle-bg/40 px-3 py-2.5">
                                     <div className="flex items-center gap-2 min-w-0">
                                         <div className="rounded-md border border-white/10 bg-sparkle-card p-1.5 shrink-0">
-                                            <ProjectIcon framework={framework.name} projectType="default" size={14} />
+                                            <ProjectIcon framework={framework.name} projectType="default" size={14} mode="technology" />
                                         </div>
                                         <div className="min-w-0">
                                             <div className="text-sm text-sparkle-text font-medium truncate">{framework.name}</div>
@@ -177,7 +177,7 @@ export function ProjectsStatsModal({
                                 <div key={type.name} className="rounded-lg border border-sparkle-border bg-sparkle-bg/40 px-3 py-2.5">
                                     <div className="flex items-center gap-2 min-w-0">
                                         <div className="rounded-md border border-white/10 bg-sparkle-card p-1.5 shrink-0">
-                                            <ProjectIcon projectType={type.name} size={14} />
+                                            <ProjectIcon projectType={type.name} size={14} mode="technology" />
                                         </div>
                                         <div className="min-w-0">
                                             <div className="text-sm text-sparkle-text font-medium truncate">

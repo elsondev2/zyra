@@ -4,6 +4,7 @@ export const BROWSER_VIEW_IPC = {
     close: 'devscope:browserView:close',
     release: 'devscope:browserView:release',
     reportSlot: 'devscope:browserView:reportSlot',
+    refreshTheme: 'devscope:browserView:refreshTheme',
     event: 'devscope:browserView:event'
 } as const
 
@@ -108,5 +109,6 @@ export type BrowserViewApi = {
     close(tabId: string): Promise<BrowserViewResult<{ closed: boolean }>>
     release(tabId: string): void
     reportSlot(input: BrowserViewSlotInput): void
+    refreshTheme(): void
     onEvent(callback: (event: BrowserViewEvent) => void): () => void
 }

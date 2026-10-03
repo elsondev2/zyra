@@ -16,7 +16,7 @@ export function writeMemoryJobStatus(file, status) {
 export class ServerMemoryQueue {
   constructor({ run, onStatus = () => {}, history = {}, idleMs = 60_000, cooldownMs = 900_000, retryMs = [30_000, 120_000], now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
     Object.assign(this, { run, onStatus, idleMs, cooldownMs, retryMs, now, setTimer, clearTimer });
-    this.pending = new Map(); this.busy = new Set(); this.cooldowns = new Map(); this.removed = new WeakSet();
+    this.pending = new Map(); this.busy = new Set(); this.cooldowns = new Map(); this.removed = new WeakSet(); this.ineligible = new WeakSet();
     this.active = null; this.timer = null; this.disposed = false;
     this.lastSuccessAt = history.lastSuccessAt || null; this.lastCheckedAt = history.lastCheckedAt || null; this.lastError = history.lastError || null;
     this.notify();
@@ -27,12 +27,17 @@ export class ServerMemoryQueue {
   notify() { this.onStatus(this.snapshot()); }
   observe(session, busy, eligible = true) {
     if (this.disposed || this.removed.has(session)) return;
+    if (eligible) this.ineligible.delete(session);
+    else this.ineligible.add(session);
     if (busy) {
       this.busy.add(session); this.pending.delete(session);
       this.active?.controller.abort();
     } else {
       this.busy.delete(session);
-      if (eligible && this.active?.session !== session && !this.pending.has(session)) {
+      if (!eligible) {
+        this.pending.delete(session);
+        if (this.active?.session === session) this.active.controller.abort();
+      } else if (this.active?.session !== session && !this.pending.has(session)) {
         this.pending.set(session, { due: Math.max(this.now() + this.idleMs, this.cooldowns.get(session) || 0), attempt: 0 });
       }
     }
@@ -68,7 +73,7 @@ export class ServerMemoryQueue {
       if (!controller.signal.aborted) this.lastError = "Memory could not update. Check the connected model and try again after chatting.";
       if (!this.disposed && !this.removed.has(session)) {
         if (controller.signal.aborted) {
-          if (!this.busy.has(session)) this.pending.set(session, { due: this.now() + this.idleMs, attempt: entry.attempt });
+          if (!this.busy.has(session) && !this.ineligible.has(session)) this.pending.set(session, { due: this.now() + this.idleMs, attempt: entry.attempt });
         } else if (entry.attempt < this.retryMs.length) {
           this.pending.set(session, { due: this.now() + this.retryMs[entry.attempt], attempt: entry.attempt + 1 });
         } else this.cooldowns.set(session, this.now() + this.cooldownMs);

@@ -22,6 +22,7 @@ import {
 import { getAssistantThreadHydrationRevision } from '../src/renderer/src/lib/assistant/assistant-thread-hydration-revision'
 import {
     applyAssistantWarmSelection,
+    hasAssistantWarmSelection,
     prepareAssistantWarmSelection
 } from '../src/renderer/src/lib/assistant/assistant-warm-selection'
 import { AssistantStore } from '../src/renderer/src/lib/assistant/assistant-store-core'
@@ -221,6 +222,23 @@ assert.equal(
 )
 
 const selectionCalls: string[] = []
+const olderRetainedInput = {
+    snapshot: retainedOnlyShell,
+    sessionId: 'b', threadId: retainedOnlyThread.id,
+    hydratedThreadCache: new Map<string, CachedHydratedThreadState>(),
+    historyByThreadId: {
+        [retainedOnlyThread.id]: {
+            threadId: retainedOnlyThread.id, messages: retainedOnlyThread.messages, activities: [], proposedPlans: [],
+            pageInfo: { oldestCursor: 'oldest', newestCursor: 'older-page', hasOlder: true, hasNewer: true, turnCount: 1 },
+            initialLoading: false, loadingOlder: false, loadingNewer: false, loadOlderError: null, loadNewerError: null,
+            fullyLoaded: false, lastUsedAt: Date.now(), shellRevision: getAssistantThreadHydrationRevision(retainedOnlyThread)
+        }
+    }
+}
+assert.equal(hasAssistantWarmSelection(olderRetainedInput), false, 'An older retained page cannot satisfy latest-chat navigation even when its revision matches')
+const olderPreview = prepareAssistantWarmSelection(olderRetainedInput)
+assert.equal(olderPreview.snapshot.sessions.find(entry => entry.id === 'b')!.threads[0]!.messages.length, 0,
+    'Navigation cannot show a previously paged older window as the latest chat')
 const connectionCalls: string[] = []
 const hydrationCalls: Array<{ sessionId: string; threadId: string | null; force: boolean; resetLoadedRange: boolean }> = []
 const originalWindow = (globalThis as { window?: unknown }).window
@@ -543,7 +561,7 @@ try {
     assert.match(canonicalSyncSource, /await this\.connectSessionRuntime/, 'background synchronization still attaches the selected canonical chat')
     assert.match(canonicalSyncSource, /return toAssistantShellSnapshot/, 'background synchronization still converges on the live canonical shell')
     assert.match(serviceSource, /const snapshot = toAssistantShellSnapshot\(this\.state\.snapshot\)[\s\S]{0,180}scheduleSelectedCanonicalSessionSynchronization/, 'the selection handoff carries an immediate authoritative shell and defers live attachment')
-    assert.match(serviceSource, /currentThread\?\.id !== thread\.id\) this\.runtime\.disconnect\(thread\.id\)/, 'a superseded canonical attachment is detached unless the newer intent selected the same thread')
+    assert.match(canonicalSyncSource, /currentThread\?\.id !== thread\.id\) \{[\s\S]{0,200}leaveAssistantThreadForNavigation/, 'a superseded canonical attachment follows the same active-turn navigation policy')
     assert.match(serviceSource, /async getThreadDetailBootstrap[\s\S]{0,500}await this\.ensureCanonicalHistoryLoaded[\s\S]{0,300}readThreadDetail/, 'detail bootstrap refreshes canonical history before reading persisted rows')
     assert.equal(agentInboxSource.includes('props.commandPending && !isThreadBusy'), false, 'Agent Inbox selection pending cannot masquerade as active work')
     assert.equal(agentInboxSource.includes('if (item.active || item.status !== \'ready\') return false'), false, 'opening a settled chat cannot remove it from Settled without new activity')
@@ -694,6 +712,15 @@ try {
     assert.equal(warmOversizedHistory.activities, oversizedRetainedHistory.activities)
     assert.equal(warmOversizedHistory.pageInfo, oversizedRetainedHistory.pageInfo, 'chat switching preserves the complete paging boundary')
     assert.ok(warmOversizedHistory.lastUsedAt > oversizedRetainedHistory.lastUsedAt, 'reopening a retained chat refreshes its cache age')
+    const revisionChangedShell = { ...oversizedShell, sessions: oversizedShell.sessions.map(session => ({ ...session,
+        threads: session.threads.map(thread => ({ ...thread, canonicalHistoryModifiedAt: '2026-10-01T15:00:00.000Z', canonicalHistoryEntryCount: (thread.canonicalHistoryEntryCount || 0) + 1 }))
+    })) }
+    const changedSelection = { snapshot: revisionChangedShell, sessionId: oversizedSession.id, threadId: oversizedThread.id,
+        hydratedThreadCache: new Map(), historyByThreadId: { [oversizedThread.id]: oversizedRetainedHistory } }
+    assert.equal(hasAssistantWarmSelection(changedSelection), false, 'A changed history revision still requires authoritative refresh')
+    const retainedPreview = prepareAssistantWarmSelection(changedSelection)
+    assert.equal(retainedPreview.snapshot.sessions.find(session => session.id === oversizedSession.id)!.threads[0]!.messages,
+        oversizedRetainedHistory.messages, 'A recent loaded timeline remains visible while its changed revision refreshes')
 
     let retainedSwitchState = {
         ...state,

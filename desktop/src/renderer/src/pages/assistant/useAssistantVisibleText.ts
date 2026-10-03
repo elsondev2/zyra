@@ -14,7 +14,6 @@ const CHUNKED_FRAME_INTERVAL_MS = 72
 const STREAM_TARGET_DRAIN_FRAMES = 10
 const CHUNKED_TARGET_DRAIN_FRAMES = 5
 const COMPLETION_TARGET_DRAIN_FRAMES = 5
-const MAX_INITIAL_STREAM_REPLAY_CHARACTERS = 160
 
 export type AssistantVisibleTextPresentation = {
     text: string
@@ -66,11 +65,9 @@ function avoidSplittingSurrogatePair(text: string, end: number): number {
         : end
 }
 
-export function getAssistantInitialVisibleText(text: string, streaming: boolean): string {
-    if (!streaming) return text
-    if (text.length <= MAX_INITIAL_STREAM_REPLAY_CHARACTERS) return ''
-    const end = avoidSplittingSurrogatePair(text, text.length - MAX_INITIAL_STREAM_REPLAY_CHARACTERS)
-    return text.slice(0, end)
+export function getAssistantInitialVisibleText(text: string, _streaming: boolean): string {
+    // Mounting a response is navigation, not a new stream delta.
+    return text
 }
 
 export function revealAssistantStreamText(
@@ -103,9 +100,10 @@ export function revealAssistantStreamText(
 function resolvePresentationTarget(
     authoritativeText: string,
     streamText: string,
-    streamRevision: number
+    streamRevision: number,
+    streaming: boolean
 ): string {
-    if (streamRevision === 0) return authoritativeText
+    if (!streaming || streamRevision === 0) return authoritativeText
     return streamText
 }
 
@@ -130,29 +128,36 @@ export function useAssistantVisibleText({
         () => resolvePresentationTarget(
             text,
             streamSnapshot.text,
-            streamSnapshot.revision
+            streamSnapshot.revision,
+            streaming
         ),
-        [streamSnapshot.revision, streamSnapshot.text, text]
+        [streamSnapshot.revision, streamSnapshot.text, streaming, text]
     )
-    const sourceStreaming = streamSnapshot.revision > 0 ? streamSnapshot.streaming : streaming
-    const shouldReplayInitialStream = streaming && streamSnapshot.revision > 0
-    const initialVisibleText = getAssistantInitialVisibleText(text, shouldReplayInitialStream)
+    const sourceStreaming = streaming && (streamSnapshot.revision === 0 || streamSnapshot.streaming)
+    const initialVisibleText = getAssistantInitialVisibleText(targetText, sourceStreaming)
     const [visibleText, setVisibleText] = useState(initialVisibleText)
     const [selectionPaused, setSelectionPaused] = useState(false)
     const visibleTextRef = useRef(initialVisibleText)
     const lastRevealAtRef = useRef(0)
-    const activeStreamKeyRef = useRef(`${channel}:${streamId}`)
+    const activeStreamKeyRef = useRef({ key: `${channel}:${streamId}`, hasPresentedLiveStream: sourceStreaming })
     const handledResumeRevisionRef = useRef(visibilitySnapshot.resumeRevision)
 
     useLayoutEffect(() => {
         const nextStreamKey = `${channel}:${streamId}`
-        if (activeStreamKeyRef.current === nextStreamKey) return
-        activeStreamKeyRef.current = nextStreamKey
-        const nextVisibleText = getAssistantInitialVisibleText(text, shouldReplayInitialStream)
+        if (activeStreamKeyRef.current.key === nextStreamKey) {
+            if (sourceStreaming) activeStreamKeyRef.current.hasPresentedLiveStream = true
+            if (activeStreamKeyRef.current.hasPresentedLiveStream || visibleTextRef.current === targetText) return
+            // Hydrating a completed response must not animate a saved suffix.
+            visibleTextRef.current = targetText
+            setVisibleText(targetText)
+            return
+        }
+        activeStreamKeyRef.current = { key: nextStreamKey, hasPresentedLiveStream: sourceStreaming }
+        const nextVisibleText = getAssistantInitialVisibleText(targetText, sourceStreaming)
         visibleTextRef.current = nextVisibleText
         lastRevealAtRef.current = 0
         setVisibleText(nextVisibleText)
-    }, [channel, shouldReplayInitialStream, streamId, text])
+    }, [channel, sourceStreaming, streamId, targetText])
 
     useLayoutEffect(() => {
         const shouldSnap = shouldSnapRendererPresentation(
@@ -166,7 +171,8 @@ export function useAssistantVisibleText({
         const latestTargetText = resolvePresentationTarget(
             text,
             latestSnapshot.text,
-            latestSnapshot.revision
+            latestSnapshot.revision,
+            streaming
         )
         lastRevealAtRef.current = 0
         if (visibleTextRef.current === latestTargetText) return
@@ -176,6 +182,7 @@ export function useAssistantVisibleText({
         channel,
         streamId,
         streamSnapshot.revision,
+        streaming,
         text,
         visibilitySnapshot.resumeRevision,
         visibilitySnapshot.visible
@@ -195,11 +202,10 @@ export function useAssistantVisibleText({
         const presentationTargetText = resolvePresentationTarget(
             text,
             latestSnapshot.text,
-            latestSnapshot.revision
+            latestSnapshot.revision,
+            streaming
         )
-        const presentationSourceStreaming = latestSnapshot.revision > 0
-            ? latestSnapshot.streaming
-            : sourceStreaming
+        const presentationSourceStreaming = streaming && (latestSnapshot.revision === 0 || latestSnapshot.streaming)
 
         if (!visibilitySnapshot.visible || shouldAvoidAnimatedStreaming()) {
             if (visibleTextRef.current !== presentationTargetText) {
@@ -257,6 +263,7 @@ export function useAssistantVisibleText({
         selectionPaused,
         sourceStreaming,
         streamId,
+        streaming,
         targetText,
         text,
         visibilitySnapshot.resumeRevision,

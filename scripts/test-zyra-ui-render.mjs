@@ -13,7 +13,7 @@ import { AssistantMessageLifecycle, createZyraUi, mergeAssistantTextDelta } from
 import { ZYRA_RETRY_BASE_DELAY_MS, ZYRA_RETRY_MAX_ATTEMPTS } from "../src/network-recovery.mjs";
 import { applyZyraChatRetryPolicy, getZyraAvailableThinkingLevels, getZyraModelThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 import { applyGpt56ThinkingEffort, GPT_56_THINKING_LEVELS } from "../src/thinking-levels.mjs";
-import { PI_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
+import { TRANSPORT_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
 import { renderStatusLine } from "../src/status-line.mjs";
 import { buildTerminalTheme } from "../src/terminal-theme.mjs";
 import { renderAccountStatusBox, renderCodexUsageBox, renderStatusBox } from "../src/terminal-blocks.mjs";
@@ -176,10 +176,11 @@ function runUiEventCaptureRegression() {
   );
   assert.match(captured, /You asked where the original Zyra project was/);
   const plain = stripAnsi(captured);
-  assert.match(plain, /─{20,}[\s\S]*Yep/, "the final response begins below one clear divider after live work flags");
+  assert.doesNotMatch(plain, /─{20,}/, "final responses do not add a horizontal divider");
+  assert.match(plain, /^• Yep/m, "the final response starts beside a dot in the existing two-column gutter");
 }
 
-function runNarrationFinalDividerRegression() {
+function runNarrationFinalMarkerRegression() {
   const captured = captureStdout(() => {
     const ui = createZyraUi();
     const narration = assistantMessage("I’ll inspect the source first.", "assistant-narration", "toolUse");
@@ -194,12 +195,13 @@ function runNarrationFinalDividerRegression() {
   });
   const plain = stripAnsi(captured);
   const narrationIndex = plain.indexOf("I’ll inspect the source first.");
-  const dividerIndex = plain.search(/─{20,}/);
+  const markerIndex = plain.indexOf("• The source is fixed.");
   const finalIndex = plain.indexOf("The source is fixed.");
 
-  assert.equal((plain.match(/─{20,}/g) ?? []).length, 1, "one semantic divider belongs to the final response only");
-  assert.equal(narrationIndex >= 0 && dividerIndex > narrationIndex, true, "narration renders before the final-response divider");
-  assert.equal(finalIndex > dividerIndex, true, "the final response begins below its divider");
+  assert.doesNotMatch(plain, /─{20,}/, "final response markers never draw a divider");
+  assert.equal((plain.match(/^• /gm) ?? []).length, 1, "only the final response gets a dot");
+  assert.equal(narrationIndex >= 0 && markerIndex > narrationIndex, true, "narration renders before the final response");
+  assert.equal(finalIndex, markerIndex + 2, "the marker sits beside the first response line");
 }
 
 function runToolOutputStyleRegression() {
@@ -1226,7 +1228,7 @@ function runHistoricalTranscriptSequenceRegression() {
   ui.history([
     { type: "message_start", message: { role: "user", content: [{ type: "text", text: "Historical prompt" }] }, historical: true },
     { type: "message_start", message: assistantMessage("Historical narration", "history-narration"), historical: true },
-    { type: "message_end", message: assistantMessage("Historical narration", "history-narration"), historical: true },
+    { type: "message_end", message: assistantMessage("Historical narration", "history-narration", "toolUse"), historical: true },
     { type: "tool_execution_start", toolName: "read", toolCallId: "history-read", args: { path: "src/a.mjs" }, historical: true },
     { type: "tool_execution_end", toolName: "read", toolCallId: "history-read", args: { path: "src/a.mjs" }, result: { content: [{ type: "text", text: "body" }] }, historical: true },
     { type: "tool_execution_start", toolName: "edit", toolCallId: "history-edit", args: { path: "src/a.mjs", oldString: "old\n", newString: "new\n" }, historical: true },
@@ -1241,6 +1243,8 @@ function runHistoricalTranscriptSequenceRegression() {
   assert.match(plain, /- old[\s\S]*\+ new/, "resumed edits retain their transcript-backed diff preview");
   assert.deepEqual([...positions].sort((left, right) => left - right), positions, "resume renders canonical transcript events in sequence");
   assert.doesNotMatch(plain, /─{20,}/, "historical assistant messages do not add live-result dividers");
+  assert.match(plain, /^• Historical final/m, "resumed final responses use the same dot marker");
+  assert.doesNotMatch(plain, /^• Historical narration/m, "resumed narration does not get the final response marker");
 }
 
 function runHistoricalBashCommandRegression() {
@@ -1507,18 +1511,18 @@ function runPreInteractivePanelsSurviveInteractiveRegression() {
 
   assert.match(plain, /┏━━━┳┓/);
   assert.match(plain, /gpt-5\.6-sol · builder/);
-  assert.match(raw, /\x1b\[38;2;196;167;231m\[Context\]/);
-  assert.match(plain, /\[Context\]/);
-  assert.match(plain, /AGENTS\.md/);
-  assert.match(plain, /\[Runtime\]/);
-  assert.match(plain, /openai-codex\/gpt-5\.6-sol · medium/);
-  assert.match(plain, /\[Theme\]/);
-  assert.match(plain, /rose-pine/);
+  assert.doesNotMatch(plain, /\[(Context|Runtime|Theme)\]|AGENTS\.md|openai-codex\/|rose-pine/);
+  const lines = plain.split("\n");
+  const subtitleIndex = lines.findIndex((line) => line.includes("gpt-5.6-sol · builder"));
+  const pathLine = lines[subtitleIndex + 2];
+  const project = "C:\\Users\\dev\\my_coding_play\\zyra";
+  assert.equal(pathLine.trim(), project, "the project path appears beneath the model subtitle");
+  assert.equal(pathLine.indexOf(project), Math.floor((90 - project.length) / 2), "the path is centered");
   assert.equal(plain.includes("✦ Learner"), false, "startup banner should use the Zyra wordmark");
   assert.equal(plain.includes("to orient"), false, "startup banner should stay compact and not print command hints");
 }
 
-function runStartupSectionLabelsUseActiveThemeRegression() {
+function runStartupCenteredPathRegression() {
   let raw = "";
   captureStdout(() => {
     const ui = createZyraUi({
@@ -1541,9 +1545,24 @@ function runStartupSectionLabelsUseActiveThemeRegression() {
     raw = ui._debugRenderLinesForTests(90).join("\n");
   });
 
-  assert.match(raw, /\x1b\[38;2;18;171;52m\[Context\]/);
-  assert.match(raw, /\x1b\[38;2;18;171;52m\[Runtime\]/);
-  assert.match(raw, /\x1b\[38;2;18;171;52m\[Theme\]/);
+  assert.match(raw, /\x1b\[38;2;171;205;239mgpt-5\.6-sol · builder/, "the model subtitle retains its active theme color");
+  for (const project of [os.homedir(), path.join(os.homedir(), "project"), path.join(os.homedir(), "a".repeat(160))]) {
+    captureStdout(() => {
+      const ui = createZyraUi();
+      ui.banner({ project, model: "openai-codex/gpt-test", profile: "concise" });
+      for (const width of [24, 50, 90]) {
+        const lines = ui._debugRenderLinesForTests(width).map(stripAnsi);
+        const subtitle = lines.findIndex((line) => line.includes("gpt-test · concise"));
+        const pathLine = lines[subtitle + 2];
+        assert.ok(pathLine.trim().startsWith("~"), "home paths use the tilde form");
+        if (project === os.homedir()) assert.equal(pathLine.trim(), "~");
+        assert.equal(pathLine.length <= width, true, "long paths fit narrow terminals");
+        const left = pathLine.length - pathLine.trimStart().length;
+        assert.ok(Math.abs(left - (width - pathLine.trim().length) / 2) <= 1, "path alignment follows terminal width");
+        assert.doesNotMatch(lines.join("\n"), /\[(Context|Runtime|Theme)\]/);
+      }
+    });
+  }
 }
 
 function runInteractiveSessionResetRedrawRegression() {
@@ -1622,6 +1641,48 @@ function runEditorStatusGapRegression() {
   assert.equal(lines[2], "─".repeat(80), "editor should draw an input rail below the prompt");
   assert.equal(lines.at(-2), "", "editor should leave one empty line between input and status line");
   assert.equal(lines.at(-1), "STATUS");
+}
+
+function runResumedTranscriptInputGapRegression() {
+  const final = assistantMessage("The stored response.", "spacing-final");
+  for (const replayBeforeInput of [true, false]) {
+    const ui = createZyraUi();
+    const editor = new EditorComponent({
+      getHasTranscript: () => ui._host.hasTranscript,
+      suggestions: () => [],
+      starterRecommendations: ["Inspect this project"],
+    });
+    const replay = () => ui.history([
+      { type: "message_start", message: final, historical: true },
+      { type: "message_end", message: final, historical: true },
+    ]);
+    if (replayBeforeInput) replay();
+    ui._host.setInputComponent(editor);
+    if (!replayBeforeInput) replay();
+    for (const width of [50, 90]) {
+      const lines = ui._debugRenderLinesForTests(width).map(stripAnsi);
+      const answerIndex = lines.findIndex((line) => line.includes("The stored response."));
+      assert.ok(answerIndex >= 0);
+      assert.equal(lines[answerIndex + 1], "", "resumed final responses retain one blank row before the input rail");
+      assert.equal(lines[answerIndex + 2], "─".repeat(width));
+      assert.equal(editor.hasTranscript, true, "history is reflected in editor transcript presence");
+      assert.doesNotMatch(lines.join("\n"), /Inspect this project/, "resumed chats do not show new-chat recommendations");
+    }
+    ui.resetSession({ project: "fixture" });
+    const parts = ui._host.renderParts(90);
+    assert.equal(editor.hasTranscript, false, "an empty chat clears transcript presence");
+    assert.match(stripAnsi(parts.fixedLines[0]), /Inspect this project/, "an empty chat restores its starter recommendation");
+    assert.equal(stripAnsi(parts.fixedLines[1]), "─".repeat(90), "a banner alone does not add transcript spacing");
+    ui._debugBeginInteractiveForTests();
+    ui.event({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "Live prompt" }] } });
+    ui.event({ type: "message_start", message: final });
+    ui.event({ type: "message_end", message: final });
+    ui.event({ type: "agent_end" });
+    const liveLines = ui._debugRenderLinesForTests(90).map(stripAnsi);
+    const liveAnswerIndex = liveLines.findIndex((line) => line.includes("The stored response."));
+    assert.equal(liveLines[liveAnswerIndex + 1], "", "live and resumed responses leave the same input gap");
+    assert.equal(liveLines[liveAnswerIndex + 2], "─".repeat(90));
+  }
 }
 
 function runEditorBusySpacingRegression() {
@@ -2509,7 +2570,7 @@ function runRuntimeModelOverrideRegression() {
   }
   assert.equal(registry.find("openai-codex", "gpt-5.6-sol")?.api, "openai-codex-responses");
   assert.equal(registry.find("openai", "gpt-5.6-sol")?.api, "openai-responses");
-  assert.equal(registry.find("openai-codex", "gpt-5.6-luna")?.zyraCompatibility?.status, PI_SUPPORT_PENDING_STATUS);
+  assert.equal(registry.find("openai-codex", "gpt-5.6-luna")?.zyraCompatibility, undefined);
   assert.equal(registry.find("openai", "gpt-5.6-luna")?.zyraCompatibility, undefined);
 
   const idempotent = registerZyraRuntimeModels(registry);
@@ -2535,7 +2596,7 @@ function runModelPickerReleaseOrderRegression() {
   const models = [
     { provider: "anthropic", id: "claude-custom", name: "Claude Custom" },
     { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
-    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS } },
+    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", zyraCompatibility: { status: TRANSPORT_SUPPORT_PENDING_STATUS } },
     { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
     { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
     { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
@@ -2567,7 +2628,7 @@ function runModelPickerReleaseOrderRegression() {
     "model picker should sort GPT releases newest-first and keep the documented GPT-5.6 tier order",
   );
   assert.equal(suggestions[5].description, "active", "active state should be labeled without overriding release order");
-  assert.equal(suggestions[3].description, "Pi support pending", "the picker should keep Luna visible without implying the current Pi transport can run it");
+  assert.equal(suggestions[3].description, "Transport support pending", "the picker should keep Luna visible without implying the current Zyra transport can run it");
 }
 
 async function runPendingLunaSelectionRegression() {
@@ -2575,7 +2636,7 @@ async function runPendingLunaSelectionRegression() {
     provider: "openai-codex",
     id: "gpt-5.6-luna",
     name: "GPT-5.6 Luna",
-    zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
+    zyraCompatibility: { status: TRANSPORT_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
   };
   let setModelCalls = 0;
   const runtime = {
@@ -2588,14 +2649,14 @@ async function runPendingLunaSelectionRegression() {
   };
   await assert.rejects(
     () => setModel(runtime, "openai-codex/gpt-5.6-luna"),
-    /wired into Zyra.*Pi runtime does not officially support/i,
+    /wired into Zyra.*Zyra transport does not support/i,
   );
   assert.equal(setModelCalls, 0);
 
   runtime.session.model = model;
   await assert.rejects(
     () => setModel(runtime, "gpt-5.6-luna"),
-    /wired into Zyra.*Pi runtime does not officially support/i,
+    /wired into Zyra.*Zyra transport does not support/i,
     "an already-active compatibility entry must not bypass the provider guard",
   );
 }
@@ -2810,7 +2871,7 @@ runMarkdownCodeBlockRegression();
 runMergeHelperRegression();
 runSnapshotDeltaPollutionRegression();
 runUiEventCaptureRegression();
-runNarrationFinalDividerRegression();
+runNarrationFinalMarkerRegression();
 runToolOutputStyleRegression();
 runPiLikeToolPresentationRegression();
 runToolCommandInlineRunningTimeRegression();
@@ -2853,11 +2914,12 @@ runResizeFullRedrawRegression();
 runOverViewportRedrawRegression();
 runInteractiveHostUsesNormalScreenRegression();
 runPreInteractivePanelsSurviveInteractiveRegression();
-runStartupSectionLabelsUseActiveThemeRegression();
+runStartupCenteredPathRegression();
 runInteractiveSessionResetRedrawRegression();
 runTranscriptScrollKeepsInputPinnedRegression();
 runRestartTransitionReplacesInputRailRegression();
 runEditorStatusGapRegression();
+runResumedTranscriptInputGapRegression();
 runEditorBusySpacingRegression();
 runEditorWordWrapRegression();
 runEditorSoftWrapWhitespaceRegression();

@@ -1,0 +1,328 @@
+// Generated from the maintained TypeScript in ../source by scripts/build-owned-runtime.mjs.
+import { parseArgs } from "./cli/args.js";
+import {
+  CONFIG_DIR_NAME,
+  getAgentDir,
+  getDocsPath,
+  getExamplesPath,
+  getPackageDir,
+  getReadmePath,
+  VERSION
+} from "./config.js";
+import {
+  AgentSession,
+  parseSkillBlock
+} from "./core/agent-session.js";
+import { readStoredCredential } from "./core/auth-storage.js";
+import {
+  calculateContextTokens,
+  collectEntriesForBranchSummary,
+  compact,
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  generateSummaryWithUsage,
+  getLastAssistantUsage,
+  prepareBranchEntries,
+  serializeConversation,
+  shouldCompact
+} from "./core/compaction/index.js";
+import { createEventBus } from "./core/event-bus.js";
+import {
+  createExtensionRuntime,
+  defineTool,
+  discoverAndLoadExtensions,
+  ExtensionRunner,
+  isBashToolResult,
+  isEditToolResult,
+  isFindToolResult,
+  isGrepToolResult,
+  isLsToolResult,
+  isPowerShellToolResult,
+  isReadToolResult,
+  isToolCallEventType,
+  isWriteToolResult,
+  wrapRegisteredTool,
+  wrapRegisteredTools
+} from "./core/extensions/index.js";
+import { convertToLlm } from "./core/messages.js";
+import { ModelRegistry } from "./core/model-registry.js";
+import {
+  resolveCliModel,
+  resolveModelScopeWithDiagnostics
+} from "./core/model-resolver.js";
+import {
+  CredentialSynchronizationError,
+  ModelRuntime
+} from "./core/model-runtime.js";
+import { DefaultPackageManager } from "./core/package-manager.js";
+import { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.js";
+import {
+  AgentSessionRuntime,
+  createAgentSession,
+  createAgentSessionFromServices,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
+  createBashTool,
+  createCodingTools,
+  createEditTool,
+  createFindTool,
+  createGrepTool,
+  createLsTool,
+  createPowerShellTool,
+  createReadOnlyTools,
+  createReadTool,
+  createWriteTool
+} from "./core/sdk.js";
+import {
+  buildContextEntries,
+  buildSessionContext,
+  CURRENT_SESSION_VERSION,
+  getLatestCompactionEntry,
+  migrateSessionEntries,
+  parseSessionEntries,
+  SessionManager,
+  sessionEntryToContextMessages
+} from "./core/session-manager.js";
+import {
+  SettingsManager
+} from "./core/settings-manager.js";
+import {
+  formatSkillsForPrompt,
+  loadSkills,
+  loadSkillsFromDir
+} from "./core/skills.js";
+import { createSyntheticSourceInfo } from "./core/source-info.js";
+import { generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.js";
+import {
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLocalBashOperations,
+  createLocalPowerShellOperations,
+  createLsToolDefinition,
+  createPowerShellToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateHead,
+  truncateLine,
+  truncateTail,
+  withFileMutationQueue
+} from "./core/tools/index.js";
+import {
+  hasTrustRequiringProjectResources,
+  ProjectTrustStore
+} from "./core/trust-manager.js";
+import { main } from "./main.js";
+import {
+  InteractiveMode,
+  RpcClient,
+  runPrintMode,
+  runRpcMode
+} from "./modes/index.js";
+import {
+  ArminComponent,
+  AssistantMessageComponent,
+  BashExecutionComponent,
+  BorderedLoader,
+  BranchSummaryMessageComponent,
+  CompactionSummaryMessageComponent,
+  CustomEditor,
+  CustomMessageComponent,
+  DynamicBorder,
+  ExtensionEditorComponent,
+  ExtensionInputComponent,
+  ExtensionSelectorComponent,
+  FooterComponent,
+  keyHint,
+  keyText,
+  LoginDialogComponent,
+  ModelSelectorComponent,
+  OAuthSelectorComponent,
+  rawKeyHint,
+  renderDiff,
+  SessionSelectorComponent,
+  SettingsSelectorComponent,
+  ShowImagesSelectorComponent,
+  SkillInvocationMessageComponent,
+  ThemeSelectorComponent,
+  ThinkingSelectorComponent,
+  ToolExecutionComponent,
+  TreeSelectorComponent,
+  truncateToVisualLines,
+  UserMessageComponent,
+  UserMessageSelectorComponent
+} from "./modes/interactive/components/index.js";
+import {
+  getLanguageFromPath,
+  getMarkdownTheme,
+  getSelectListTheme,
+  getSettingsListTheme,
+  highlightCode,
+  initTheme,
+  Theme
+} from "./modes/interactive/theme/theme.js";
+import { copyToClipboard } from "./utils/clipboard.js";
+import { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
+import { convertToPng } from "./utils/image-convert.js";
+import { formatDimensionNote, resizeImage } from "./utils/image-resize.js";
+import { getPowerShellConfig, getShellConfig } from "./utils/shell.js";
+export {
+  AgentSession,
+  AgentSessionRuntime,
+  ArminComponent,
+  AssistantMessageComponent,
+  BashExecutionComponent,
+  BorderedLoader,
+  BranchSummaryMessageComponent,
+  CONFIG_DIR_NAME,
+  CURRENT_SESSION_VERSION,
+  CompactionSummaryMessageComponent,
+  CredentialSynchronizationError,
+  CustomEditor,
+  CustomMessageComponent,
+  DEFAULT_COMPACTION_SETTINGS,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  DefaultPackageManager,
+  DefaultResourceLoader,
+  DynamicBorder,
+  ExtensionEditorComponent,
+  ExtensionInputComponent,
+  ExtensionRunner,
+  ExtensionSelectorComponent,
+  FooterComponent,
+  InteractiveMode,
+  LoginDialogComponent,
+  ModelRegistry,
+  ModelRuntime,
+  ModelSelectorComponent,
+  OAuthSelectorComponent,
+  ProjectTrustStore,
+  RpcClient,
+  SessionManager,
+  SessionSelectorComponent,
+  SettingsManager,
+  SettingsSelectorComponent,
+  ShowImagesSelectorComponent,
+  SkillInvocationMessageComponent,
+  Theme,
+  ThemeSelectorComponent,
+  ThinkingSelectorComponent,
+  ToolExecutionComponent,
+  TreeSelectorComponent,
+  UserMessageComponent,
+  UserMessageSelectorComponent,
+  VERSION,
+  buildContextEntries,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummary,
+  compact,
+  convertToLlm,
+  convertToPng,
+  copyToClipboard,
+  createAgentSession,
+  createAgentSessionFromServices,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
+  createBashTool,
+  createBashToolDefinition,
+  createCodingTools,
+  createEditTool,
+  createEditToolDefinition,
+  createEventBus,
+  createExtensionRuntime,
+  createFindTool,
+  createFindToolDefinition,
+  createGrepTool,
+  createGrepToolDefinition,
+  createLocalBashOperations,
+  createLocalPowerShellOperations,
+  createLsTool,
+  createLsToolDefinition,
+  createPowerShellTool,
+  createPowerShellToolDefinition,
+  createReadOnlyTools,
+  createReadTool,
+  createReadToolDefinition,
+  createSyntheticSourceInfo,
+  createWriteTool,
+  createWriteToolDefinition,
+  defineTool,
+  discoverAndLoadExtensions,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  formatDimensionNote,
+  formatSize,
+  formatSkillsForPrompt,
+  generateBranchSummary,
+  generateDiffString,
+  generateSummary,
+  generateSummaryWithUsage,
+  generateUnifiedPatch,
+  getAgentDir,
+  getDocsPath,
+  getExamplesPath,
+  getLanguageFromPath,
+  getLastAssistantUsage,
+  getLatestCompactionEntry,
+  getMarkdownTheme,
+  getPackageDir,
+  getPowerShellConfig,
+  getReadmePath,
+  getSelectListTheme,
+  getSettingsListTheme,
+  getShellConfig,
+  hasTrustRequiringProjectResources,
+  highlightCode,
+  initTheme,
+  isBashToolResult,
+  isEditToolResult,
+  isFindToolResult,
+  isGrepToolResult,
+  isLsToolResult,
+  isPowerShellToolResult,
+  isReadToolResult,
+  isToolCallEventType,
+  isWriteToolResult,
+  keyHint,
+  keyText,
+  loadProjectContextFiles,
+  loadSkills,
+  loadSkillsFromDir,
+  main,
+  migrateSessionEntries,
+  parseArgs,
+  parseFrontmatter,
+  parseSessionEntries,
+  parseSkillBlock,
+  prepareBranchEntries,
+  rawKeyHint,
+  readStoredCredential,
+  renderDiff,
+  resizeImage,
+  resolveCliModel,
+  resolveModelScopeWithDiagnostics,
+  runPrintMode,
+  runRpcMode,
+  serializeConversation,
+  sessionEntryToContextMessages,
+  shouldCompact,
+  stripFrontmatter,
+  truncateHead,
+  truncateLine,
+  truncateTail,
+  truncateToVisualLines,
+  withFileMutationQueue,
+  wrapRegisteredTool,
+  wrapRegisteredTools
+};

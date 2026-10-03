@@ -2,7 +2,7 @@ import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
-import { Chrome, Globe, Monitor, MousePointer2, Square, X } from 'lucide-react'
+import { Chrome, Globe, LoaderCircle, Monitor, MousePointer2, ShieldCheck, Square, Unplug, X } from 'lucide-react'
 import type { ControlCursorState, ControlStateSnapshot } from '@shared/agent-control/contracts'
 import type { AssistantSessionShell } from '@shared/assistant/contracts'
 import { useAssistantStoreSelector } from '@/lib/assistant/store'
@@ -112,7 +112,7 @@ export function AssistantControlStatus({ state }: { state: ControlStateSnapshot 
                 {SURFACES.map(({ kind, label, Icon }) => {
                     const chats = status.groups.filter(group => group.kind === kind)
                     const using = chats.filter(group => group.usingNow).length
-                    const detail = kind === 'chrome-tab' ? status.chrome : using ? `${using} ${using === 1 ? 'chat' : 'chats'} using` : chats.length ? `${chats.length} ${chats.length === 1 ? 'chat has' : 'chats have'} access` : 'Not in use'
+                    const detail = kind === 'chrome-tab' ? status.chrome : chats.length ? `Used by ${chats.length} ${chats.length === 1 ? 'chat' : 'chats'}` : 'Not in use'
                     const highlighted = kind === 'chrome-tab' ? status.chrome === 'Connected' : using > 0
                     return <section key={kind} aria-label={label} className="py-1">
                         <div className="flex min-h-6 items-center gap-2 text-[11px]">
@@ -122,8 +122,12 @@ export function AssistantControlStatus({ state }: { state: ControlStateSnapshot 
                         </div>
                         {chats.length > 0 && <ul className="ml-[22px] space-y-1 pb-1 pt-1">{chats.map(chat => <li key={chat.key} className="flex items-center gap-2 text-[10px]">
                             <span className="min-w-0 flex-1 truncate" title={`${chat.title}${chat.surfaces.length ? ` — ${chat.surfaces.join(', ')}` : ''}`}>{chat.title}</span>
-                            <span className={`shrink-0 ${chat.usingNow ? 'text-[var(--accent-primary)]' : 'text-[var(--color-text-muted)]'}`}>{chat.usingNow ? 'Using now' : 'Has access'}</span>
-                            <button type="button" disabled={releasing !== null} aria-label={`Release ${label} access for ${chat.title}`} onClick={() => void release(chat.key, chat.grantIds)} className="shrink-0 rounded px-1 py-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--color-text)] disabled:opacity-40">{releasing === chat.key ? '…' : 'Release'}</button>
+                            <span role="img" aria-label={chat.usingNow ? 'Using now' : 'Has access'} title={chat.usingNow ? 'Using now' : 'Has access'} className={`inline-flex size-6 shrink-0 items-center justify-center ${chat.usingNow ? 'text-[var(--accent-primary)]' : 'text-[var(--color-text-muted)]'}`}>
+                                {chat.usingNow ? <MousePointer2 size={13} aria-hidden="true" /> : <ShieldCheck size={13} aria-hidden="true" />}
+                            </span>
+                            <button type="button" disabled={releasing !== null} aria-label={`Release ${label} access for ${chat.title}`} title={releasing === chat.key ? 'Releasing access…' : `Release ${label} access for ${chat.title}`} onClick={() => void release(chat.key, chat.grantIds)} className="inline-flex size-6 shrink-0 items-center justify-center rounded text-[var(--color-text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)] disabled:opacity-40">
+                                {releasing === chat.key ? <LoaderCircle size={13} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Unplug size={13} aria-hidden="true" />}
+                            </button>
                         </li>)}</ul>}
                     </section>
                 })}

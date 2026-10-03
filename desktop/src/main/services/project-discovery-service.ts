@@ -221,9 +221,9 @@ async function scanProjectsUncached(folderPath: string): Promise<ScanProjectsRes
             }
 
             const stats = await stat(projectPath)
-            const projectIconPath = await resolveProjectIconPath(projectPath, projectEntries, packageJson)
 
             if (markers.length > 0) {
+                const projectIconPath = await resolveProjectIconPath(projectPath, projectEntries, packageJson)
                 projects.push({
                     name: entry.name,
                     path: projectPath,
@@ -314,9 +314,9 @@ function cacheIndexAllFolders(folders: string[], value: IndexAllFoldersResult): 
 
 async function indexAllFoldersUncached(
     folders: string[],
-    _options?: IndexAllFoldersOptions
+    options?: IndexAllFoldersOptions
 ): Promise<IndexAllFoldersResult> {
-    return await indexFilesAcrossFolders(folders)
+    return await indexFilesAcrossFolders(folders, options)
 }
 
 export async function indexAllFolders(

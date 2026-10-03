@@ -1,4 +1,7 @@
 import { settleActivityAtTurnEnd } from '@shared/assistant/activity-settlement'
+import { getAssistantInterruptionLabel } from '@shared/assistant/interruption'
+import { addPartialAssistantWorkBoundary, prepareAssistantWorkRowBoundaries } from './assistant-work-row-boundaries'
+import { prepareAssistantPeerReplyEndings } from './assistant-peer-replies'
 import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import { normalizeAssistantMessageReferenceId } from '@shared/assistant/message-identity'
 import {
@@ -123,6 +126,7 @@ function buildProjectedTerminalOutcomeByTurn(rows: TimelineRenderRow[]): Map<str
 }
 
 function rowMustStayVisible(row: TimelineRenderRow): boolean {
+    if (row.kind === 'activity' && row.activity.kind === 'thread-message') return true
     if (row.kind === 'working' || row.kind === 'user-input') return true
     if (row.kind === 'activity') return isModelNoticeActivity(row.activity)
     if (row.kind === 'activity-group') {
@@ -229,14 +233,24 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
     latestTurnStartedAt: string | null
     isWorking: boolean
 }): TimelineDisplayRow[] {
+    const endings = prepareAssistantPeerReplyEndings(addPartialAssistantWorkBoundary(input.rows), input.messages, input.isWorking)
+    const prepared = prepareAssistantWorkRowBoundaries(endings.rows, endings.messages)
+    const latestEnding = endings.rows.at(-1)
     const {
-        rows,
+        rows: sourceRows,
         messages,
         turnUsageById,
         latestAssistantMessageId,
         latestTurnStartedAt,
         isWorking
-    } = input
+    } = { ...input, ...prepared, latestAssistantMessageId: latestEnding?.kind === 'message' && latestEnding.peerReply?.fallback ? latestEnding.message.id : input.latestAssistantMessageId }
+    // The completed turn record is authoritative. Older desktop transport
+    // errors may have left a failed marker before the server finished work.
+    const rows = sourceRows.filter(row => {
+        if (row.kind !== 'activity' || !row.activity.turnId) return true
+        return !(row.activity.turnTerminalOutcome === 'failed'
+            && turnUsageById?.get(row.activity.turnId)?.state === 'completed')
+    })
     const { byId: messageById, resolvedAssistantIdByReference } = buildAssistantMessageIndexes(messages)
     const resolvedLatestAssistantMessageId = resolveIndexedAssistantMessageId(resolvedAssistantIdByReference, latestAssistantMessageId)
     const finalByTurn = getFinalAssistantIdByTurn(
@@ -246,6 +260,10 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         messageById,
         resolvedAssistantIdByReference
     )
+    // A legacy latest-message pointer may still name the narration before a
+    // tool-only reply. Preserve the recovered ending for every task, including
+    // historical tasks followed by a new prompt.
+    for (const row of rows) if (row.kind === 'message' && row.peerReply?.fallback && row.message.turnId) finalByTurn.set(row.message.turnId, row.message.id)
     const projectedTerminalOutcomeByTurn = buildProjectedTerminalOutcomeByTurn(rows)
     const messageRowIndexById = new Map<string, number>()
     const previousUserIndexByRow = new Int32Array(rows.length)
@@ -357,7 +375,9 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
                 : endIndex
             const activeRows = rows.slice(userIndex + 1, activeEndIndex + 1)
             const projectedTerminalOutcome = getProjectedTerminalOutcomeFromRows(activeRows)
-            if (!projectedTerminalOutcome) {
+            // Peer messages are conversation boundaries. Keep this span chronological
+            // instead of moving a received bubble after later work inside a disclosure.
+            if (!projectedTerminalOutcome && !activeRows.some(row => row.kind === 'activity' && row.activity.kind === 'thread-message')) {
                 const workRows = activeRows.filter((row) => (
                     row.kind !== 'working'
                     && !rowMustStayVisible(row)
@@ -467,6 +487,17 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (turnRows.length === 0) continue
         const turnId = inferLegacyUserTurnId(userRow.message, turnRows, turnUsageById)
         if (!turnId) continue
+        const nextBoundary = rows[endIndex]
+        if (nextBoundary?.kind === 'message' && nextBoundary.threadMessage) {
+            const outcome = getProjectedTerminalOutcomeFromRows(turnRows)
+            const workRows = (outcome === 'interrupted' ? stripProjectedInterruptions(turnRows) : turnRows).filter(row => row.kind !== 'working' && !rowMustStayVisible(row))
+            if (workRows.length) ranges.set(userIndex + 1, { endIndex, summary: {
+                kind: 'turn-work-summary', id: `turn-work-summary-${userRow.id}`, createdAt: workRows[0].createdAt || userRow.createdAt,
+                turnId, startedAt: userRow.createdAt, completedAt: nextBoundary.createdAt, running: false,
+                terminalResponseVisible: false, outcome, rows: groupConsecutiveActionRows(workRows), liveNarrationRow: null
+            }, visibleRows: turnRows.filter(row => row.kind !== 'working' && rowMustStayVisible(row)) })
+            continue
+        }
 
         const usage = turnUsageById?.get(turnId)
         const handoffRows = turnRows.filter((row) => row.kind === 'user-input')
@@ -519,15 +550,15 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             || getProjectedTerminalOutcomeFromRows(turnRows)
             || null
         const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error' || Boolean(projectedTerminalOutcome)
-        if (finalByTurn.has(turnId) && !terminalIncomplete) continue
         if ((usage?.state === 'running' && !projectedTerminalOutcome) || (isWorking && turnId === activeTurnId && !projectedTerminalOutcome)) continue
+        const finalRow = !terminalIncomplete ? [...turnRows].reverse().find(row => row.kind === 'message' && row.message.role === 'assistant' && row.message.id === finalByTurn.get(turnId)) : turnRows.find(row => row.kind === 'message' && row.peerReply)
         const outcome = usage?.state === 'interrupted'
             ? 'interrupted'
-            : projectedTerminalOutcome || (usage?.state === 'error' ? 'failed' : 'no-response')
+            : projectedTerminalOutcome || (usage?.state === 'error' ? 'failed' : finalRow ? 'completed' : 'no-response')
         const displayTurnRows = outcome === 'interrupted' ? stripProjectedInterruptions(turnRows) : turnRows
-        const workRows = displayTurnRows.filter((row) => row.kind !== 'working' && !rowMustStayVisible(row))
+        const workRows = displayTurnRows.filter((row) => row !== finalRow && row.kind !== 'working' && !rowMustStayVisible(row))
         const groupedWorkRows = groupConsecutiveActionRows(workRows)
-        const visibleRows = displayTurnRows.filter((row) => row.kind !== 'working' && rowMustStayVisible(row))
+        const visibleRows = displayTurnRows.filter((row) => row === finalRow || (row.kind !== 'working' && rowMustStayVisible(row)))
         if (workRows.length === 0 && outcome !== 'interrupted') continue
 
         const startedAt = usage?.startedAt
@@ -575,7 +606,11 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         }
         displayRows.push(rows[index])
     }
-    return displayRows.map(row => {
+    return displayRows.filter(row => !(row.kind === 'message' && row.workBoundaryOnly)).map(row => {
+        if (row.kind === 'turn-work-summary' && row.outcome === 'interrupted') {
+            const terminal = sourceRows.flatMap(getRowActivities).find(activity => activity.turnId === row.turnId && activity.payload?.interruption)
+            return { ...row, interruptionLabel: getAssistantInterruptionLabel(terminal?.payload?.interruption) }
+        }
         if (row.kind !== 'turn-work-summary' || row.running || !row.completedAt) return row
         const settle = (activity: AssistantActivity) => settleActivityAtTurnEnd(activity, row.completedAt!, row.outcome || 'interrupted')
         return { ...row, rows: row.rows.map(nested => nested.kind === 'activity'

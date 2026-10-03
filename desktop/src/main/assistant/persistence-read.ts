@@ -133,10 +133,11 @@ export function readHydratedThreadDetails(
 export function readAssistantTimelineProjectionRows(
     db: SqlDatabase,
     threadId: string
-): Pick<AssistantHydratedThreadData, 'messages' | 'activities'> {
+): Pick<AssistantHydratedThreadData, 'messages' | 'activities' | 'pendingUserInputs'> {
     return {
         messages: readAssistantMessages(db, threadId),
-        activities: readAssistantActivities(db, threadId, false)
+        activities: readAssistantActivities(db, threadId, false),
+        pendingUserInputs: readAssistantPendingUserInputs(db, threadId)
     }
 }
 
@@ -215,20 +216,24 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
             createdAt: String(row[10] || new Date(0).toISOString()),
             resolvedAt: toNullableString(row[11])
         })),
-        pendingUserInputs: readThreadRows<AssistantPendingUserInput>(db, 'assistant_pending_user_inputs', threadId, [
-            'id', 'request_id', 'questions_json', 'status', 'answers_json', 'response_message_id', 'turn_id', 'created_at', 'resolved_at'
-        ], (row) => ({
-            id: String(row[0] || ''),
-            requestId: String(row[1] || ''),
-            questions: parseJson(row[2], []),
-            status: String(row[3] || 'pending') as AssistantPendingUserInput['status'],
-            answers: parseJson<Record<string, string | string[]> | null>(row[4], null),
-            responseMessageId: toNullableString(row[5]),
-            turnId: toNullableString(row[6]),
-            createdAt: String(row[7] || new Date(0).toISOString()),
-            resolvedAt: toNullableString(row[8])
-        }))
+        pendingUserInputs: readAssistantPendingUserInputs(db, threadId)
     }
+}
+
+function readAssistantPendingUserInputs(db: SqlDatabase, threadId: string): AssistantPendingUserInput[] {
+    return readThreadRows<AssistantPendingUserInput>(db, 'assistant_pending_user_inputs', threadId, [
+        'id', 'request_id', 'questions_json', 'status', 'answers_json', 'response_message_id', 'turn_id', 'created_at', 'resolved_at'
+    ], (row) => ({
+        id: String(row[0] || ''),
+        requestId: String(row[1] || ''),
+        questions: parseJson(row[2], []),
+        status: String(row[3] || 'pending') as AssistantPendingUserInput['status'],
+        answers: parseJson<Record<string, string | string[]> | null>(row[4], null),
+        responseMessageId: toNullableString(row[5]),
+        turnId: toNullableString(row[6]),
+        createdAt: String(row[7] || new Date(0).toISOString()),
+        resolvedAt: toNullableString(row[8])
+    }))
 }
 
 export function readAssistantSessionTurnUsage(db: SqlDatabase, sessionId?: string, since?: string): AssistantSessionTurnUsageEntry[] {

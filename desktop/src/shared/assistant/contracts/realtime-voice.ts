@@ -78,6 +78,7 @@ export interface AssistantRealtimeVoiceClientCommandEvent {
     realtimeSessionId: string
     realtimeSessionGeneration: number
     canonicalMessageId?: string
+    voiceTaskId?: string
     messages: AssistantRealtimeVoiceClientMessage[]
 }
 

@@ -30,4 +30,6 @@ export type ZyraMemoryJobStatus = {
 export interface ZyraMemoryApi {
     getJobStatus: () => Promise<{ success: true; status: ZyraMemoryJobStatus } | { success: false; error: string }>
     getOverview: () => Promise<{ success: true; overview: ZyraMemoryOverview } | { success: false; error: string }>
+    getModelPreference: () => Promise<{ success: true; preference: string } | { success: false; error: string }>
+    setModelPreference: (preference: string) => Promise<{ success: true; preference: string } | { success: false; error: string }>
 }

@@ -8,13 +8,14 @@ import { cn } from '@/lib/utils'
 
 const buttonClass = 'inline-flex h-12 w-full items-center justify-center gap-2 rounded-full px-5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg)]'
 
-export function ConnectOpenAiStep({ status, loading, activity, error, onRefresh, onConnectChatGpt, onConnectApiKey }: {
+export function ConnectOpenAiStep({ status, loading, activity, error, onRefresh, onConnectChatGpt, onCancelChatGpt, onConnectApiKey }: {
     status: OnboardingAuthStatus | null
     loading: boolean
     activity: 'checking' | 'chatgpt' | 'api-key' | null
     error: string | null
     onRefresh: () => Promise<void>
     onConnectChatGpt: () => Promise<void>
+    onCancelChatGpt: () => Promise<void>
     onConnectApiKey: (apiKey: string) => Promise<void>
 }) {
     const [otherProvidersOpen, setOtherProvidersOpen] = useState(false)
@@ -54,6 +55,8 @@ export function ConnectOpenAiStep({ status, loading, activity, error, onRefresh,
                     {apiKeyConnected ? 'API key connected' : 'Use an API key'}
                 </button>
             </div>
+
+            {activity === 'chatgpt' ? <button type="button" onClick={() => void onCancelChatGpt()} className="mt-4 text-[12px] text-sparkle-text-secondary underline underline-offset-2 hover:text-sparkle-text">Cancel sign-in</button> : null}
 
             <div id="onboarding-api-key-form" inert={!apiKeyOpen} aria-hidden={!apiKeyOpen} className={cn('grid text-left transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none', apiKeyOpen ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0')}>
                 <div className="min-h-0 overflow-hidden">

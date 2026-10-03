@@ -58,6 +58,9 @@ const status = {
 
 let eventListener: ((payload: { event: AssistantDomainEvent }) => void) | null = null
 let bootstrapCalls = 0
+let modelListCalls = 0
+let modelListForceRefresh: boolean | null = null
+const refreshedModels = [{ id: 'opencode-harness/opencode/big-pickle', label: 'Big Pickle' }]
 const animationFrames: FrameRequestCallback[] = []
 const windowMock = {
     requestAnimationFrame(callback: FrameRequestCallback) {
@@ -72,6 +75,11 @@ const windowMock = {
             bootstrap: async () => {
                 bootstrapCalls += 1
                 return { snapshot: initialSnapshot, status }
+            },
+            listModels: async (forceRefresh = false) => {
+                modelListCalls += 1
+                modelListForceRefresh = forceRefresh
+                return { success: true as const, models: refreshedModels }
             },
             onEvent: (listener: typeof eventListener) => {
                 eventListener = listener
@@ -95,6 +103,12 @@ for (let attempt = 0; attempt < 20 && !store.getState().hydrated; attempt += 1) 
     await new Promise((resolve) => setTimeout(resolve, 0))
 }
 assert.equal(store.getState().hydrated, true)
+for (let attempt = 0; attempt < 20 && store.getState().modelsLoading; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+}
+assert.equal(modelListCalls, 1, 'startup automatically requests a current provider-model catalog')
+assert.equal(modelListForceRefresh, false, 'startup uses the automatic refresh policy rather than the manual force-refresh path')
+assert.deepEqual(store.getState().snapshot.knownModels, refreshedModels, 'the refreshed harness catalog is exposed in the assistant store')
 
 const result = await store.createSession()
 assert.equal(result.success, true)

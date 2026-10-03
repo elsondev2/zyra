@@ -86,7 +86,7 @@ export function recoverCanonicalUserInputReceipts(entries: unknown[], messages: 
 export function mergeRecoveredUserInputReceipts(existing: AssistantPendingUserInput[], recovered: AssistantPendingUserInput[]): AssistantPendingUserInput[] {
     const merged = [...existing]
     for (const receipt of recovered) {
-        const index = merged.findIndex(input => input.requestId === receipt.requestId || (input.responseMessageId && input.responseMessageId === receipt.responseMessageId))
+        const index = merged.findIndex(input => input.id === receipt.id || input.requestId === receipt.requestId || (input.responseMessageId && input.responseMessageId === receipt.responseMessageId))
         if (index < 0) merged.push(receipt)
         else {
             const prior = merged[index]!

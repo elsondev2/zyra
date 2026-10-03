@@ -14,7 +14,8 @@ export interface MobileAccessState {
 }
 export interface MobileDevice { id: string; name: string; createdAt: number; lastPairedAt?: number; connected?: boolean; hiddenProjects?: string[] }
 export interface MobilePairing { link: string; image: string; expiresAt: number }
-export interface MobileProjectChoice { name: string; paths: string[] }
+export interface MobileProjectFolderChoice { label: string; path: string }
+export interface MobileProjectChoice { name: string; paths: string[]; iconPath: string; folders: MobileProjectFolderChoice[] }
 export interface MobileAccessApi {
     setDeviceAccess(id: string, access: { hiddenProjects: string[] }): Promise<MobileAccessState>
     getProjects(): Promise<MobileProjectChoice[]>

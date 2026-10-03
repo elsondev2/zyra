@@ -1,14 +1,16 @@
-import { memo, useLayoutEffect, useRef, type RefObject } from 'react'
+import { lazy, memo, Suspense, useLayoutEffect, useRef, type RefObject } from 'react'
 import { ArrowDown } from 'lucide-react'
 import type { AssistantActivity, AssistantMessage, AssistantPendingUserInput, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantChatDisplayMode, AssistantTextStreamingMode, AssistantToolOutputDefaultMode } from '@/lib/settings'
 import { LoadingSpinner } from '@/components/ui/LoadingState'
 import { cn } from '@/lib/utils'
-import { AssistantTimeline } from './AssistantTimeline'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 import type { AssistantElementBounds } from './assistant-composer-types'
 import { resolveAssistantScrollButtonBottom } from './assistant-pane-layout'
+
+export const preloadAssistantTimeline = () => import('./AssistantTimeline')
+const AssistantTimeline = lazy(() => preloadAssistantTimeline().then(module => ({ default: module.AssistantTimeline })))
 
 export const AssistantConversationTimelinePane = memo(function AssistantConversationTimelinePane(props: {
     loading: boolean
@@ -24,6 +26,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     assistantMessageFilePath?: string | null
     windowKey: string
     isWorking: boolean
+    waitingForCompaction?: boolean
     activeStatusLabel: string
     isConnecting: boolean
     suppressEmptyProjectBadge?: boolean
@@ -33,6 +36,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     turnUsageById?: ReadonlyMap<string, AssistantSessionTurnUsageEntry>
     deletingMessageId: string | null
     focusMessageId?: string | null
+    followLatestRequestKey?: string | null
     loadingChats: boolean
     selectionHydrating: boolean
     coldStart?: boolean
@@ -113,6 +117,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                 />
             ) : (
                 <>
+                    <Suspense fallback={<LoadingSpinner message="Loading conversation..." className="h-full py-0" minHeightClassName="min-h-0" />}>
                     <AssistantTimeline
                         messages={props.messages}
                         activities={props.activities}
@@ -127,6 +132,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                         scrollContainerRef={props.timelineScrollRef}
                         overlayContainerRef={floatingPlanOverlayRef}
                         isWorking={props.isWorking}
+                        waitingForCompaction={props.waitingForCompaction}
                         workingLabel={props.activeStatusLabel}
                         activeWorkStartedAt={props.activeWorkStartedAt}
                         latestAssistantMessageId={props.latestAssistantMessageId}
@@ -134,6 +140,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                         turnUsageById={props.turnUsageById}
                         deletingMessageId={props.deletingMessageId}
                         focusMessageId={props.focusMessageId}
+                        followLatestRequestKey={props.followLatestRequestKey}
                         loadingChats={props.loadingChats}
                         selectionHydrating={props.selectionHydrating}
                         coldStart={props.coldStart}
@@ -160,6 +167,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                         onOpenFilePath={props.onOpenEditedFile}
                         onViewDiff={props.onViewDiff}
                     />
+                    </Suspense>
                     <div ref={floatingPlanOverlayRef} className="pointer-events-none absolute inset-0 z-20" />
                     <div
                         className="pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 transition-[bottom,opacity,transform] duration-200"

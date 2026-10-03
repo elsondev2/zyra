@@ -29,6 +29,7 @@ try {
   let methods = ['server.status', 'server.retire'];
   let retirementCode = 'AGENT_SERVER_UPGRADE_BUSY';
   let dropHeartbeat = false;
+  let heldCatalogRequest;
   let retireCalls = 0;
   server = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
@@ -43,6 +44,8 @@ try {
           error: { code: retirementCode, message: 'Synthetic deferred update' } });
       } else if (message.method === 'server.status' && !dropHeartbeat) {
         writeAgentServerMessage(socket, { type: 'response', id: message.id, ok: true, result: { instance } });
+      } else if (message.method === 'catalog.list') {
+        heldCatalogRequest = { socket, id: message.id };
       }
     });
   });
@@ -98,10 +101,30 @@ try {
   await healthy.connect();
   assert.equal(healthy.connectionStatus.phase, 'ready');
   dropHeartbeat = true;
-  await new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error('heartbeat did not detect stale transport')), 3000);
-    healthy.once('disconnect', () => { clearTimeout(deadline); resolve(); });
-  });
+  const waitFor = async (condition, message) => {
+    const deadline = Date.now() + 3000;
+    while (!condition() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(condition(), message);
+  };
+  const originalSocket = healthy.socket;
+  const activeRequest = healthy.requestConnected('catalog.list', {}, { timeoutMs: 3000 });
+  let disconnects = 0;
+  healthy.on('disconnect', () => disconnects++);
+  await waitFor(() => healthy.connectionStatus.errorCode === 'AGENT_SERVER_HEARTBEAT_DELAYED' || disconnects > 0,
+    'missed heartbeat must report delayed status');
+  assert.equal(disconnects, 0, 'a slow status response must not disconnect live agents');
+  assert.equal(healthy.socket, originalSocket, 'status timeout preserves the authenticated socket');
+  assert.equal(healthy.connectionStatus.connection, 'connected');
+  assert.equal(healthy.connectionStatus.phase, 'checking');
+  assert.ok(heldCatalogRequest, 'the active chat request remains on the retained connection');
+  writeAgentServerMessage(heldCatalogRequest.socket, { type: 'response', id: heldCatalogRequest.id, ok: true, result: { chats: [] } });
+  assert.deepEqual(await activeRequest, { chats: [] }, 'a missed heartbeat must not reject other in-flight requests');
+  dropHeartbeat = false;
+  await waitFor(() => healthy.connectionStatus.phase === 'ready', 'status must recover on the same connection');
+  assert.equal(healthy.socket, originalSocket);
+  assert.equal(healthy.connectionStatus.errorCode, undefined);
+  instance.instanceId = 'replacement-server';
+  await waitFor(() => disconnects > 0, 'a changed server identity must still close the connection');
   assert.equal(healthy.connectionStatus.connection, 'disconnected');
   assert.equal(healthy.heartbeatTimer, null);
   const projected = projectAgentServerInstance({ instance: { ...instance, token: 'secret', endpoint: '/private/socket', stateDirectory: '/private/home' } });

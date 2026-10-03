@@ -11,6 +11,7 @@ import type {
     AssistantModelInfo,
     AssistantPlaygroundState,
     AssistantPluginSkillSource,
+    AssistantPluginMcpSource,
     AssistantReasoningEffort,
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
@@ -28,13 +29,16 @@ import type { AssistantRuntimePolicy } from '../../shared/assistant/runtime-poli
 export interface AssistantRuntimeBridge {
     checkAvailability(): Promise<{ available: boolean; reason: string | null }>
     listModels(forceRefresh?: boolean): Promise<AssistantModelInfo[]>
+    prepareChatRuntime?(model: string | null): Promise<void>
     connect(
         thread: AssistantThread,
         cwd: string,
         filesystemScope?: AssistantChatScope | null,
-        pluginSkillSources?: AssistantPluginSkillSource[]
+        pluginSkillSources?: AssistantPluginSkillSource[],
+        pluginMcpSources?: AssistantPluginMcpSource[]
     ): Promise<void>
     hasSession(threadId: string): boolean
+    ensurePromptAvailable?(threadId: string): Promise<void>
     getSessionUsage?(threadId: string): AssistantSessionUsageTotals | null
     generateText(
         prompt: string,
@@ -48,6 +52,7 @@ export interface AssistantRuntimeBridge {
         threadId: string,
         prompt: string,
         options?: {
+            turnId?: string
             model?: string
             runtimeMode?: AssistantRuntimeMode
             interactionMode?: AssistantInteractionMode
@@ -68,7 +73,9 @@ export interface AssistantRuntimeBridge {
         answers: Record<string, string | string[]>,
         questions?: AssistantUserInputQuestion[]
     ): Promise<{ continuationPrompt: string | null }>
-    disconnect(threadId: string): void
+    disconnect(threadId: string, options?: { preserveThreadState?: boolean }): void
+    setNavigationBackgrounded?(threadId: string, backgrounded: boolean): void
+    releaseNavigationBackgroundedThread?(threadId: string): void
     dispose(): void
     on(event: 'runtime', listener: (event: AssistantRuntimeEvent) => void): this
 }
@@ -80,6 +87,7 @@ export interface AssistantServiceActionDeps {
     hydrateSelectedSession(sessionId: string): Promise<void>
     getFirstUserMessageText(sessionId: string): Promise<string | null>
     getNewChatExecutionDefaults(): Promise<AssistantNewChatExecutionDefaults>
+    getNewChatPreparationModel?(): Promise<string | null>
     getTitleGenerationModel(): Promise<string | null>
     getRuntimePolicy?(): Promise<AssistantRuntimePolicy>
     appendEvent(

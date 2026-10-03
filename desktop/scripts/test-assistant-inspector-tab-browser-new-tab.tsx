@@ -32,9 +32,10 @@ assert.equal(isBrowserDevscopeBridgePath(['scanExternalBrowserHistoryProfiles'])
 assert.equal(isBrowserDevscopeBridgePath(['importExternalBrowserHistory']), false, 'thin Browser clients cannot import Desktop browser history')
 assert.equal(calculateWorkspaceTabWidth(900, 4), 168, 'very wide Inspector tabs stop at a restrained browser-tab maximum')
 assert.equal(calculateWorkspaceTabWidth(800, 4), 150, 'wide tabs use the available Inspector title bar instead of clustering at the left')
-assert.equal(calculateWorkspaceTabWidth(600, 4), 100, 'tabs consume available Inspector width evenly')
-assert.equal(calculateWorkspaceTabWidth(500, 4), 75, 'tabs contract continuously with the Inspector')
-assert.equal(calculateWorkspaceTabWidth(420, 4), 74, 'tabs retain a readable minimum before the rail scrolls')
+assert.equal(calculateWorkspaceTabWidth(600, 4), 112, 'tabs stop shrinking while their titles remain readable')
+assert.equal(calculateWorkspaceTabWidth(500, 4), 112, 'narrow Inspectors scroll rather than crush tab labels')
+assert.equal(calculateWorkspaceTabWidth(420, 4), 112, 'tabs retain the same minimum width before the rail scrolls')
+assert.equal(calculateWorkspaceTabWidth(900, 10), 112, 'many tabs overflow beneath the pinned add action')
 assert.deepEqual(ASSISTANT_INSPECTOR_TAB_KEYBOARD_CODES, {
     start: ['Space'],
     cancel: ['Escape'],
@@ -269,6 +270,7 @@ const apiSource = readFileSync(new URL('../src/shared/contracts/devscope-api.ts'
 assert.match(inspectorSource, /synchronizeTabWidths\(latest\.width\)/, 'tab widths update in the same animation frame as the Inspector drag')
 assert.match(inspectorSource, /color-text\)_9%,var\(--surface-inspector-tab\)/, 'the active rounded tab has the stronger contrast surface')
 assert.match(inspectorSource, /text-sparkle-text-secondary\/82/, 'inactive tabs remain clearly legible')
+assert.match(inspectorSource, /tabRailOverflow && 'before:pointer-events-none/, 'overflowing Inspector tabs fade beneath the pinned add action')
 assert.match(inspectorSource, /DndContext[\s\S]*PointerSensor[\s\S]*activationConstraint: \{ distance: 4 \}/, 'Inspector tabs use deliberate pointer-activated drag-and-drop instead of native drag ghosts')
 assert.match(inspectorSource, /SortableContext[\s\S]*horizontalListSortingStrategy/, 'neighboring Inspector tabs react continuously while the dragged tab crosses them')
 assert.match(inspectorSource, /modifiers=\{\[tabDragModifier\]\}/, 'the docked strip uses the shared deliberate tear-off handoff controller')

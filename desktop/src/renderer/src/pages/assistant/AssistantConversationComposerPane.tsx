@@ -1,4 +1,6 @@
-import { memo, useCallback, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
+// @refresh reset
+import { memo, useCallback, type RefObject } from 'react'
+import { useNonPassiveWheel } from '@/lib/useNonPassiveWheel'
 import type { AssistantApprovalDecision, AssistantPendingApproval, AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantReasoningEffort, AssistantRuntimeMode, AssistantTurnUsage, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import type { ControlPendingActionApproval, ControlPendingGrant, ControlTarget } from '@shared/agent-control/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -49,6 +51,8 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     projectRoots?: AssistantComposerProjectRoot[]
     projectChoices?: AssistantProjectChoice[]
     projectContextDisabled?: boolean
+    projectContextUnavailableReason?: string | null
+    onProjectContextUnavailable?: (reason: string) => void
     onSelectProject?: (projectId: string | null) => Promise<void> | void
     onCreateProject?: () => Promise<void> | void
     availableModels: Array<{ id: string; label: string; description?: string }>
@@ -109,20 +113,22 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
         sessionMode: props.selectedSessionMode,
         projectPath: props.selectedProjectPath
     })
-    const handlePaneWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    const handlePaneWheel = useCallback((event: WheelEvent) => {
         if (!props.onOverflowWheel || event.deltaY === 0 || isWaitingForControlApproval || isWaitingForApproval || hasPendingPlaygroundLabRequest) return
         if (event.target instanceof Element && event.target.closest('[data-assistant-composer-hitbox="true"]')) return
 
-        const lineHeight = Number.parseFloat(window.getComputedStyle(event.currentTarget).lineHeight || '0') || 20
-        const pageHeight = event.currentTarget.clientHeight || lineHeight * 3
+        const element = event.currentTarget as HTMLDivElement
+        const lineHeight = Number.parseFloat(window.getComputedStyle(element).lineHeight || '0') || 20
+        const pageHeight = element.clientHeight || lineHeight * 3
         const deltaFactor = event.deltaMode === 1 ? lineHeight : event.deltaMode === 2 ? pageHeight : 1
         event.preventDefault()
         props.onOverflowWheel(event.deltaY * deltaFactor)
     }, [hasPendingPlaygroundLabRequest, isWaitingForApproval, isWaitingForControlApproval, props.onOverflowWheel])
+    const paneWheelRef = useNonPassiveWheel<HTMLDivElement>(handlePaneWheel, props.paneRef)
 
     return (
         <div
-            ref={props.paneRef}
+            ref={paneWheelRef}
             className={cn(
                 'w-full px-4 will-change-transform',
                 placement === 'center'
@@ -130,7 +136,6 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     : 'pointer-events-none absolute inset-x-0 bottom-0 z-40 translate-y-0 pb-4'
             )}
             style={placement === 'bottom' ? { paddingTop: ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX } : undefined}
-            onWheel={handlePaneWheel}
         >
             {isWaitingForControlApproval ? (
                 <AssistantPendingControlApprovalPanel
@@ -238,6 +243,8 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         projectRoots={props.projectRoots}
                         projectChoices={props.projectChoices}
                         projectContextDisabled={props.projectContextDisabled}
+                        projectContextUnavailableReason={props.projectContextUnavailableReason}
+                        onProjectContextUnavailable={props.onProjectContextUnavailable}
                         onSelectProject={props.onSelectProject}
                         onCreateProject={props.onCreateProject}
                         onReconnect={props.onReconnect}

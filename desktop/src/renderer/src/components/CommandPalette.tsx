@@ -1,10 +1,21 @@
+import { APP_NAVIGATION_COMMANDS, COMMANDS } from '@shared/keybindings'
+import type { AssistantAccountOverview, AssistantSession } from '@shared/assistant/contracts'
+import type { UsageSummary } from '@shared/assistant/usage-summary'
+import { dispatchAppNavigation } from '@/lib/app-navigation'
+import { useShortcutLabel } from '@/lib/keybindings'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { MessageSquare, Settings, SquarePen } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Activity, MessageSquare, Palette, Settings, SquarePen } from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useCommandPalette } from '@/lib/commandPalette'
+import { getThemePresetAccent, useSettings } from '@/lib/settings'
+import { getThemeAppearance, THEMES } from '@/lib/settings-theme-catalog'
+import { buildRateLimitCards } from '@/pages/settings/assistant-account-rate-limits'
+import { createActiveThemePresetPatch } from '@/pages/settings/appearance/appearance-settings-model'
+import { fetchUsageSummary } from '@/pages/settings/usage/useUsageSummary'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/assistant-store-hooks'
 import { cn } from '@/lib/utils'
 import { CommandPaletteResults } from './CommandPaletteResults'
+import { findVisibleActions } from './command-palette-visible-actions'
 import { resolveCommandPaletteArrowIndex } from './command-palette-navigation'
 import {
     formatAssistantSidebarRelativeTime,
@@ -25,17 +36,39 @@ import { addOverlayEventListener, getOverlayActiveElement, NativeOverlayPortal }
 import { supportsNativeOverlay } from '@/components/ui/native-overlay-host'
 
 const MAX_RECENT_CHATS = 8
+const EMPTY_PALETTE_SESSIONS: AssistantSession[] = []
+const themeScopePattern = /^theme\s/i
+const actionScopePattern = /^action\s/i
+const usageScopePattern = /^usage(?:\s|$)/i
 
 export function CommandPalette() {
-    const { isOpen, close } = useCommandPalette()
+    const { isOpen, open, close } = useCommandPalette()
+    const { settings, updateSettings } = useSettings()
+    const shortcut = useShortcutLabel()
+    const newChatShortcut = shortcut('app.newChat')
+    const settingsShortcut = shortcut('app.settings')
     const navigate = useNavigate()
+    const location = useLocation()
     const assistantActions = useAssistantStoreActions()
-    const assistantSessions = useAssistantStoreSelector((state) => state.snapshot.sessions)
+    const assistantSessions = useAssistantStoreSelector((state) => isOpen ? state.snapshot.sessions : EMPTY_PALETTE_SESSIONS)
     const inputRef = useRef<HTMLInputElement>(null)
     const resultsRef = useRef<HTMLDivElement>(null)
     const previouslyFocusedElementRef = useRef<HTMLElement | null>(null)
 
     const [query, setQuery] = useState('')
+    useEffect(() => {
+        const handler = (event: Event) => {
+            setQuery((event as CustomEvent<string>).detail || '')
+            open()
+            window.setTimeout(() => inputRef.current?.focus(), 0)
+        }
+        window.addEventListener('zyra:palette-query', handler)
+        return () => window.removeEventListener('zyra:palette-query', handler)
+    }, [open])
+    const [accountUsage, setAccountUsage] = useState<AssistantAccountOverview | null>(null)
+    const [localUsage, setLocalUsage] = useState<UsageSummary | null>(null)
+    const [usageLoading, setUsageLoading] = useState(false)
+    const [usageError, setUsageError] = useState<string | null>(null)
     const [selectedIndex, setSelectedIndex] = useState(0)
     const [isClosing, setIsClosing] = useState(false)
     const closeTimerRef = useRef<number | null>(null)
@@ -83,11 +116,93 @@ export function CommandPalette() {
         }
     }, [])
 
-    const chatSearch = useAssistantChatSearch(query, isOpen)
+    const themeScoped = themeScopePattern.test(query)
+    const actionScoped = actionScopePattern.test(query)
+    const usageScoped = usageScopePattern.test(query)
+    const themeTerm = themeScoped ? query.replace(themeScopePattern, '').trim().toLowerCase() : ''
+    const actionTerm = actionScoped ? query.replace(actionScopePattern, '').trim().toLowerCase() : ''
+    const chatSearch = useAssistantChatSearch(themeScoped || actionScoped || usageScoped ? '' : query, isOpen && !themeScoped && !actionScoped && !usageScoped)
     const deferredSearchTerm = useDeferredValue(chatSearch.query.toLowerCase())
     const localSearchTerm = deferredSearchTerm.replace(/["']/g, '')
 
+    useEffect(() => {
+        if (!isOpen || !usageScoped) return
+        let disposed = false
+        setUsageLoading(true)
+        setUsageError(null)
+        const localInput = { days: 7 as const, harness: 'zyra' as const, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+        void Promise.allSettled([
+            window.devscope.assistant.getAccountOverview(false),
+            fetchUsageSummary(localInput)
+        ]).then(([account, local]) => {
+            if (disposed) return
+            if (account.status === 'fulfilled' && account.value.success) setAccountUsage(account.value.overview)
+            else setAccountUsage(null)
+            if (local.status === 'fulfilled') setLocalUsage(local.value)
+            else setLocalUsage(null)
+            if (account.status === 'rejected' && local.status === 'rejected') setUsageError('Usage is unavailable right now.')
+            setUsageLoading(false)
+        })
+        return () => { disposed = true }
+    }, [isOpen, usageScoped])
+
     const results = useMemo<Result[]>(() => {
+        if (!isOpen) return []
+        if (themeScoped) {
+            return THEMES.filter(theme => `${theme.name} ${theme.description}`.toLowerCase().includes(themeTerm)).map(theme => ({
+                id: `theme-${theme.id}`,
+                title: theme.name,
+                subtitle: getThemeAppearance(theme.id) === 'dark' ? 'Dark theme' : 'Light theme',
+                badge: settings.theme === theme.id && !settings.appearanceCustomThemeActive ? 'Current' : 'Apply',
+                icon: <span className="size-3.5 rounded-full border border-white/20" style={{ background: theme.tokens.accent }} />,
+                group: 'Themes',
+                action: () => { void updateSettings(createActiveThemePresetPatch(settings, getThemeAppearance(theme.id), theme.id, {
+                    resolveTheme: () => theme.id,
+                    getThemeAppearance,
+                    getPresetAccent: getThemePresetAccent
+                })) }
+            }))
+        }
+        if (actionScoped) {
+            return findVisibleActions()
+                .filter(action => `${action.label} ${action.context}`.toLowerCase().includes(actionTerm))
+                .slice(0, 40)
+                .map((action, index) => ({
+                    id: `visible-action-${index}`,
+                    title: action.label,
+                    subtitle: action.context || 'Current page',
+                    icon: <Settings size={14} />,
+                    group: 'Current page',
+                    action: () => window.setTimeout(() => {
+                        if (action.element.isConnected) action.element.click()
+                    }, 140)
+                }))
+        }
+        if (usageScoped) {
+            const cards = buildRateLimitCards(accountUsage, 'remaining')
+            const accountResults: Result[] = cards.slice(0, 4).map(card => ({
+                id: `usage-${card.id}`, title: `${card.bucketLabel} · ${card.durationLabel}`,
+                subtitle: card.resetSummary, badge: card.percentLabel,
+                detail: <span className="block h-1 w-full max-w-48 overflow-hidden rounded-full bg-white/10"><span className="block h-full rounded-full bg-[var(--accent-primary)]" style={{ width: `${card.percent}%` }} /></span>,
+                icon: <Activity size={14} />, group: 'Subscription limits',
+                action: () => navigate('/settings/providers/limits')
+            }))
+            const localResult: Result = {
+                id: 'usage-local', title: 'Zyra activity · last 7 days',
+                subtitle: localUsage ? `${localUsage.totals.turns.toLocaleString()} turns` : usageLoading ? 'Loading…' : 'Unavailable',
+                badge: localUsage?.totals.meteredTurns ? `${new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(localUsage.totals.tokens)} tokens` : undefined,
+                detail: localUsage ? <span className="flex h-4 items-end gap-0.5" aria-label="Token activity over the past seven days">{localUsage.daily.map(day => {
+                    const max = Math.max(1, ...localUsage.daily.map(value => value.tokens))
+                    return <span key={day.date} className="w-2 rounded-sm bg-[var(--accent-primary)]" style={{ height: `${Math.max(2, Math.round(day.tokens / max * 14))}px` }} title={`${day.date}: ${day.tokens.toLocaleString()} tokens`} />
+                })}</span> : undefined,
+                icon: <Activity size={14} />, group: 'Local activity',
+                action: () => navigate('/settings/providers/usage')
+            }
+            return [...(accountResults.length ? accountResults : [{ id: 'usage-account-unavailable', title: usageLoading ? 'Checking subscription limits…' : accountUsage?.requiresOpenaiAuth ? 'Connect ChatGPT to view limits' : 'Subscription limits unavailable', icon: <Activity size={14} />, group: 'Subscription limits', action: () => navigate('/settings/providers/limits') }]), localResult,
+                { id: 'usage-details', title: 'Open usage details', subtitle: usageError || 'Full activity and limits', icon: <Settings size={14} />, group: 'Actions', action: () => navigate('/settings/providers/usage') }]
+        }
+        if (/^theme$/i.test(query.trim())) return [{ id: 'theme-scope', title: 'Choose theme', subtitle: 'Type a space, then a theme name', icon: <Palette size={14} />, group: 'Actions', keepOpen: true, action: () => setQuery('theme ') }]
+        if (/^action$/i.test(query.trim())) return [{ id: 'action-scope', title: 'Find an action on this page', subtitle: 'Type a space, then an action name', icon: <Settings size={14} />, group: 'Actions', keepOpen: true, action: () => setQuery('action ') }]
         const matchesTerm = (...values: Array<string | undefined | null>) => {
             if (!localSearchTerm) return true
             return values.some((value) => String(value || '').toLowerCase().includes(localSearchTerm))
@@ -173,11 +288,23 @@ export function CommandPalette() {
             : []
 
         const actions: Result[] = [
+            ...APP_NAVIGATION_COMMANDS.map(id => {
+                const command = COMMANDS.find(command => command.id === id)!
+                return { id: `action-${id}`, title: command.label, subtitle: 'Navigate', badge: shortcut(id) || 'Action', icon: <Settings size={14} />, group: 'Actions', action: () => { previouslyFocusedElementRef.current = null; window.setTimeout(() => dispatchAppNavigation(id, navigate, location.pathname), 140) } }
+            }),
+            ...COMMANDS.filter(command => {
+                const workspace = document.querySelector<HTMLElement>('[data-inspector-workspace]:not([aria-hidden="true"])')?.dataset.inspectorWorkspace
+                return command.scope === workspace && (workspace === 'browser' || workspace === 'terminal')
+            }).map(command => ({
+                id: `action-${command.id}`, title: command.label, subtitle: 'Current workspace',
+                badge: shortcut(command.id), icon: <Settings size={14} />, group: 'Actions',
+                action: () => window.dispatchEvent(new CustomEvent('zyra:run-scoped-command', { detail: command.id }))
+            })),
             {
                 id: 'action-new-chat',
                 title: 'New chat',
                 subtitle: 'Start a blank chat',
-                badge: 'Action',
+                badge: newChatShortcut || 'Action',
                 icon: <SquarePen size={14} />,
                 group: 'Actions',
                 action: () => {
@@ -188,7 +315,7 @@ export function CommandPalette() {
                 id: 'action-settings',
                 title: 'Settings',
                 subtitle: 'Browse app preferences',
-                badge: 'Open',
+                badge: settingsShortcut || 'Open',
                 icon: <Settings size={14} />,
                 group: 'Actions',
                 action: () => navigate('/settings')
@@ -198,7 +325,7 @@ export function CommandPalette() {
         return deferredSearchTerm
             ? [...localChats, ...contentChats, ...settingsResults, ...actions]
             : [...localChats, ...actions]
-    }, [assistantActions, assistantSessions, chatSearch.matches, chatSearch.query, chatSearch.scope, deferredSearchTerm, localSearchTerm, navigate])
+    }, [isOpen, accountUsage, actionScoped, actionTerm, assistantActions, assistantSessions, chatSearch.matches, chatSearch.query, chatSearch.scope, deferredSearchTerm, localSearchTerm, localUsage, navigate, newChatShortcut, query, settings, settingsShortcut, shortcut, themeScoped, themeTerm, updateSettings, usageError, usageLoading, usageScoped, location.pathname])
 
     useEffect(() => {
         setSelectedIndex(0)
@@ -222,7 +349,8 @@ export function CommandPalette() {
         try {
             result.action()
         } finally {
-            handleClose()
+            if (result.keepOpen) activationPendingRef.current = false
+            else handleClose()
         }
     }, [handleClose])
 
@@ -233,6 +361,11 @@ export function CommandPalette() {
             if (event.key === 'Escape') {
                 event.preventDefault()
                 handleClose()
+                return
+            }
+            if ((themeScoped || actionScoped) && event.target === inputRef.current && event.key === 'Backspace' && !query.slice(actionScoped ? 7 : 6)) {
+                event.preventDefault()
+                setQuery(actionScoped ? 'action' : 'theme')
                 return
             }
             if (event.key === 'Tab') {
@@ -255,7 +388,7 @@ export function CommandPalette() {
         }
 
         return addOverlayEventListener('keydown', handler)
-    }, [handleClose, isOpen, results, selectedIndex, selectResult])
+    }, [actionScoped, handleClose, isOpen, query, results, selectedIndex, selectResult, themeScoped])
 
     if (!isOpen) return null
 
@@ -265,7 +398,7 @@ export function CommandPalette() {
             ? 'Chat history search is unavailable. Recent results remain available.'
             : `${results.length} result${results.length === 1 ? '' : 's'}${chatSearch.indexingOlderChats ? '. Indexing older chats in the background.' : '.'}`
 
-    return <NativeOverlayPortal onReady={() => inputRef.current?.focus()}>
+    return <NativeOverlayPortal focusOnPresent onReady={() => inputRef.current?.focus({ preventScroll: true })}>
         <div
             className={cn(
                 'fixed inset-0 z-[60] flex items-start justify-center bg-sparkle-bg/70 px-3 pt-[18vh] backdrop-blur-sm sm:px-6',
@@ -284,20 +417,23 @@ export function CommandPalette() {
                 onClick={(event) => event.stopPropagation()}
             >
                 <h2 id="command-palette-title" className="sr-only">Search Zyra</h2>
+                <div className="flex min-h-9 items-center px-5">
+                {themeScoped || actionScoped ? <span className="mr-2 shrink-0 rounded-md bg-[var(--accent-primary)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-primary)]">{themeScoped ? 'Theme' : 'Action'}</span> : null}
                 <input
                     ref={inputRef}
                     data-native-overlay-autofocus
                     role="combobox"
-                    aria-label="Search chats, actions, or settings"
+                    aria-label={themeScoped ? 'Search themes' : actionScoped ? 'Search actions on this page' : 'Search chats, actions, or settings'}
                     aria-autocomplete="list"
                     aria-expanded="true"
                     aria-controls="command-palette-results"
                     aria-activedescendant={results[selectedIndex] ? `command-palette-result-${selectedIndex}` : undefined}
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search chats, actions, or settings"
-                    className="h-9 w-full bg-transparent px-5 text-[15px] font-normal text-sparkle-text outline-none placeholder:text-sparkle-text-muted/58"
+                    value={themeScoped ? query.slice(6) : actionScoped ? query.slice(7) : query}
+                    onChange={(event) => setQuery(themeScoped ? `theme ${event.target.value}` : actionScoped ? `action ${event.target.value}` : event.target.value)}
+                    placeholder={themeScoped ? 'Search theme names' : actionScoped ? 'Search visible actions' : 'Search chats, actions, or settings'}
+                    className="h-9 min-w-0 w-full bg-transparent text-[15px] font-normal text-sparkle-text outline-none placeholder:text-sparkle-text-muted/58"
                 />
+                </div>
                 <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
                     {accessibleSearchStatus}
                 </div>

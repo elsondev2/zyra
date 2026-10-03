@@ -10,8 +10,8 @@ import {
 import { OpenAIAuthWorkerClient } from '../src/main/setup/openai-auth-worker-client'
 
 const fixture = await mkdtemp(path.join(os.tmpdir(), 'zyra-voice-responsiveness-'))
-const previousAgentDir = process.env.PI_CODING_AGENT_DIR
-process.env.PI_CODING_AGENT_DIR = fixture
+const previousAgentDir = process.env.ZYRA_CODING_AGENT_DIR
+process.env.ZYRA_CODING_AGENT_DIR = fixture
 
 function createMaximumDurationWav(): Buffer {
     const dataBytes = CODEX_VOICE_SAMPLE_RATE_HZ * 2 * 120
@@ -69,7 +69,7 @@ try {
     }))
 } finally {
     await worker.dispose()
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    if (previousAgentDir === undefined) delete process.env.ZYRA_CODING_AGENT_DIR
+    else process.env.ZYRA_CODING_AGENT_DIR = previousAgentDir
     await rm(fixture, { recursive: true, force: true })
 }

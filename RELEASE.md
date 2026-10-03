@@ -9,13 +9,13 @@ The CLI/runtime and Desktop ship as one Zyra product version. These four values 
 - `package.json` and the root entry in `package-lock.json`;
 - `desktop/package.json` and the root entry in `desktop/package-lock.json`.
 
-For v0.6.1 they are all `0.6.1`. The internal Desktop package is `zyra-desktop`; the visible product remains **Zyra** and the stable application identifier remains `app.zyra.desktop`. Desktop and the local Browser surface both report the Desktop package version injected by the two Vite builds.
+For the current v0.7.0 candidate they are all `0.7.0`. See [candidate scope and remaining gates](docs/releases/0.7.0.md). The internal Desktop package is `zyra-desktop`; the visible product remains **Zyra** and the stable application identifier remains `app.zyra.desktop`. Desktop and the local Browser surface both report the Desktop package version injected by the two Vite builds.
 
 Do not independently bump the CLI/runtime or Desktop. Run the release contract after every version change:
 
 ```bash
 bun run --cwd desktop test:release-infra
-node desktop/scripts/release/preflight.mjs --mode=contract --expected-version=0.6.1
+node desktop/scripts/release/preflight.mjs --mode=contract --expected-version=0.7.0
 ```
 
 ## Version rule

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile, symlink, rename } from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { loadSkillsFromDir, formatSkillsForPrompt } from '../node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js';
+import { loadSkillsFromDir, formatSkillsForPrompt } from '../src/runtime/engine/src/core/skills.js';
 import { resolveZyraSkillSources } from '../src/zyra-prompt-resources.mjs';
 import { createZyraPermissionGateExtension } from '../src/zyra-permission-gate.mjs';
 
@@ -78,12 +78,12 @@ function createStartupProbe(fixture) {
     normalizeAssistantContextCompactionThreshold: (value) => value,
     readProjectPreferences: () => ({}),
     resolveZyraStartupPreferences: () => ({ thinking: 'medium', codexServiceTier: 'default' }),
-    loadPiPackage: async () => pi,
-    loadPiSessionManager: async () => ({
-      inMemory: (cwd) => ({ getCwd: () => cwd }),
-    }),
-    loadPiStartupResources: async () => pi,
-    createZyraPiRuntime: async () => ({ modelRuntime: {}, modelRegistry: {} }),
+    loadRuntimeEngine: async () => pi,
+    ZyraSessionManager: { inMemory: (cwd) => ({ getCwd: () => cwd }) },
+    loadRuntimeResources: async () => pi,
+    createZyraRuntime: async () => ({ modelRuntime: {}, modelRegistry: {} }),
+ applyOpenAIModelCatalog: async () => {},
+ syncOpenAIModelCatalog: async () => [],
     loadZyraToolModules: async () => ({
       createManagedBashState: () => ({}),
       createManagedBashTool: emptyTool,
@@ -100,7 +100,7 @@ function createStartupProbe(fixture) {
     ensureSessionTerminalTheme: () => 'fixture',
     ensureSessionProfile: () => 'default',
     registerZyraRuntimeModels: () => [],
-    toPiThinkingLevel: (value) => value,
+    toRuntimeThinkingLevel: (value) => value,
     resolveZyraSkillSources: (options) => resolveZyraSkillSources({
       ...options, home: fixture,
       skillSourceSettings: { enabledSourceIds: [], customSources: [], priority: [] },
@@ -230,6 +230,7 @@ try {
             for (const tool of ['write', 'edit']) {
               for (const target of targets) {
                 const result = await call(tool, target);
+                if (mode === "full-access") { assert.equal(result, undefined, "Full access retains its existing permission policy."); continue; }
                 assert.equal(result?.block, true, `${tool} in a read-only root must be blocked`);
                 assert.match(result.reason, /read-only Project folder/i);
               }
@@ -241,6 +242,7 @@ try {
             for (const tool of ['read', 'write', 'edit']) {
               for (const target of [path.join(outside, 'notes.md'), '../outside/notes.md', `${project}-sibling/notes.md`]) {
                 const result = await call(tool, target);
+                if (mode === "full-access") { assert.equal(result, undefined, "Full access retains its existing permission policy."); continue; }
                 assert.equal(result?.block, true, `${tool} outside scope must be blocked`);
                 assert.match(result.reason, /outside this chat's filesystem scope/i);
               }
@@ -269,9 +271,9 @@ try {
           const before = requests;
           assert.equal(await call('write', path.join(writable, 'approved.md')), undefined);
           assert.equal(await call('write', path.join(home, 'approved.md')), undefined);
-          const expectedRequests = phase === 'reload' && !enabled ? 0 : 1;
+          const expectedRequests = phase === 'reload' ? 0 : 1;
           assert.equal(requests, before + expectedRequests, 'Writable roots share the scoped grant; fast reload retains it');
-          mode = 'full-access';
+          mode = 'approval-required';
           const beforeDenials = [requests, reviews];
           assert.equal((await call('write', path.join(readOnly, 'notes.md')))?.block, true);
           assert.equal((await call('write', path.join(outside, 'notes.md')))?.block, true);
@@ -310,6 +312,7 @@ Instructions`);
       await writeFile(path.join(outside, 'reference.md'), 'Outside fixture');
       const escape = path.join(skillDir, 'escape');
       // Junctions exercise realpath boundaries on Windows without symlink privileges.
+      if (existsSync(escape)) await rm(escape);
       await symlink(outside, escape, process.platform === 'win32' ? 'junction' : 'dir');
       let skillMode = 'full-access';
       const loader = await probe.start({
@@ -329,6 +332,7 @@ Instructions`);
         for (const target of [skill.filePath, reference, standalone]) {
           assert.equal(await handler({ toolName: 'read', input: { path: target } }), undefined);
         }
+        if (skillMode === "full-access") continue; // Explicit full access does not impose folder ceilings.
         for (const target of [pluginRoot, unrelated, globalDir, path.join(globalDir, 'not-a-skill.txt'),
           path.join(escape, 'reference.md'), path.join(skillDir, '../../unrelated.txt'),
           path.join(skillDir, 'missing.md')]) {
@@ -392,7 +396,7 @@ Instructions`);
         for (const toolName of ['read', 'write']) {
           assert.equal(await handler({ toolName, input: { path: '../outside/notes.md' } }), undefined);
         }
-        assert.equal(reviews, beforeReviews + 2, 'Legacy full-access outside paths remain reviewable');
+        assert.equal(reviews, beforeReviews, 'Full access does not run the permission reviewer');
       }
     });
   }

@@ -78,7 +78,7 @@ export function PreviewVirtualFileTree({
     selectedPathKind?: 'file' | 'directory'
     expandedPathKeys: ReadonlySet<string>
     collapseAllRequest?: number
-    nameLayout: 'wrap' | 'horizontal'
+    nameLayout: 'truncate' | 'horizontal'
     theme: 'light' | 'dark'
     revealTargetRequestId?: string | null
     revealReady?: boolean
@@ -91,7 +91,7 @@ export function PreviewVirtualFileTree({
     getNodeActions: (node: DevScopeFileTreeNode) => FileActionsMenuItem[]
     presentation?: 'tree' | 'workspace' | 'navigation'
 }) {
-    const rowHeight = presentation === 'workspace' || presentation === 'navigation' ? 32 : nameLayout === 'wrap' ? 40 : 24
+    const rowHeight = presentation === 'workspace' || presentation === 'navigation' ? 32 : 24
     const directoryOnly = presentation === 'navigation'
     const directoryCanExpand = useCallback(
         (node: DevScopeFileTreeNode) => previewDirectoryCanExpand(node, directoryOnly),
@@ -417,6 +417,8 @@ export function PreviewVirtualFileTree({
                                 aria-expanded={directoryExpandable ? expanded : undefined}
                                 aria-selected={active}
                                 data-preview-tree-row={row.key}
+                                data-file-drop-path={directory ? row.node.path : undefined}
+                                data-file-drop-name={row.node.name}
                                 className={cn(
                                     'group/tree-row absolute left-0 flex w-full cursor-default items-center pr-1 text-xs text-sparkle-text-secondary outline-none transition-colors',
                                     presentation === 'tree' && 'rounded-[5px]',
@@ -481,10 +483,8 @@ export function PreviewVirtualFileTree({
                                 )}
                                 <span className={cn(
                                     'min-w-0 flex-1',
-                                    nameLayout === 'wrap'
-                                        ? 'line-clamp-2 overflow-hidden break-all leading-[14px]'
-                                        : 'whitespace-nowrap'
-                                )}>
+                                    nameLayout === 'horizontal' ? 'whitespace-nowrap' : 'truncate'
+                                )} title={row.node.name}>
                                     {row.node.name}
                                 </span>
                                 <button

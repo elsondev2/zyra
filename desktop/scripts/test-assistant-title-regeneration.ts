@@ -7,7 +7,7 @@ import {
     isAssistantTitleGenerationPrompt,
     normalizeAssistantAutoTitleTurnInterval
 } from '../src/shared/assistant/title-generation'
-import { buildSessionRetitlePrompt, regenerateSessionTitle, shouldAutoRegenerateSessionTitle } from '../src/main/assistant/session-title-generation'
+import { buildSessionRetitlePrompt, queueGeneratedSessionTitle, regenerateSessionTitle, regenerateSessionTitleFromPrompt, shouldAutoRegenerateSessionTitle } from '../src/main/assistant/session-title-generation'
 
 const turn = (number: number, prompt: string, response: string): AssistantReviewTurnIndexEntry => ({
     id: `turn-${number}`,
@@ -86,6 +86,64 @@ assert.match(generatedPrompts[0] || '', /^openai-codex\/gpt-5\.6-luna/)
 assert.deepEqual(patches.map((patch) => patch.titleGenerating), [true, false], 'all title surfaces share one generating lifecycle')
 assert.equal(patches[1]?.title, 'Title Regeneration Workflow')
 assert.deepEqual(canonicalTitles, ['Title Regeneration Workflow'])
+
+const firstTurnSession = { ...session, id: 'session-first-turn-title', title: 'Fix the title', threads: [] }
+const firstTurnPatches: Array<Record<string, unknown>> = []
+const firstTurnPrompts: string[] = []
+let finishAutomaticTitle: ((value: { success: boolean; text: string }) => void) | undefined
+const automaticTitle = queueGeneratedSessionTitle({
+    sessionId: firstTurnSession.id,
+    threadId: 'thread-first-turn-title',
+    messageText: 'Fix the title while the first turn is running.',
+    seedTitle: firstTurnSession.title,
+    cwd: 'C:/workspace',
+    generateText: (titlePrompt) => {
+        firstTurnPrompts.push(titlePrompt)
+        return new Promise((resolve) => { finishAutomaticTitle = resolve })
+    },
+    getSnapshot: () => ({ sessions: [firstTurnSession] }),
+    appendEvent: (_type, _occurredAt, payload) => {
+        Object.assign(firstTurnSession, payload.patch)
+    }
+})
+const manualTitle = regenerateSessionTitleFromPrompt({
+    sessionId: firstTurnSession.id,
+    threadId: 'thread-first-turn-title',
+    messageText: 'Fix the title while the first turn is running.',
+    seedTitle: firstTurnSession.title,
+    cwd: 'C:/workspace',
+    generateText: async () => { throw new Error('A second title request should not start.') },
+    getSnapshot: () => ({ sessions: [firstTurnSession] }),
+    appendEvent: (_type, _occurredAt, payload) => {
+        const patch = payload.patch as Record<string, unknown>
+        firstTurnPatches.push(patch)
+        Object.assign(firstTurnSession, patch)
+    }
+})
+finishAutomaticTitle?.({ success: true, text: 'First Turn Title Refresh' })
+await automaticTitle
+assert.equal(await manualTitle, 'First Turn Title Refresh', 'manual refresh joins the first-turn title request')
+assert.equal(firstTurnPrompts.length, 1, 'an active first turn starts only one utility request')
+assert.match(firstTurnPrompts[0] || '', /Fix the title while the first turn is running/)
+assert.equal(firstTurnSession.title, 'First Turn Title Refresh')
+assert.deepEqual(firstTurnPatches, [], 'joining automatic title generation does not add a duplicate lifecycle')
+
+const directPromptTitle = await regenerateSessionTitleFromPrompt({
+    sessionId: 'session-direct-first-turn',
+    threadId: 'thread-direct-first-turn',
+    messageText: 'Name the new chat before the answer completes.',
+    seedTitle: 'New chat',
+    cwd: 'C:/workspace',
+    generateText: async (titlePrompt) => {
+        assert.match(titlePrompt, /Name the new chat before the answer completes/)
+        return { success: true, text: 'First Turn Chat Title' }
+    },
+    getSnapshot: () => ({ sessions: [{ ...firstTurnSession, id: 'session-direct-first-turn', title: 'New chat' }] }),
+    appendEvent: (_type, _occurredAt, payload) => { firstTurnPatches.push(payload.patch as Record<string, unknown>) }
+})
+assert.equal(directPromptTitle, 'First Turn Chat Title')
+assert.deepEqual(firstTurnPatches.map((patch) => patch.titleGenerating), [true, false])
+
 assert.equal(normalizeAssistantAutoTitleTurnInterval(1), MIN_ASSISTANT_AUTO_TITLE_TURNS)
 assert.equal(normalizeAssistantAutoTitleTurnInterval(undefined), DEFAULT_ASSISTANT_AUTO_TITLE_TURNS)
 assert.equal(shouldAutoRegenerateSessionTitle(2, { enabled: true, turnInterval: 3 }), false)
@@ -109,6 +167,7 @@ assert.match(inboxSource, /AssistantSessionTitleText/)
 assert.match(settingsSource, /Refresh chat titles/)
 assert.match(settingsSource, /assistantTitleAutoRegenerateTurns/)
 assert.match(serviceSource, /shouldAutoRegenerateSessionTitle\(completedTurns\.length, preferences\)/)
+assert.match(serviceSource, /regenerateSessionTitleFromPrompt\(\{ \.\.\.titleArgs, messageText: firstPrompt \}\)/)
 assert.match(titleTextSource, /generating \? 'assistant-title-shimmer'/, 'all shared title surfaces enable the title-generation shimmer')
 assert.match(rendererCssSource, /\.assistant-title-shimmer,\s*\.assistant-model-name-shimmer \{/, 'title generation shares the composer model-name shimmer treatment')
 assert.match(rendererCssSource, /animation: assistantTextShimmer 2\.8s linear infinite/, 'shared text shimmer remains slow and smooth')

@@ -1,6 +1,6 @@
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { DEFAULT_MANAGED_BASH_AUTO_POLL_MS } from "./tool-contracts.mjs";
+import { createZyraLocalBashOperations } from "./zyra-shell-operations.mjs";
 
 const DEFAULT_INITIAL_WAIT_MS = 8000;
 const DEFAULT_STATUS_WAIT_MS = 5000;
@@ -50,7 +50,7 @@ export function createManagedBashState() {
 
 export function createManagedBashTool(options = {}) {
   const state = options.state ?? createManagedBashState();
-  const operations = createLocalBashOperations({ shellPath: options.shellPath });
+  const operations = createZyraLocalBashOperations({ shellPath: options.shellPath });
   const commandPrefix = String(options.commandPrefix ?? "");
   const cwd = options.cwd ?? process.cwd();
 
@@ -108,6 +108,7 @@ async function stopAction(state, input = {}) {
   const job = getJob(state, input.jobId);
   stopJob(job, "Command stopped");
   await job.done.catch(() => {});
+  if (job.error?.code === "SHELL_CLEANUP_FAILED") throw job.error;
   job.autoPollDone = true;
   return toolResult(formatStoppedJob(job), { jobId: job.id, status: "stopped", outputLineCount: countOutputLines(job.output) });
 }
@@ -157,6 +158,7 @@ function startJob({ state, operations, commandPrefix, cwd, command, executionCom
     flushLiveUpdate(job);
     clearLiveUpdateTimer(job);
     job.error = error instanceof Error ? error : new Error(String(error));
+    if (job.error.code === "SHELL_CLEANUP_FAILED") job.stoppedReason = undefined;
     job.completedAt = Date.now();
     emitManagedBashJobUpdate(job);
     return job;
@@ -305,6 +307,9 @@ function abortPromise(signal) {
 function finalJobResult(_state, job) {
   job.autoPollDone = true;
   const text = formatFinalJob(job);
+  if (job.stoppedReason) {
+    return toolResult(text, { jobId: job.id, status: "stopped", exitCode: job.exitCode, outputLineCount: countOutputLines(job.output) });
+  }
   if (job.error || (job.exitCode !== 0 && job.exitCode !== null && job.exitCode !== undefined)) {
     throw new Error(text);
   }

@@ -1,0 +1,41 @@
+{
+  "origin": "https://github.com/earendil-works/pi",
+  "importedAt": "2026-09-30",
+  "components": {
+    "engine": {
+      "upstream": "pi-coding-agent",
+      "version": "0.84.3",
+      "license": "MIT"
+    },
+    "agent": {
+      "upstream": "pi-agent-core",
+      "version": "0.84.3",
+      "license": "MIT"
+    },
+    "providers": {
+      "upstream": "pi-ai",
+      "version": "0.84.3",
+      "license": "MIT"
+    },
+    "terminal": {
+      "upstream": "pi-tui",
+      "version": "0.84.4",
+      "license": "MIT"
+    },
+    "protocol": {
+      "upstream": "pi-protocol",
+      "version": "0.84.3",
+      "license": "MIT"
+    },
+    "client": {
+      "upstream": "pi-client",
+      "version": "0.84.3",
+      "license": "MIT"
+    },
+    "telemetry": {
+      "upstream": "pi-telemetry",
+      "version": "0.84.3",
+      "license": "MIT"
+    }
+  }
+}

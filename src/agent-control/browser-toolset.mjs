@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineZyraTool } from "../agents/define-zyra-tool.mjs";
 import { Type } from "typebox";
 import { CONTROL_CAPABILITIES, unavailableControlResult } from "./contracts.mjs";
 import { formatControlObservation } from "./observation-feedback.mjs";
@@ -97,7 +97,7 @@ const browserSessionSchema = Type.Object({
 export function createBrowserToolSet(options = {}) {
   const controller = createActivationController(options.sessionRef);
   return [
-    defineTool({
+    defineZyraTool({
       name: BROWSER_LOADER_TOOL_NAME,
       label: "Browser tools",
       description: "Load Zyra's built-in tools for in-app Browser and paired Chrome interaction. Use these app tools instead of external browser skills or CLI setup. Honor the user's requested surface; list targets and reuse its tab first. Chrome connects automatically when the Zyra Browser extension and Desktop are running; list targets to discover the named Chrome browser and request access in chat; never silently substitute the in-app browser. Computer/desktop apps use the computer tools.",
@@ -107,7 +107,7 @@ export function createBrowserToolSet(options = {}) {
     bridgeTool({
       name: "browser_tabs",
       label: "Browser tabs",
-      description: "Discover, open, reveal, arrange, resize, refresh, close, or externally hand off retained in-app Browser tabs. Use the requested browser surface and reuse an existing matching tab first. New in-app tabs use the normal saved profile; incognito is opt-in. Use paired Chrome targets for explicit Chrome requests. These app tools work without any external browser skill, script or MCP setup. Closing requires an exact tab.manage grantId; refreshing requires navigate; external handoff requires tab.manage plus the exact allowed origin.",
+      description: "Discover, open, reveal, arrange, resize, refresh, close, or externally hand off retained in-app Browser tabs. Use the requested browser surface and reuse an existing matching tab first. New in-app tabs use the normal saved profile; incognito is opt-in. Keep in-app browsing in hidden tabs by default, including when the Inspector is collapsed or another chat is selected. Reveal tabs or change Inspector layout only when the user explicitly asks to see them. Requesting access and observing a page do not require opening the Inspector. Use paired Chrome targets for explicit Chrome requests. These app tools work without any external browser skill, script or MCP setup. Closing requires an exact tab.manage grantId; refreshing requires navigate; external handoff requires tab.manage plus the exact allowed origin.",
       parameters: browserTabsSchema,
       client: options.client,
       timeoutMs: 60_000,
@@ -225,7 +225,7 @@ function createActivationController(sessionRef) {
 }
 
 function bridgeTool({ name, label, description, parameters, client, toOperation, timeoutMs, local }) {
-  return defineTool({
+  return defineZyraTool({
     name,
     label,
     description,

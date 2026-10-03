@@ -13,6 +13,7 @@ import {
     type ProjectTypeDefinition
 } from '../ipc/project-detection'
 import { resolveProjectIconPath } from './project-icon-resolver'
+import { invalidateLivePathSearch, searchLivePaths } from './file-live-search'
 import type {
     DevScopeIndexedPathEntry,
     DevScopeIndexedPathSearchInput,
@@ -47,6 +48,7 @@ type IndexedDirectoryMetadata = {
 const FILE_INDEX_SCHEMA_VERSION = 1
 const FILE_INDEX_FLUSH_DEBOUNCE_MS = 1200
 const FILE_INDEX_YIELD_INTERVAL = 64
+const FILE_INDEX_PAUSE_MS = 4
 const FILE_INDEX_SEARCH_FALLBACK_MULTIPLIER = 6
 const FILE_INDEX_SEARCH_RESULT_CACHE_LIMIT = 120
 const FILE_INDEX_MAX_DEPTH = 32
@@ -146,7 +148,7 @@ function isRecoverableSqliteError(error: unknown): boolean {
 
 function yieldToEventLoop(): Promise<void> {
     return new Promise((resolvePromise) => {
-        setImmediate(resolvePromise)
+        setTimeout(resolvePromise, FILE_INDEX_PAUSE_MS)
     })
 }
 
@@ -245,8 +247,6 @@ class FileIndexService {
     private pendingRefreshPaths = new Set<string>()
     private pendingDeletedPaths = new Set<string>()
     private refreshTimer: NodeJS.Timeout | null = null
-    private scopeIndexPromises = new Map<string, Promise<void>>()
-    private indexedScopeCache = new Map<string, number>()
     private searchResultCache = new Map<string, DevScopeIndexedPathSearchResult>()
 
     constructor() {
@@ -257,7 +257,7 @@ class FileIndexService {
         this.filePath = join(indexDir, 'file-index.sqlite')
     }
 
-    async indexFolders(folders: string[]): Promise<FileIndexFoldersResult> {
+    async indexFolders(folders: string[], options?: { forceRefresh?: boolean }): Promise<FileIndexFoldersResult> {
         await this.ensureInitialized()
         const normalizedFolders = Array.from(new Set(
             folders
@@ -267,6 +267,7 @@ class FileIndexService {
         ))
 
         const errors: Array<{ folder: string; error: string }> = []
+        const indexedRoots = await this.enqueue(() => this.readIndexedRoots())
         for (const folder of normalizedFolders) {
             if (isBroadUnsafeIndexRoot(folder)) {
                 errors.push({ folder, error: 'Choose a specific project folder instead of a home, app-data, or drive root.' })
@@ -278,6 +279,8 @@ class FileIndexService {
                 errors.push({ folder, error: error?.message || 'Folder is unavailable.' })
                 continue
             }
+            if (!options?.forceRefresh && indexedRoots.some(root => root.normalizedRootPath === normalizePathKey(folder)
+                && Date.now() - root.lastIndexedAt < FILE_INDEX_REVALIDATE_MS)) continue
 
             await this.enqueue(async () => {
                 await this.reindexRoot(folder)
@@ -301,19 +304,25 @@ class FileIndexService {
                 .filter(Boolean)
                 .map((root) => resolve(root))
         ))
-
-        if (scopePath) {
-            await this.ensureScopeIndexed(resolve(scopePath))
-        } else if (roots.length > 0) {
-            await this.ensureRootsIndexed(roots)
+        const searchRoots = scopePath ? [resolve(scopePath)] : roots
+        if (searchRoots.length > 0) {
+            const safeRoots = searchRoots.filter(root => !isBroadUnsafeIndexRoot(root))
+            if (safeRoots.length === 0) return { entries: [], ancestors: [], totalMatched: 0 }
+            const allIndexed = await this.enqueue(() => safeRoots.every(root => {
+                const indexedRoot = scopePath
+                    ? this.findCoveringRoot(root)
+                    : this.readIndexedRoots().find(row => row.normalizedRootPath === normalizePathKey(root))
+                return Boolean(indexedRoot && Date.now() - indexedRoot.lastIndexedAt < FILE_INDEX_REVALIDATE_MS)
+            }))
+            if (!allIndexed) return await searchLivePaths(input, safeRoots)
         }
-
         return await this.enqueue(async () => this.searchPathsInternal(input))
     }
 
     scheduleRefreshPath(pathValue: string): void {
         const normalizedPath = String(pathValue || '').trim()
         if (!normalizedPath) return
+        invalidateLivePathSearch()
         this.pendingRefreshPaths.add(resolve(normalizedPath))
         this.schedulePendingRefresh()
     }
@@ -321,6 +330,7 @@ class FileIndexService {
     scheduleDeletedPath(pathValue: string): void {
         const normalizedPath = String(pathValue || '').trim()
         if (!normalizedPath) return
+        invalidateLivePathSearch()
         this.pendingDeletedPaths.add(resolve(normalizedPath))
         this.schedulePendingRefresh()
     }
@@ -397,51 +407,10 @@ class FileIndexService {
         this.requiresExportFlush = true
     }
 
-    private async ensureRootsIndexed(roots: string[]): Promise<void> {
-        const safeRoots = roots.filter((rootPath) => !isBroadUnsafeIndexRoot(rootPath))
-        const { missingRoots, staleRoots } = await this.enqueue(async () => {
-            const storedRoots = this.readIndexedRoots()
-            return {
-                missingRoots: safeRoots.filter((rootPath) => !storedRoots.some((row) => row.normalizedRootPath === normalizePathKey(rootPath))),
-                staleRoots: storedRoots.filter((row) => safeRoots.some((rootPath) => row.normalizedRootPath === normalizePathKey(rootPath)) && Date.now() - row.lastIndexedAt > FILE_INDEX_REVALIDATE_MS)
-            }
-        })
-
-        for (const root of staleRoots) this.scheduleRefreshPath(root.rootPath)
-        if (missingRoots.length > 0) await this.indexFolders(missingRoots)
-    }
-
-    private async ensureScopeIndexed(scopePath: string): Promise<void> {
-        if (isBroadUnsafeIndexRoot(scopePath)) return
-        const scopeKey = normalizePathKey(scopePath)
-        const indexedAt = this.indexedScopeCache.get(scopeKey)
-        if (indexedAt && Date.now() - indexedAt <= FILE_INDEX_REVALIDATE_MS) return
-        const existing = this.scopeIndexPromises.get(scopeKey)
-        if (existing) return existing
-        const request = this.ensureScopeIndexedOnce(scopePath).finally(() => {
-            if (this.scopeIndexPromises.get(scopeKey) === request) this.scopeIndexPromises.delete(scopeKey)
-        })
-        this.scopeIndexPromises.set(scopeKey, request)
-        return request
-    }
-
-    private async ensureScopeIndexedOnce(scopePath: string): Promise<void> {
-        const indexedRoot = await this.enqueue(async () => this.findCoveringRoot(scopePath))
-        if (indexedRoot) {
-            const isStale = Date.now() - indexedRoot.lastIndexedAt > FILE_INDEX_REVALIDATE_MS
-            this.indexedScopeCache.set(normalizePathKey(scopePath), isStale ? Date.now() : indexedRoot.lastIndexedAt)
-            if (isStale) this.scheduleRefreshPath(indexedRoot.rootPath)
-            return
-        }
-        await this.indexFolders([scopePath])
-        this.indexedScopeCache.set(normalizePathKey(scopePath), Date.now())
-    }
-
     private async reindexRoot(rootPath: string): Promise<void> {
         const db = this.requireDb()
         const normalizedRootPath = normalizePathKey(rootPath)
         const timestamp = Date.now()
-        this.indexedScopeCache.clear()
         this.searchResultCache.clear()
         db.run('BEGIN')
         try {
@@ -504,9 +473,6 @@ class FileIndexService {
         const normalizedTargetPath = normalizePathKey(targetPath)
         const parentPath = dirname(targetPath)
         const root = this.findCoveringRoot(parentPath)
-        for (const scopePath of this.indexedScopeCache.keys()) {
-            if (isPathWithinScope(scopePath, targetPath)) this.indexedScopeCache.delete(scopePath)
-        }
         this.searchResultCache.clear()
         db.run('BEGIN')
         try {
@@ -534,7 +500,6 @@ class FileIndexService {
         const db = this.requireDb()
         const existingRoot = this.findCoveringRoot(targetPath)
         if (!existingRoot) return
-        this.indexedScopeCache.clear()
         this.searchResultCache.clear()
         const normalizedTargetPath = normalizePathKey(targetPath)
         db.run('BEGIN')
@@ -635,7 +600,7 @@ class FileIndexService {
                     if (entry.isFile()) filePaths.push(entryPath)
                 }
 
-                const metadataBatchSize = 48
+                const metadataBatchSize = 16
                 for (let offset = 0; offset < filePaths.length && processedEntries < FILE_INDEX_MAX_ENTRIES_PER_ROOT; offset += metadataBatchSize) {
                     const batch = filePaths.slice(offset, offset + metadataBatchSize)
                     const fileMetadata = await Promise.all(batch.map(async (entryPath) => {
@@ -1160,8 +1125,8 @@ function getFileIndexService(): FileIndexService {
     return fileIndexService
 }
 
-export async function indexFilesAcrossFolders(folders: string[]): Promise<FileIndexFoldersResult> {
-    return await getFileIndexService().indexFolders(folders)
+export async function indexFilesAcrossFolders(folders: string[], options?: { forceRefresh?: boolean }): Promise<FileIndexFoldersResult> {
+    return await getFileIndexService().indexFolders(folders, options)
 }
 
 export async function searchIndexedPaths(

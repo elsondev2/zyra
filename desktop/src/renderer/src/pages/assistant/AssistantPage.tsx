@@ -1,27 +1,33 @@
 import { openDesktopLink } from '@/lib/desktop-links'
 import { desktopWebLink } from '@shared/desktop-link-policy'
-import { AssistantInspectorFrame } from './AssistantInspectorFrame'
+import { AssistantInspectorFrame, AssistantInspectorLoading } from './AssistantInspectorFrame'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AssistantActivity, AssistantChatScopeRoot, AssistantMessage, AssistantSession, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
 import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { useFilePreview } from '@/components/ui/file-preview/useFilePreview'
+import { AssistantPreviewResourceNavigator } from './AssistantPreviewResourceNavigator'
+import { buildAssistantResourceIndex } from './assistant-resource-index'
+import { assistantResourceForPath } from './assistant-resource-labels'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import { getActiveAssistantThread, getSelectedAssistantSession } from '@/lib/assistant/selectors'
 import { shouldHideAssistantRowsForSelection } from '@/lib/assistant/assistant-history-state'
 import { AssistantConversationPane } from './AssistantConversationPane'
-import { AssistantDiffPanel, type AssistantDiffRevealRequest } from './AssistantDiffPanel'
+import type { AssistantDiffRevealRequest } from './AssistantDiffPanel'
 import { resolveAssistantWorkingDirectory } from '@shared/assistant/working-directory'
 import { useSettings } from '@/lib/settings'
 import { buildAssistantDiffTurns } from './assistant-diff-turns'
 import { resolveAssistantDiffTarget, type AssistantDiffTarget } from './assistant-diff-types'
 import { openAssistantFileTarget } from './assistant-file-navigation'
-import { subscribeAssistantInspectorNavigation } from './assistant-inspector-navigation'
+import { acknowledgeAssistantInspectorNavigation, subscribeAssistantInspectorNavigation } from './assistant-inspector-navigation'
+import { subscribeAssistantConversationFind, cancelAssistantConversationFind } from './assistant-conversation-find'
+import { matchAssistantConversationMessages } from './assistant-conversation-find-matches'
+import { AssistantConversationFindBar } from './AssistantConversationFindBar'
 import { mergeAssistantReviewIndex } from './assistant-review-index'
 import { AssistantTransientToast, DeleteHistoryConfirm, useAssistantTransientToast } from './AssistantPageHelpers'
 import { useAssistantBrowserSurfaceRequests } from './useAssistantBrowserSurfaceRequests'
-import { useAssistantWorkspaceLayout } from './AssistantWorkspaceLayout'
+import { useAssistantWorkspaceLayout } from './assistant-workspace-context'
 import { useAssistantReviewIndex } from './useAssistantReviewIndex'
 import { useAssistantChatRouting } from './useAssistantChatRouting'
 import { parseAssistantChatRoute, parseAssistantMessageSearchTarget } from './assistant-chat-route'
@@ -49,6 +55,7 @@ const EMPTY_ASSISTANT_MESSAGES: AssistantMessage[] = []
 const EMPTY_ASSISTANT_ACTIVITIES: AssistantActivity[] = []
 const EMPTY_ASSISTANT_PROJECT_ROOTS: AssistantChatScopeRoot[] = []
 const FilePreviewModal = lazy(() => import('@/components/ui/FilePreviewModal'))
+const AssistantDiffPanel = lazy(async () => ({ default: (await import('./AssistantDiffPanel')).AssistantDiffPanel }))
 
 type AssistantDiffSourceSelection = {
     threadId: string | null
@@ -172,9 +179,46 @@ export default function AssistantPage() {
     const inspectorOpen = rightPanelMode === 'review'
     const [inspectorMounted, setInspectorMounted] = useState(inspectorOpen)
     useEffect(() => { if (inspectorOpen) setInspectorMounted(true) }, [inspectorOpen])
-    useEffect(() => subscribeAssistantInspectorNavigation(() => {
+    useEffect(() => subscribeAssistantInspectorNavigation(request => {
+        if (request.workspace === 'tabs' && request.action === 'close') {
+            if (!inspectorOpen) acknowledgeAssistantInspectorNavigation(request)
+            return
+        }
         setRightPanelMode('review')
-    }), [setRightPanelMode])
+    }), [inspectorOpen, setRightPanelMode])
+    const [conversationFindOpen, setConversationFindOpen] = useState(false)
+    const [conversationFindQuery, setConversationFindQuery] = useState('')
+    const [conversationFindIndex, setConversationFindIndex] = useState(0)
+    const conversationFindMatches = useMemo(
+        () => conversationFindOpen ? matchAssistantConversationMessages(diffSource.messages, conversationFindQuery) : [],
+        [conversationFindOpen, conversationFindQuery, diffSource.messages]
+    )
+    useEffect(() => {
+        return subscribeAssistantConversationFind(request => {
+            setConversationFindOpen(true)
+            setConversationFindQuery(request.query || '')
+            setConversationFindIndex(0)
+            return true
+        })
+    }, [])
+    useEffect(() => {
+        setConversationFindIndex(index => Math.min(index, Math.max(conversationFindMatches.length - 1, 0)))
+    }, [conversationFindMatches.length])
+    const closeConversationFind = useCallback(() => {
+        cancelAssistantConversationFind()
+        setConversationFindOpen(false)
+        setConversationFindQuery('')
+        setConversationFindIndex(0)
+    }, [])
+    const nextConversationFind = useCallback(() => {
+        if (!conversationFindMatches.length) return
+        setConversationFindIndex(index => (index + 1) % conversationFindMatches.length)
+    }, [conversationFindMatches.length])
+    const previousConversationFind = useCallback(() => {
+        if (!conversationFindMatches.length) return
+        setConversationFindIndex(index => (index - 1 + conversationFindMatches.length) % conversationFindMatches.length)
+    }, [conversationFindMatches.length])
+    const activeConversationFindMatch = conversationFindMatches[conversationFindIndex] || null
     const revealBrowserInspector = useCallback(() => {
         setRightPanelMode('review')
     }, [setRightPanelMode])
@@ -482,18 +526,26 @@ export default function AssistantPage() {
         setRightPanelMode('none')
     }, [setRightPanelMode])
     const noop = useCallback(() => undefined, [])
+    const previewResources = useMemo(() => preview.previewFile
+        ? buildAssistantResourceIndex({ turns: diffTurns, projectPath: diffSource.projectRootPath }).resources
+        : [], [diffSource.projectRootPath, diffTurns, Boolean(preview.previewFile)])
+    const previewDisplayFile = preview.previewFile ? {
+        ...preview.previewFile,
+        displayName: assistantResourceForPath(previewResources, preview.previewFile.path)?.title || preview.previewFile.displayName
+    } : null
 
     return (
         <div data-assistant-page="true" className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="flex h-full min-w-0 overflow-x-hidden">
                     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
                         <AssistantConversationPane
                             rightPanelOpen={inspectorOpen}
                             rightPanelMode={rightPanelMode}
                             showRightSidebarToggle
                             deletingMessageId={deletingMessageId}
-                            focusMessageId={messageSearchTarget}
+                            focusMessageId={activeConversationFindMatch?.messageId || messageSearchTarget}
                             fallbackSessionMode={railMode}
                             playgroundRootMissing={false}
                             playgroundTerminalAccess={false}
@@ -512,8 +564,19 @@ export default function AssistantPage() {
                             onViewDiff={handleViewDiff}
                             onShowToast={showToast}
                         />
+                        {conversationFindOpen && <AssistantConversationFindBar
+                            query={conversationFindQuery}
+                            onQueryChange={value => { setConversationFindQuery(value); setConversationFindIndex(0) }}
+                            matchCount={conversationFindMatches.length}
+                            currentIndex={conversationFindIndex}
+                            onNext={nextConversationFind}
+                            onPrevious={previousConversationFind}
+                            onClose={closeConversationFind}
+                        />}
+                        </div>
                         {inspectorMounted || inspectorOpen ? (
                             <AssistantInspectorFrame open={inspectorOpen} width={inspectorOpen ? paneLayout.inspectorWidth : rightSidebarWidth}>
+                                <Suspense fallback={<AssistantInspectorLoading />}>
                                 <AssistantDiffPanel
                                     open={inspectorOpen}
                                     sessionId={shell.selectedSessionId}
@@ -546,6 +609,7 @@ export default function AssistantPage() {
                                     onRevealRequestHandled={handleDiffRevealRequestHandled}
                                     onClose={handleCloseDiff}
                                 />
+                                </Suspense>
                             </AssistantInspectorFrame>
                         ) : null}
                     </div>
@@ -561,8 +625,8 @@ export default function AssistantPage() {
             {preview.previewFile ? (
                 <Suspense fallback={null}>
                     <FilePreviewModal
-                        file={preview.previewFile}
-                        previewTabs={preview.previewTabs}
+                        file={previewDisplayFile!}
+                        previewTabs={preview.previewTabs.map(tab => ({ ...tab, file: { ...tab.file, displayName: assistantResourceForPath(previewResources, tab.file.path)?.title || tab.file.displayName } }))}
                         activePreviewTabId={preview.activePreviewTabId}
                         content={preview.previewContent}
                         loading={preview.loadingPreview}
@@ -573,6 +637,15 @@ export default function AssistantPage() {
                         projectPath={diffSource.projectRootPath || undefined}
                         chromeContext="peek"
                         mediaItems={preview.previewMediaItems}
+                        navigationSidebar={preview.previewFile.type === 'image' ? (
+                            <AssistantPreviewResourceNavigator
+                                turns={diffTurns}
+                                projectPath={diffSource.projectRootPath}
+                                activeFilePath={preview.previewFile.path}
+                                onOpenPreview={preview.openPreview}
+                                onOpenUrl={url => { void openDesktopLink(url) }}
+                            />
+                        ) : undefined}
                         onOpenLinkedPreview={preview.openPreview}
                         onOpenLinkedPreviewInNewTab={preview.openPreviewInNewTab}
                         onSelectPreviewTab={preview.setActivePreviewTab}

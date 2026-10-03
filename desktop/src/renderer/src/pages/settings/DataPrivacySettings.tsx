@@ -11,7 +11,6 @@ import {
     SettingsSection
 } from './settings-layout'
 import { AnalyticsPrivacyRow } from './AnalyticsPrivacyRow'
-import { SettingsPageLink } from './SettingsPageTabs'
 
 export default function DataPrivacySettings() {
     const { clearCache } = useSettings()
@@ -74,7 +73,6 @@ export default function DataPrivacySettings() {
                     info="Chats, retained workspaces and project files are preserved."
                     control={<SettingsButton onClick={clearCache}>Clear cache</SettingsButton>}
                 />
-                <SettingsPageLink to="/settings/assistant/archived" title="Archived chats" description="Restore archived chats or permanently delete them." />
             </SettingsSection>
         </SettingsPageContainer>
     )

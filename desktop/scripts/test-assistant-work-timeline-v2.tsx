@@ -198,12 +198,14 @@ assert.doesNotMatch(skillMarkup, /Trace the failure/, 'skill instructions open i
 const skillPreviewMarkup = renderToStaticMarkup(createElement(SettingsProvider, null, createElement(AssistantSkillSnapshotPreview, {
     activity: skill, onClose: () => undefined
 })))
-assert.match(skillPreviewMarkup, /data-file-preview-custom-body="true"/, 'Skill uses the shared file-preview shell')
+assert.match(skillPreviewMarkup, /aria-label="Skill view"/, 'Skill has a focused Preview and Source control in its header')
 assert.match(skillPreviewMarkup, /data-assistant-skill-frontmatter="structured"/)
 assert.match(skillPreviewMarkup, /Reproduce and trace failures before editing\./)
-assert.match(skillPreviewMarkup, /enabled/)
-assert.match(skillPreviewMarkup, /View source/)
-assert.doesNotMatch(skillPreviewMarkup, /description: &gt;-/, 'literal YAML stays behind View source')
+assert.match(skillPreviewMarkup, /aria-label="Description"/)
+assert.match(skillPreviewMarkup, /aria-label="Skill instructions"/)
+assert.match(skillPreviewMarkup, /aria-label="Close skill"/)
+assert.match(skillPreviewMarkup, /aria-pressed="false"[^>]*>Source</)
+assert.doesNotMatch(skillPreviewMarkup, /description: &gt;-/, 'literal YAML stays behind Source mode')
 assert.match(skillPreviewMarkup, /Trace the failure/)
 
 const agent = activity({
@@ -314,7 +316,7 @@ const runningEditMarkup = renderToStaticMarkup(createElement(TimelineToolCallLis
 assert.match(runningEditMarkup, /Editing app\.ts/, 'a lone Action keeps the same short -ing title contract')
 assert.match(runningEditMarkup, /assistant-title-shimmer/, 'a lone running Action uses the title-regeneration shimmer')
 const compactCommandMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [command] }))
-assert.match(compactCommandMarkup, /min-h-6 gap-1\.5 rounded-md px-1 py-0\.5/, 'command Action rows use the compact header dimensions')
+assert.match(compactCommandMarkup, /min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1\.5 py-1/, 'command Action rows use the same aligned grid as typed Actions')
 assert.equal(getTerminalOutputHeightClass('success', 0), 'max-h-32 sm:max-h-36', 'short settled command output is no longer forced into a tall fixed container')
 assert.equal(stripAssistantCommandEnvelope('Command completed (cmd-42) after 2s.\nCommand: bun test\n\nok', 'bun test'), 'ok')
 assert.equal(stripAssistantCommandEnvelope([

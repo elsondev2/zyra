@@ -89,7 +89,7 @@ export async function verifyOpenAIApiKey(apiKey, options = {}) {
 
 export async function configureOpenAIApiKey(authStorage, apiKey, options = {}) {
   if (!authStorage?.loginApiKey && !authStorage?.set) {
-    throw createAuthError("Pi auth storage is unavailable.", "auth_storage_unavailable");
+    throw createAuthError("Zyra credential storage is unavailable.", "auth_storage_unavailable");
   }
   const key = normalizeApiKey(apiKey);
   const verification = await verifyOpenAIApiKey(key, options);

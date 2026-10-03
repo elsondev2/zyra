@@ -2,13 +2,15 @@ import { UiTypographySample, CodeTypographySample } from './TypographySamples'
 import {
     APPEARANCE_CODE_FONTS,
     APPEARANCE_UI_FONTS,
+    DEFAULT_APPEARANCE_CODE_SCALE,
+    DEFAULT_APPEARANCE_INTERFACE_SCALE,
     getAppearanceCodeFontStack,
     getAppearanceUiFontStack,
     type AppearanceCodeFont,
     type AppearanceUiFont
 } from '@/lib/settings'
 import type { AppearanceSettingsController } from './useAppearanceSettingsController'
-import { SettingsNotice, SettingsRow, SettingsSection, SettingsSelect } from '../settings-layout'
+import { SettingResetButton, SettingsNotice, SettingsRow, SettingsSection, SettingsSelect, SettingsSlider } from '../settings-layout'
 import { createSettingsRowTargetId } from '../settings-search'
 
 function UiFontSelect({ controller }: { controller: AppearanceSettingsController }) {
@@ -75,6 +77,46 @@ export function AppearanceTypographyPage({ controller }: { controller: Appearanc
             >
                 <CodeTypographySample fontFamily={getAppearanceCodeFontStack(settings.appearanceCodeFont)} />
             </SettingsRow>
+
+            <SettingsRow
+                title="Interface size"
+                description="Scale the whole interface up or down, from 85 to 130 percent."
+                resetAction={settings.appearanceInterfaceScale !== DEFAULT_APPEARANCE_INTERFACE_SCALE ? (
+                    <SettingResetButton label="Interface size" onClick={() => controller.setInterfaceScale(DEFAULT_APPEARANCE_INTERFACE_SCALE)} />
+                ) : null}
+                control={(
+                    <SettingsSlider
+                        value={settings.appearanceInterfaceScale}
+                        min={85}
+                        max={130}
+                        step={5}
+                        unit="%"
+                        label="Interface size"
+                        onChange={controller.setInterfaceScale}
+                    />
+                )}
+                searchTargetId={createSettingsRowTargetId('Theme', 'Interface size')}
+            />
+
+            <SettingsRow
+                title="Code size"
+                description="Scale code blocks and snippets separately, from 80 to 150 percent."
+                resetAction={settings.appearanceCodeScale !== DEFAULT_APPEARANCE_CODE_SCALE ? (
+                    <SettingResetButton label="Code size" onClick={() => controller.setCodeScale(DEFAULT_APPEARANCE_CODE_SCALE)} />
+                ) : null}
+                control={(
+                    <SettingsSlider
+                        value={settings.appearanceCodeScale}
+                        min={80}
+                        max={150}
+                        step={5}
+                        unit="%"
+                        label="Code size"
+                        onChange={controller.setCodeScale}
+                    />
+                )}
+                searchTargetId={createSettingsRowTargetId('Theme', 'Code size')}
+            />
 
             {controller.managedFontsError ? (
                 <SettingsNotice tone="error">{controller.managedFontsError}</SettingsNotice>

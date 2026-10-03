@@ -1,8 +1,11 @@
+import { handleGuestAppShortcut, isRecordingShortcut } from './keybindings'
+import { browserControlOverlayScript } from './browser-control-overlay'
 import { captureBrowserTabPreview } from './browser-page-capture'
 import { addNativeWindowView } from './native-view-layers'
 import {
     BrowserWindow,
     WebContentsView,
+    dialog,
     type IpcMainEvent,
     type IpcMainInvokeEvent,
     type Session,
@@ -29,9 +32,15 @@ import {
 } from '../shared/contracts/devscope-api'
 import { resolveBrowserShortcut } from '../shared/browser-shortcuts'
 import { isTrustedBrowserTabId, trustedBrowserGuests } from './agent-control/trusted-guest-registry'
-import { transferTrustedBrowserTargetOwner } from './agent-control'
+import { bindTrustedBrowserTarget, transferTrustedBrowserTargetOwner } from './agent-control'
+import type { BrowserSurfaceOpenRequest } from '../shared/agent-control/protocol'
+import { AgentControlError } from './agent-control/control-errors'
 import type { BrowserPopupManager } from './browser-popup-manager'
 import { getBrowserThreatProtectionService } from './browser-threat-protection-service'
+import { getBrowserExtensionManager } from './browser-extension-manager'
+import { BrowserWebStoreInstall } from './browser-web-store-install'
+import { renderWebStoreInstall } from './browser-web-store-page'
+import { chromeWebStoreIdFromUrl, type WebStoreInstallTheme } from '../shared/browser-web-store'
 import {
     createIncognitoBrowserSession,
     disposeIncognitoBrowserSession,
@@ -42,7 +51,7 @@ import {
     transferBrowserPermissionTargetOwner
 } from './ipc/handlers/browser-preview-handlers'
 import { assertBrowserPreviewDeveloperTransferable, transferBrowserPreviewDeveloperOwner } from './ipc/handlers/browser-preview-developer-handlers'
-import { registerManagedBrowserPresentation, setManagedBrowserPresentationScale } from './browser-view-presentation'
+import { registerManagedBrowserPresentation, setManagedBrowserPresentationScale, setManagedBrowserControlViewport, isManagedBrowserRetainedForAgent } from './browser-view-presentation'
 import { classifyAnalyticsErrorCode as browserAnalyticsErrorCode } from '../shared/analytics/error-code'
 import {
     chooseBrowserLocalFile,
@@ -76,6 +85,8 @@ type BrowserViewRecord = {
     navigationStartedAt: number
     allowedNavigationUrl: string | null
     controlOverlay: BrowserViewControlOverlay
+    agentOwned: boolean
+    ready: Promise<void>
     disposed: boolean
 }
 
@@ -179,6 +190,7 @@ function normalizeSlotBounds(value: BrowserViewBounds | null, ownerWindow: Brows
 
 export class BrowserViewManager implements BrowserViewTransferHost {
     private readonly records = new Map<string, BrowserViewRecord>()
+    private readonly webStoreInstalls = new WeakMap<BrowserViewRecord, BrowserWebStoreInstall>()
     private readonly slotsByOwner = new Map<number, Map<string, ReportedSlot>>()
     private readonly pendingTransfers = new Map<string, PendingTransfer>()
     private readonly releaseTimers = new Map<string, NodeJS.Timeout>()
@@ -189,6 +201,53 @@ export class BrowserViewManager implements BrowserViewTransferHost {
     private disposed = false
 
     constructor(private readonly options: BrowserViewManagerOptions) {}
+
+    async executeHiddenControlRequest(ownerWindow: BrowserWindow, request: BrowserSurfaceOpenRequest, signal?: AbortSignal) {
+        const assertActive = () => {
+            if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'The Browser request was cancelled.')
+        }
+        assertActive()
+        if (request.reveal || !['open', 'navigate', 'refresh', 'close'].includes(request.mode || 'open')) throw new Error('This Browser command requires its visible workspace.')
+        const threadId = normalizeThreadId(request.threadId)
+        const principalThreadId = request.requestedBy.type === 'root' ? request.requestedBy.threadId : request.requestedBy.parentThreadId
+        if (threadId !== principalThreadId || !isTrustedBrowserTabId(request.tabId)) throw new Error('Browser command ownership is invalid.')
+        let record = this.records.get(request.tabId)
+        if (!record) {
+            if (request.mode !== 'open') throw new Error('The background Browser tab no longer exists.')
+            const ownerId = this.options.resolveOwnerId(ownerWindow)
+            if (!ownerId || ownerId.startsWith('accessory:') || ownerWindow.isDestroyed()) throw new Error('The Browser owner window is unavailable.')
+            if (this.options.canUseBrowser?.() === false) throw new Error('Complete setup before using Browser.')
+            record = this.createRecord({ tabId: request.tabId, threadId, sessionMode: normalizeSessionMode(request.sessionMode), ownerWindow, ownerId })
+            record.view.setBounds({ x: 0, y: 0, width: 1200, height: 800 })
+            this.publishPresentation(record)
+        }
+        if (record.ownerWindow !== ownerWindow || record.threadId !== threadId) throw new Error('The Browser tab belongs to another owner.')
+        record.agentOwned = true
+        this.cancelRelease(record.tabId)
+        await record.ready
+        assertActive()
+        const page = record.view.webContents
+        const target = bindTrustedBrowserTarget(ownerWindow.webContents.id, page.id, record.tabId, threadId, record.sessionMode)
+        if (target.kind !== 'zyra-browser' || (request.targetId && target.targetId !== request.targetId)) throw new Error('The Browser target changed.')
+        assertActive()
+        if (request.mode === 'close') {
+            this.closeRecord(record)
+        } else if (request.mode === 'navigate' || request.mode === 'refresh') {
+            const generation = record.navigationGeneration + 1
+            const abort = () => {
+                if (!page.isDestroyed() && record!.navigationGeneration === generation) page.stop()
+            }
+            signal?.addEventListener('abort', abort, { once: true })
+            try {
+                await this.navigate(record, request.mode === 'refresh' ? page.getURL() : String(request.url || ''))
+                assertActive()
+            } catch (error) {
+                assertActive()
+                throw error
+            } finally { signal?.removeEventListener('abort', abort) }
+        }
+        return target
+    }
 
     observePresentation(observer: (presentation: BrowserViewPresentation) => void): () => void {
         this.presentationObservers.add(observer)
@@ -210,8 +269,9 @@ export class BrowserViewManager implements BrowserViewTransferHost {
     }
 
     private publishPresentation(record: BrowserViewRecord): void {
-        if (this.presentationObservers.size === 0) return
         const presentation = this.readPresentation(record)
+        const bounds = record.view.getBounds()
+        setManagedBrowserControlViewport(record.view.webContents, { width: bounds.width, height: bounds.height, visible: presentation.visible })
         for (const observer of this.presentationObservers) {
             try { observer(presentation) } catch (error) { log.warn('Browser presentation observer failed', error) }
         }
@@ -246,6 +306,16 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         ipcMain.handle(BROWSER_VIEW_IPC.close, (event, tabId: string) => this.result(() => this.closeFromRenderer(event, tabId)))
         ipcMain.on(BROWSER_VIEW_IPC.release, (event, tabId: string) => this.releaseFromRenderer(event, tabId))
         ipcMain.on(BROWSER_VIEW_IPC.reportSlot, (event, input: BrowserViewSlotInput) => this.reportSlot(event, input))
+        ipcMain.on(BROWSER_VIEW_IPC.refreshTheme, event => {
+            try {
+                const { window } = this.resolveSender(event)
+                for (const record of this.records.values()) {
+                    if (record.ownerWindow === window) void this.injectChromeWebStoreInstallControl(record)
+                }
+            } catch (error) {
+                log.debug('[BrowserView] Could not refresh Web Store theme.', error)
+            }
+        })
     }
 
     async transferTo(tabId: string, destinationWindow: BrowserWindow, options: BrowserViewTransferOptions = {}): Promise<BrowserViewTransferResult> {
@@ -364,6 +434,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
                 throw new Error('The Browser tab belongs to another Zyra window.')
             }
             this.cancelRelease(tabId)
+            await existing.ready
             return { created: false, state: this.readState(existing) }
         }
 
@@ -371,6 +442,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             throw new Error('The live Browser source has not finished preparing its view.')
         }
         const record = this.createRecord({ tabId, threadId, sessionMode, ownerWindow: window, ownerId })
+        await record.ready
         const initialUrl = String(input?.initialUrl || '').trim()
         if (sessionMode === 'normal') this.options.captureAnalytics?.({
             action: initialUrl ? 'tab_create' : 'new_tab',
@@ -433,6 +505,8 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             navigationStartedAt: 0,
             allowedNavigationUrl: null,
             controlOverlay: { controlled: false, cursor: null },
+            agentOwned: false,
+            ready: Promise.resolve(),
             disposed: false
         }
         const page = view.webContents
@@ -453,6 +527,13 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             this.options.popupManager.registerGuest(record.ownerWindow, page, page.id)
             this.installPageLifecycle(record)
             this.applyCurrentSlot(record)
+            // A new WebContentsView has no document yet. Start its blank document
+            // before exposing it for control, and serialize the first navigation
+            // behind initialization so it cannot race this internal load.
+            record.ready = page.loadURL('about:blank').catch(error => {
+                if (!record.disposed) this.closeRecord(record)
+                throw error
+            })
             return record
         } catch (error) {
             this.records.delete(record.tabId)
@@ -488,8 +569,13 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             tabId: record.tabId,
             guestWebContentsId: page.id
         }))
+        page.on('before-mouse-event', (_event, mouse) => {
+            if (mouse.type !== 'mouseDown') return
+            this.publishEvent(record, { type: 'focus', tabId: record.tabId, guestWebContentsId: page.id })
+        })
         page.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
-            if (!isMainFrame) return
+            // Install requests are intercepted in will-navigate, not document changes.
+            if (!isMainFrame || url.startsWith('zyra-extension:') || url.startsWith('chrome-error:')) return
             record.url = url === 'about:blank' ? '' : url
             if (!isInPlace) {
                 record.navigationAttempt += 1
@@ -502,13 +588,15 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             this.publishState(record, 'navigation')
         })
         page.on('did-navigate', (_event, url) => {
+            if (url.startsWith('chrome-error:')) return
             record.url = url === 'about:blank' ? '' : url
             this.publishState(record, 'navigation')
         })
         page.on('did-navigate-in-page', (_event, url, isMainFrame) => {
-            if (isMainFrame) {
+            if (isMainFrame && !url.startsWith('chrome-error:')) {
                 record.url = url === 'about:blank' ? '' : url
                 this.publishState(record, 'navigation')
+                void this.injectChromeWebStoreInstallControl(record)
             }
         })
         page.on('did-stop-loading', () => {
@@ -520,6 +608,9 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             this.publishState(record, record.mainFrameFailed ? 'error' : 'navigation')
         })
         page.on('did-finish-load', () => {
+            // Chromium can finish its internal error document after did-fail-load.
+            // That document must not turn a failed site into a ready tab.
+            if (record.mainFrameFailed) return
             record.mainFrameFailed = false
             record.status = page.getURL() === 'about:blank' ? 'idle' : 'ready'
             record.error = null
@@ -529,6 +620,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
                 if (record.sessionMode === 'normal') this.options.captureAnalytics?.({ action: 'navigation', outcome: 'completed', destination: classifyBrowserDestination(page.getURL()), duration_ms: Date.now() - record.navigationStartedAt })
             }
             void this.applyControlOverlay(record)
+            void this.injectChromeWebStoreInstallControl(record)
         })
         page.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
             if (!isMainFrame || errorCode === -3) return
@@ -561,19 +653,24 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             this.publishState(record, 'fullscreen')
         })
         page.on('before-input-event', (event, input) => {
+            if (isRecordingShortcut(record.ownerWindow.webContents)) return
+            if (handleGuestAppShortcut(input, record.ownerWindow.webContents)) { event.preventDefault(); return }
             if (input.type === 'keyDown' && input.key === 'Escape' && record.ownerWindow.isFullScreen()) {
                 event.preventDefault()
                 record.ownerWindow.setFullScreen(false)
                 return
             }
             const action = resolveBrowserShortcut(input, browserShortcutPlatform())
-            if (!action) return
+            if (!action) {
+                if (resolveBrowserShortcut(input, browserShortcutPlatform(), {})) event.preventDefault()
+                return
+            }
             event.preventDefault()
             const payload: DevScopeBrowserShortcutEvent = { sourceGuestWebContentsId: page.id, action }
             if (!record.ownerWindow.isDestroyed()) record.ownerWindow.webContents.send(BROWSER_PREVIEW_SHORTCUT_CHANNEL, payload)
         })
         page.on('will-navigate', (event, url) => this.guardPageNavigation(record, event, url))
-        page.on('will-redirect', (event, url) => this.guardPageNavigation(record, event, url))
+        page.on('will-redirect', (event, url) => this.guardPageNavigation(record, event, url, true))
         page.once('destroyed', () => {
             const wasDisposed = record.disposed
             record.disposed = true
@@ -587,8 +684,13 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         })
     }
 
-    private guardPageNavigation(record: BrowserViewRecord, event: Electron.Event, url: string): void {
+    private guardPageNavigation(record: BrowserViewRecord, event: Electron.Event, url: string, redirect = false): void {
         if (url === 'about:blank') return
+        if (url.startsWith('zyra-extension:')) {
+            event.preventDefault()
+            if (!redirect) void this.webStoreInstalls.get(record)?.request(url).catch(error => log.warn('[BrowserView] Web Store request failed.', error))
+            return
+        }
         if (isAuthorizedBrowserLocalFileUrl(record.view.webContents.session, record.tabId, url)) return
         if (!isSafeBrowserNavigationUrl(url)) {
             event.preventDefault()
@@ -636,7 +738,9 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             if (page.navigationHistory.canGoForward()) page.navigationHistory.goForward()
         } else if (command.type === 'reload') {
             record.navigationGeneration += 1
-            page.reload()
+            if (record.status === 'error' && record.url) {
+                void page.loadURL(record.url).catch(error => log.debug('[BrowserView] Failed page retry did not load.', error))
+            } else page.reload()
         } else if (command.type === 'new-tab') {
             const generation = ++record.navigationGeneration
             try {
@@ -665,6 +769,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
                 }
                 : null
             record.controlOverlay = { controlled: command.controlled === true, cursor }
+            if (record.controlOverlay.controlled) record.agentOwned = true
             await this.applyControlOverlay(record)
         } else {
             throw new Error('Browser command is invalid.')
@@ -674,36 +779,63 @@ export class BrowserViewManager implements BrowserViewTransferHost {
 
     private async applyControlOverlay(record: BrowserViewRecord): Promise<void> {
         if (record.disposed || record.view.webContents.isDestroyed()) return
-        const payload = JSON.stringify(record.controlOverlay)
-        const code = `(() => {
-            const payload = ${payload};
-            const stateKey = '__zyraControlOverlayState';
-            let state = globalThis[stateKey];
-            if (!payload.controlled && !payload.cursor?.visible) {
-                state?.host?.remove();
-                delete globalThis[stateKey];
-                return;
-            }
-            if (!state?.host?.isConnected) {
-                const host = document.createElement('div');
-                host.setAttribute('data-zyra-control-overlay', '');
-                host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;overflow:hidden;contain:layout style paint;';
-                const shadow = host.attachShadow({ mode: 'closed' });
-                (document.documentElement || document.body).appendChild(host);
-                state = { host, shadow };
-                globalThis[stateKey] = state;
-            }
-            const cursor = payload.cursor;
-            const active = cursor && cursor.phase !== 'idle';
-            const cursorMarkup = cursor?.visible ? '<div class="cursor" style="transform:translate3d(' + cursor.x + 'px,' + cursor.y + 'px,0)"><span class="pulse ' + (active ? 'active' : '') + ' ' + (cursor.phase === 'pressing' ? 'pressing' : '') + '"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 3.5 19 13l-6.1 1.35L9.5 20z"/></svg><span class="label">' + cursor.label + (active ? ' · ' + cursor.phase : '') + '</span></div>' : '';
-            state.shadow.innerHTML = '<style>:host{all:initial}.frame{position:absolute;inset:0;border:1px solid rgba(103,232,249,.42);box-shadow:inset 0 0 20px rgba(34,211,238,.08)}.cursor{position:absolute;left:0;top:0;will-change:transform;font-family:system-ui,sans-serif}.cursor svg{position:relative;width:19px;height:19px;transform:translate(-2px,-2px);fill:#67e8f9;stroke:#020617;stroke-width:1.7;filter:drop-shadow(0 1px 3px rgba(0,0,0,.85))}.pulse{position:absolute;left:-10px;top:-10px;width:20px;height:20px;border-radius:999px;border:1px solid rgba(165,243,252,.25);background:rgba(103,232,249,.06);transform:scale(.75)}.pulse.active{border-color:rgba(165,243,252,.58);background:rgba(103,232,249,.2);transform:scale(1)}.pulse.pressing{transform:scale(1.25);background:rgba(165,243,252,.3)}.label{position:absolute;left:12px;top:12px;white-space:nowrap;border:1px solid rgba(165,243,252,.28);border-radius:2px;background:rgba(2,6,23,.92);padding:2px 4px;color:#cffafe;font:600 7px/1 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;box-shadow:0 3px 8px rgba(0,0,0,.35)}</style>' + (payload.controlled ? '<div class="frame"></div>' : '') + cursorMarkup;
-        })()`
+        const code = browserControlOverlayScript(record.controlOverlay)
         await record.view.webContents.executeJavaScriptInIsolatedWorld(999, [{ code }], false).catch((error) => {
             log.debug('[BrowserView] Could not update the native control overlay.', error)
         })
     }
 
+    private async injectChromeWebStoreInstallControl(record: BrowserViewRecord): Promise<void> {
+        const page = record.view.webContents
+        if (record.disposed || page.isDestroyed()) return
+        let install = this.webStoreInstalls.get(record)
+        if (!install) {
+            if (record.sessionMode !== 'normal' || !chromeWebStoreIdFromUrl(page.getURL())) return
+            let presentationRevision = 0
+            install = new BrowserWebStoreInstall({
+                current: () => ({
+                    url: page.isDestroyed() ? '' : page.getURL(),
+                    document: record.navigationAttempt,
+                    available: !record.disposed && !page.isDestroyed() && !record.ownerWindow.isDestroyed() && record.sessionMode === 'normal'
+                }),
+                installer: getBrowserExtensionManager(),
+                present: async value => {
+                    const revision = ++presentationRevision
+                    if (record.disposed || page.isDestroyed()) return
+                    // Read only the owning app renderer's theme, never colors supplied by the website.
+                    const theme = await record.ownerWindow.webContents.executeJavaScript(`(() => {
+                        const styles = getComputedStyle(document.documentElement);
+                        return { accent: styles.getPropertyValue('--accent-primary').trim(),
+                            background: styles.getPropertyValue('--color-card').trim(),
+                            foreground: styles.getPropertyValue('--color-text').trim(),
+                            fontFamily: getComputedStyle(document.body).fontFamily, colorScheme: styles.colorScheme };
+                    })()`, false) as WebStoreInstallTheme
+                    if (record.disposed || page.isDestroyed() || revision !== presentationRevision) return
+                    const code = `(${renderWebStoreInstall.toString()})(${JSON.stringify(value)}, (${chromeWebStoreIdFromUrl.toString()}), ${JSON.stringify(theme)})`
+                    await page.executeJavaScriptInIsolatedWorld(998, [{ code }], false).catch(error => log.debug('[BrowserView] Could not update the Web Store button.', error))
+                },
+                confirm: async review => {
+                    const permissions = [...review.permissions, ...review.hostPermissions]
+                    const result = await dialog.showMessageBox(record.ownerWindow, {
+                        type: 'question', title: 'Add extension to Zyra?', message: `${review.name} v${review.version}`,
+                        detail: [permissions.length ? `Requested permissions:\n${permissions.join('\n')}` : 'No declared permissions.', ...review.warnings, 'Only install extensions you trust. Some Chrome APIs may not work in Zyra.'].join('\n\n'),
+                        buttons: ['Add to Zyra', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true
+                    })
+                    return result.response === 0
+                },
+                reportError: async message => {
+                    if (!record.ownerWindow.isDestroyed()) await dialog.showMessageBox(record.ownerWindow, {
+                        type: 'error', title: 'Extension not installed', message: 'Could not add this extension to Zyra.', detail: message.slice(0, 2000), buttons: ['OK']
+                    })
+                }
+            })
+            this.webStoreInstalls.set(record, install)
+        }
+        await install.refresh().catch(error => log.debug('[BrowserView] Could not prepare the Web Store button.', error))
+    }
+
     private async navigate(record: BrowserViewRecord, rawUrl: string): Promise<boolean> {
+        await record.ready
         const url = String(rawUrl || '').trim()
         if (isAuthorizedBrowserLocalFileUrl(record.view.webContents.session, record.tabId, url)) {
             return this.loadPage(record, url)
@@ -907,6 +1039,12 @@ export class BrowserViewManager implements BrowserViewTransferHost {
     }
 
     private scheduleRelease(record: BrowserViewRecord, ownerWindow: BrowserWindow): void {
+        if (record.agentOwned || isManagedBrowserRetainedForAgent(record.view.webContents)) {
+            this.slotsByOwner.get(ownerWindow.webContents.id)?.delete(record.tabId)
+            record.view.setVisible(false)
+            this.publishPresentation(record)
+            return
+        }
         if (this.releaseTimers.has(record.tabId)) return
         const timer = setTimeout(() => {
             this.releaseTimers.delete(record.tabId)
@@ -956,7 +1094,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
     private readState(record: BrowserViewRecord): BrowserViewState {
         const page = record.view.webContents
         const pageUrl = page.isDestroyed() ? '' : page.getURL()
-        const rawUrl = record.status === 'loading' && record.url ? record.url : pageUrl || record.url
+        const rawUrl = (record.status === 'loading' || record.status === 'error') && record.url ? record.url : pageUrl || record.url
         const blank = !rawUrl || rawUrl === 'about:blank'
         const localFile = blank ? null : getBrowserLocalFilePresentation(page.session, record.tabId, rawUrl)
         let title = blank ? 'New tab' : page.getTitle().trim().slice(0, 512)
@@ -1017,6 +1155,25 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         if (this.observedWindows.has(window)) return
         this.observedWindows.add(window)
         const ownerWebContentsId = window.webContents.id
+        const navigateActiveBrowser = (direction: 'back' | 'forward'): boolean => {
+            const slots = this.slotsByOwner.get(ownerWebContentsId)
+            const tabId = slots && [...slots.entries()].find(([, slot]) => slot.active && slot.visible && slot.bounds)?.[0]
+            const record = tabId ? this.records.get(tabId) : null
+            if (!record || record.disposed || record.ownerWindow !== window || !record.view.getVisible()) return false
+            const history = record.view.webContents.navigationHistory
+            if (direction === 'back' ? !history.canGoBack() : !history.canGoForward()) return false
+            if (direction === 'back') history.goBack()
+            else history.goForward()
+            return true
+        }
+        window.on('app-command', (event, command) => {
+            const direction = command === 'browser-backward' ? 'back' : command === 'browser-forward' ? 'forward' : null
+            if (direction && navigateActiveBrowser(direction)) event.preventDefault()
+        })
+        window.on('swipe', (event, direction) => {
+            const historyDirection = direction === 'right' ? 'back' : direction === 'left' ? 'forward' : null
+            if (historyDirection && navigateActiveBrowser(historyDirection)) event.preventDefault()
+        })
         window.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
             if (!isMainFrame || isInPlace) return
             this.slotsByOwner.delete(ownerWebContentsId)

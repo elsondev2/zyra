@@ -3,11 +3,42 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { SettingsPageContainer } from '../src/renderer/src/pages/settings/settings-layout'
+import { AppearanceThemePage } from '../src/renderer/src/pages/settings/appearance/AppearanceThemePage'
+import { AppearanceTypographyPage } from '../src/renderer/src/pages/settings/appearance/AppearanceTypographyPage'
 import { SETTINGS_NAVIGATION_ITEMS, getSettingsCategoryDestinations } from '../src/renderer/src/pages/settings/settings-navigation'
 import { getControllingSettingsTarget } from '../src/renderer/src/pages/settings/settings-dependencies'
 import { getSettingsLocationTrail, readSettingsReturnLocation, settingsDetailNavigationState } from '../src/renderer/src/pages/settings/settings-navigation-context'
 import { resolveSettingsSearchLocation } from '../src/renderer/src/pages/settings/settings-search'
 const src = (path: string) => readFileSync(new URL(`../src/renderer/src/${path}`, import.meta.url), 'utf8')
+const appearanceController = {
+    settings: {
+        appearanceUiFont: 'bricolage',
+        appearanceCodeFont: 'jetbrains',
+        appearanceInterfaceScale: 105,
+        appearanceCodeScale: 105,
+        appearanceContrastScale: 105,
+        appearanceThemeMode: 'dark',
+        appearanceResolvedMode: 'dark',
+        appearanceLightTheme: 'paper-light',
+        appearanceDarkTheme: 'vercel',
+        accentColor: { name: 'Blue', primary: '#3b82f6', secondary: '#2563eb' }
+    },
+    managedFontsError: null,
+    resetAvailable: false,
+    resolveFontLabel: () => '',
+    setFontManagerTarget: () => {},
+    selectUiFont: () => {},
+    selectCodeFont: () => {},
+    setInterfaceScale: () => {},
+    setCodeScale: () => {},
+    setContrastScale: () => {},
+    selectThemeMode: () => {},
+    selectThemePreset: () => {},
+    selectAccent: () => {},
+    resetAppearance: () => {}
+} as never
+assert.match(renderToStaticMarkup(<AppearanceTypographyPage controller={appearanceController} />), /Reset Interface size/, 'non-default interface scale must render its reset control')
+assert.match(renderToStaticMarkup(<MemoryRouter><AppearanceThemePage controller={appearanceController} /></MemoryRouter>), /Reset Contrast/, 'non-default contrast must render its reset control')
 assert.match(src('pages/Settings.tsx'), /settings\.startWithWindows \? \(/, 'hidden startup controls follow their parent feature')
 assert.match(src('pages/settings/ProviderModelSettings.tsx'), /settings\.assistantTitleAutoRegenerate \? \(/)
 assert.match(src('pages/settings/VoiceTranscriptionSettings.tsx'), /settings\.assistantTranscriptionEnabled \? \(/)

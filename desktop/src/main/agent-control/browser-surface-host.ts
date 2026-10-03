@@ -30,6 +30,7 @@ type PendingSurfaceRequest = {
 export class BrowserSurfaceHost {
     private readonly pending = new Map<string, PendingSurfaceRequest>()
     private readonly settled = new Set<string>()
+    private readonly hiddenRequests = new Set<AbortController>()
     private disposed = false
 
     constructor(private readonly options: {
@@ -39,6 +40,7 @@ export class BrowserSurfaceHost {
         resolveTarget: (targetId: string) => ControlTarget
         makeId?: () => string
         timeoutMs?: number
+        executeHidden?: (request: BrowserSurfaceOpenRequest, signal?: AbortSignal) => Promise<BrowserTarget>
     }) {}
 
     openTab(
@@ -146,7 +148,7 @@ export class BrowserSurfaceHost {
             tabId: target.tabId,
             targetId: target.targetId,
             ...(url ? { url } : {}),
-            reveal: mode !== 'external',
+            reveal: false,
             requestedBy: principal
         }, signal, target)
     }
@@ -156,6 +158,28 @@ export class BrowserSurfaceHost {
         signal?: AbortSignal,
         expectedTarget?: BrowserTarget
     ): Promise<BrowserTarget> {
+        if (!request.reveal && this.options.executeHidden && ['open', 'navigate', 'refresh', 'close'].includes(request.mode || 'open')) {
+            if (this.disposed) return Promise.reject(new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The Browser surface host is unavailable.'))
+            if (signal?.aborted) return Promise.reject(new AgentControlError('CONTROL_CANCELLED', 'The Browser request was cancelled.'))
+            if (this.hiddenRequests.size >= MAX_PENDING_BROWSER_SURFACE_REQUESTS) return Promise.reject(new AgentControlError('CONTROL_QUEUE_FULL', 'Too many background Browser requests are waiting.'))
+            const controller = new AbortController()
+            const abort = () => controller.abort()
+            signal?.addEventListener('abort', abort, { once: true })
+            this.hiddenRequests.add(controller)
+            const timer = setTimeout(abort, BROWSER_SURFACE_REGISTER_TIMEOUT_MS)
+            return this.options.executeHidden(request, controller.signal).then(target => {
+                if (controller.signal.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'The Browser request was cancelled.')
+                const owner = request.requestedBy.type === 'root' ? request.requestedBy.threadId : request.requestedBy.parentThreadId
+                if (target.kind !== 'zyra-browser' || target.ownerThreadId !== owner || target.tabId !== request.tabId || (request.targetId && target.targetId !== request.targetId)) {
+                    throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The background Browser command returned a different control target.')
+                }
+                return target
+            }).finally(() => {
+                clearTimeout(timer)
+                signal?.removeEventListener('abort', abort)
+                this.hiddenRequests.delete(controller)
+            })
+        }
         return this.requestSurface(request, signal, expectedTarget).then((result) => result.target)
     }
 
@@ -290,6 +314,7 @@ export class BrowserSurfaceHost {
     }
 
     cancelPending(reason = 'Browser surface requests were cancelled.'): void {
+        for (const controller of this.hiddenRequests) controller.abort()
         for (const requestId of [...this.pending.keys()]) {
             const current = this.pending.get(requestId)
             if (current?.phase === 'claimed') continue

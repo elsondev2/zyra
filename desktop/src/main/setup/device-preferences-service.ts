@@ -1,3 +1,4 @@
+import { sanitizeShortcutOverrides, type ShortcutOverrides } from '../../shared/keybindings'
 import { readFile, rename } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -48,7 +49,7 @@ const MAX_RECORD_ENTRIES = 100
 const MAX_JSON_DEPTH = 6
 
 const BOOLEAN_KEYS = new Set<string>([
-    'appearanceCustomThemeActive', 'compactMode', 'accessibilityReduceMotion', 'explorerTabEnabled',
+    'assistantMemoryEnabled', 'appearanceCustomThemeActive', 'compactMode', 'accessibilityReduceMotion', 'explorerTabEnabled',
     'filePreviewOpenInFullscreen', 'fileEditorMinimapEnabled', 'fileCsvDistinctColorsEnabled',
     'terminalCursorBlink', 'gitAutoRefreshOnProjectOpen', 'gitInitCreateGitignore',
     'gitInitCreateInitialCommit', 'gitWarnOnAuthorMismatch', 'gitPullRequestDefaultDraft',
@@ -76,6 +77,7 @@ const STRING_LIMITS: Record<string, number> = {
 }
 
 const ENUMS: Record<string, ReadonlySet<string>> = {
+    appearanceAnimationSpeed: new Set(['calm', 'normal', 'brisk', 'custom']),
     appearanceThemeMode: new Set(['system', 'light', 'dark']),
     defaultShell: new Set(['powershell', 'cmd']),
     filePreviewDefaultMode: new Set(['preview', 'edit']),
@@ -106,6 +108,10 @@ const ENUMS: Record<string, ReadonlySet<string>> = {
 }
 
 const NUMBER_RANGES: Record<string, readonly [number, number]> = {
+    appearanceInterfaceScale: [85, 130],
+    appearanceCodeScale: [80, 150],
+    appearanceContrastScale: [70, 150],
+    appearanceAnimationScale: [50, 200],
     fileEditorFontSize: [10, 24],
     terminalFontSize: [10, 24],
     terminalScrollback: [1_000, 50_000],
@@ -178,6 +184,7 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
 }
 
 export function sanitizeDevicePreferenceValue(key: string, value: unknown): unknown {
+    if (key === 'keyboardShortcuts') return sanitizeShortcutOverrides(value)
     if (key === 'appearanceLightTheme') return isLightThemeId(value) ? value : undefined
     if (key === 'appearanceDarkTheme') return value === 'dark' ? 'vercel' : isDarkThemeId(value) ? value : undefined
     if (BOOLEAN_KEYS.has(key)) return typeof value === 'boolean' ? value : undefined
@@ -338,6 +345,10 @@ export class DevicePreferencesService {
         })
     }
 
+    getKeyboardShortcuts(): ShortcutOverrides {
+        return sanitizeShortcutOverrides(this.hydrated?.kind === 'ready' ? this.hydrated.record.surfaces.desktop.keyboardShortcuts : undefined)
+    }
+
     async getProjectDiscoveryRoots(): Promise<string[]> {
         const record = await this.requireReadyRecord()
         const primary = typeof record.shared.projectsFolder === 'string' ? record.shared.projectsFolder.trim() : ''
@@ -377,6 +388,17 @@ export class DevicePreferencesService {
         }
     }
 
+    async getAssistantMemoryEnabled(): Promise<boolean> {
+        const record = await this.requireReadyRecord()
+        if (typeof record.shared.assistantMemoryEnabled === 'boolean') return record.shared.assistantMemoryEnabled
+        // Records created before this preference existed kept Memory enabled by default.
+        // A new installation writes an explicit false value during its first preference migration.
+        return Boolean(record.migrations.desktopLegacyV4CompletedAt)
+            || Object.keys(record.shared).length > 0
+            || Object.keys(record.surfaces.desktop).length > 0
+            || Object.keys(record.surfaces.browser).length > 0
+    }
+
     async getAssistantRuntimePolicy(): Promise<AssistantRuntimePolicy> {
         await this.operationQueue
         const record = await this.requireReadyRecord()
@@ -390,7 +412,16 @@ export class DevicePreferencesService {
         return this.enqueue(async () => {
             const record = await this.requireReadyRecord()
             if (record.migrations.desktopLegacyV4CompletedAt) return
-            const partitioned = partitionDevicePreferencePatch(legacySettings, 'desktop')
+            const hasExistingPreferences = Object.keys(record.shared).length > 0
+                || Object.keys(record.surfaces.desktop).length > 0
+                || Object.keys(record.surfaces.browser).length > 0
+            const memoryWasPreviouslyConfigured = typeof record.shared.assistantMemoryEnabled === 'boolean'
+                ? record.shared.assistantMemoryEnabled
+                : hasExistingPreferences
+            const partitioned = partitionDevicePreferencePatch({
+                ...legacySettings,
+                assistantMemoryEnabled: memoryWasPreviouslyConfigured,
+            }, 'desktop')
             const now = this.now().toISOString()
             const next: DevicePreferencesRecord = {
                 ...record,

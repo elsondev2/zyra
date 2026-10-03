@@ -190,6 +190,7 @@ export function cacheHydratedThreads(
         if (!presentThreadIds.has(threadId)) cache.delete(threadId)
     }
 
+    if (cache.size <= HYDRATED_THREAD_CACHE_LIMIT) return
     const protectedThreadIds = new Set(snapshot.sessions.flatMap((session) => session.threads
         .filter((thread) => (
             (session.id === snapshot.selectedSessionId && thread.id === session.activeThreadId)

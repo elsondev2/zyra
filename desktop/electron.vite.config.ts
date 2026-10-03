@@ -77,7 +77,8 @@ export default defineConfig({
             ...(fastBuild ? { minify: false, reportCompressedSize: false } : {}),
             rollupOptions: {
                 input: {
-                    index: resolve(rendererRoot, 'index.html')
+                    index: resolve(rendererRoot, 'index.html'),
+                    mcpAppSandbox: resolve(rendererRoot, 'mcp-app-sandbox.html')
                 }
             }
         },

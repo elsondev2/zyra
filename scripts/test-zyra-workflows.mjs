@@ -17,6 +17,42 @@ function test(name, run) { tests.push({ name, run }) }
 
 const route = { requested: 'terra', selectedKey: 'openai-codex/gpt-5.6-terra', selectedTier: 'terra', selectedModel: { provider: 'openai-codex', id: 'gpt-5.6-terra' }, fallback: false }
 
+test('workflow cache identity changes with effort, scopes, permissions and agent definitions', () => {
+  const base = { scriptHash: 'fixture', prompt: 'inspect', args: {}, selectedModelPolicy: { selected: 'fixture/model' } };
+  for (const change of [{ effort: 'high' }, { readScope: ['src'] }, { permissionMode: 'writer' }, { agentDefinition: { model: 'other/model' } }, { role: 'reviewer' }, { modelPolicy: { deny: ['fixture/model'] } }]) {
+    assert.notEqual(createWorkflowCallFingerprint(base), createWorkflowCallFingerprint({ ...base, ...change }));
+  }
+})
+
+test('workflow routing refreshes live availability and passes named agent task, policy and JSON schema', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'zyra-workflow-route-'));
+  let refreshed = false, spawned;
+  const controller = {
+    async refreshModelCatalog() { refreshed = true; },
+    previewRoute(request) {
+      assert.equal(refreshed, true);
+      assert.equal(request.agent, 'evidence-reader');
+      assert.equal(request.envelope.task, 'extraction');
+      assert.deepEqual(request.policy, { deny: ['retired/model'] });
+      return route;
+    },
+    listDefinitions: () => ({ active: [{ name: 'evidence-reader', definition: { model: 'terra', role: 'reviewer', version: '2' } }] }),
+    async spawn(request) { spawned = request; return { agentRunId: 'schema-run', selectedModel: route.selectedKey, usage: {}, result: { text: '{"evidence":"verified"}' } }; },
+  };
+  try {
+    const scheduler = new WorkflowScheduler({ controller, eventStore: { append: async () => {} }, workflowRunId: 'wf-route', definition: { scriptHash: 'route' }, args: {},
+      budget: { maxCalls: 2, maxRequests: 2, maxTokens: 1000, maxCostUsd: 1, maxConcurrency: 1 }, cacheDirectory: path.join(directory, 'cache') });
+    const schema = { type: 'object', properties: { evidence: { type: 'string' } }, required: ['evidence'] };
+    const result = await scheduler.handle('agent', { prompt: 'Extract evidence', options: { agent: 'evidence-reader', task: 'extraction', modelPolicy: { deny: ['retired/model'] }, schema } });
+    assert.deepEqual(result, { evidence: 'verified' });
+    assert.equal(spawned.agent, 'evidence-reader');
+    assert.equal(spawned.task, 'extraction');
+    assert.deepEqual(spawned.modelPolicy, { deny: ['retired/model'] });
+    assert.match(spawned.goal, /Return JSON matching this schema/);
+    assert(spawned.goal.includes(JSON.stringify(schema)));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+})
+
 test('workflow validation rejects Node, network, dynamic evaluation, and nondeterminism', () => {
   for (const source of [
     'export default process.env.SECRET',

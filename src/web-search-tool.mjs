@@ -1,4 +1,4 @@
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineZyraTool } from "./agents/define-zyra-tool.mjs";
 import { Type } from "typebox";
 import { ZYRA_WEB_FETCH_TOOL_NAME, ZYRA_WEB_SEARCH_TOOL_NAME } from "./tool-contracts.mjs";
 
@@ -9,7 +9,7 @@ const MAX_LIMIT = 8;
 export { ZYRA_WEB_FETCH_TOOL_NAME, ZYRA_WEB_SEARCH_TOOL_NAME };
 
 export function createZyraWebSearchTool() {
-  return defineTool({
+  return defineZyraTool({
     name: ZYRA_WEB_SEARCH_TOOL_NAME,
     label: "Web search",
     description: "Search the web for current public information. Use this when a question depends on recent, changing, or source-backed facts.",
@@ -39,7 +39,7 @@ export function createZyraWebSearchTool() {
 }
 
 export function createZyraWebFetchTool() {
-  return defineTool({
+  return defineZyraTool({
     name: ZYRA_WEB_FETCH_TOOL_NAME,
     label: "Web fetch",
     description: "Fetch a public URL and return readable page text with source metadata.",

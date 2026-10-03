@@ -2,6 +2,7 @@ import { useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent, type Mou
 import {
     DndContext,
     PointerSensor,
+    KeyboardSensor,
     closestCorners,
     pointerWithin,
     useSensor,
@@ -13,16 +14,18 @@ import {
 } from '@dnd-kit/core'
 import {
     SortableContext,
+    sortableKeyboardCoordinates,
     useSortable,
     verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
-import { Bot, ChevronRight, MoreVertical } from 'lucide-react'
+import { ChevronRight, MoreVertical } from 'lucide-react'
 import type { AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { cn } from '@/lib/utils'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
+import { AssistantAgentPresenceIndicator } from './AssistantAgentPresenceIndicator'
 import {
     buildSessionSubagentTree,
     formatAssistantSidebarRelativeTime,
@@ -70,7 +73,8 @@ export function useAssistantRailSensors() {
     return useSensors(
         useSensor(PointerSensor, {
             activationConstraint: { distance: 6 }
-        })
+        }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     )
 }
 
@@ -166,10 +170,14 @@ export function SessionRow({
     const statusPill = resolveAssistantThreadStatusPill(thread, isActive, recencyTierByThreadId, statusContext)
 
     const handleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return
+        if (event.key === ' ') {
+            dragHandleProps?.listeners?.onKeyDown?.(event)
+            return
+        }
+        if (event.key !== 'Enter') return
         event.preventDefault()
         onActivate()
-    }, [onActivate])
+    }, [dragHandleProps, onActivate])
 
     return (
         <div
@@ -208,6 +216,7 @@ export function SessionRow({
                     </span>
                 ) : null}
                 <span className="min-w-0 flex-1 truncate text-[13px] leading-none">{getSessionDisplayTitle(session)}</span>
+                <AssistantAgentPresenceIndicator thread={thread} compact />
                 {statusPill && statusPill.showLabel !== false ? (
                     <span
                         className={cn(
@@ -228,7 +237,7 @@ export function SessionRow({
                 <div
                     className={cn(
                         'absolute right-1.5 top-1/2 z-[1] -translate-y-1/2 transition-opacity',
-                        isDragging ? 'pointer-events-none opacity-0' : 'pointer-events-auto opacity-0 group-hover/menu-item:opacity-100 focus-within:opacity-100'
+                        isDragging ? 'pointer-events-none opacity-0' : 'pointer-events-none opacity-0 group-hover/menu-item:pointer-events-auto group-hover/menu-item:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100'
                     )}
                 >
                     <FileActionsMenu
@@ -306,12 +315,10 @@ function SubagentThreadNode({
                     onClick={() => onSelectThread({ sessionId, threadId: node.thread.id })}
                     className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                 >
-                    <span className="inline-flex size-3.5 shrink-0 items-center justify-center rounded border border-white/[0.05] bg-white/[0.025] text-sky-100/65">
-                        <Bot size={9} />
-                    </span>
                     <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate text-[10px] font-medium">{getAssistantThreadDisplayTitle(node.thread)}</span>
+                            <span className="min-w-0 flex-1 truncate text-[10px] font-medium">{getAssistantThreadDisplayTitle(node.thread)}</span>
+                            <AssistantAgentPresenceIndicator thread={node.thread} compact />
                             {statusPill?.showLabel !== false ? (
                                 <span className={cn('hidden shrink-0 text-[9px] uppercase tracking-[0.14em] md:inline', statusPill?.colorClass || 'text-sparkle-text-muted/50')}>
                                     {statusPill?.label}

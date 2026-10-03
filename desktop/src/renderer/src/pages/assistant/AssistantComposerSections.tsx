@@ -4,10 +4,13 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type C
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
-import { AudioLines, Check, ChevronDown, ChevronUp, FilePenLine, Gauge, GitBranch, Loader2, Lock, LockOpen, Mic, RotateCw, ShieldCheck, Square, Zap } from 'lucide-react'
+import { AudioLines, Check, ChevronDown, ChevronUp, FilePenLine, Gauge, GitBranch, Loader2, Lock, LockOpen, Mic, RotateCw, Search, ShieldCheck, Square, X, Zap } from 'lucide-react'
+import { OpenAiLogo } from '@/components/ui/OpenAiLogo'
+import { OpenCodeLogo } from '@/components/ui/OpenCodeLogo'
 import type { AssistantRuntimeMode } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { formatAssistantModelLabel } from './assistant-model-labels'
+import { defaultExpandedAssistantModelGroup, groupAssistantModels, supportsAssistantFastMode } from './assistant-model-groups'
 import { getContentTypeTag, getContextFileMeta, isPastedTextAttachment } from './assistant-composer-utils'
 import { parseAssistantBrowserAnnotation } from './assistant-browser-annotation-composer'
 import type { ComposerContextFile } from './assistant-composer-types'
@@ -27,6 +30,15 @@ function isLatestModel(model: { id: string; label?: string }, latestModelId: str
     return Boolean(latestModelId && model.id === latestModelId)
 }
 
+function isGptFamilyModel(model: { id: string; label?: string }): boolean {
+    return /^gpt-/i.test(model.id.split('/').at(-1) || '') || /^gpt-/i.test(model.label || '')
+}
+
+function isOpenCodeHarnessModel(model: { id: string; description?: string }): boolean {
+    return model.id.split('/')[0]?.toLowerCase() === 'opencode-harness'
+        || /opencode harness/i.test(model.description || '')
+}
+
 const ASSISTANT_ACCESS_OPTIONS: Array<{
     mode: AssistantRuntimeMode
     label: string
@@ -41,7 +53,7 @@ const ASSISTANT_ACCESS_OPTIONS: Array<{
     { mode: 'approval-required', label: 'Supervised', shortLabel: 'Supervised', pillWidth: '104px', description: 'Ask before commands, edits, and control.', pillClass: 'border-emerald-400/35 bg-emerald-500/[0.13] text-emerald-100 hover:bg-emerald-500/[0.18]', accentClass: 'text-emerald-300', selectedMenuClass: 'bg-emerald-500/[0.09]', icon: Lock },
     { mode: 'auto-review', label: 'Auto review', shortLabel: 'Auto', pillWidth: '68px', description: 'Review automatically; ask when risk is unclear.', pillClass: 'border-sky-400/35 bg-sky-500/[0.13] text-sky-100 hover:bg-sky-500/[0.18]', accentClass: 'text-sky-300', selectedMenuClass: 'bg-sky-500/[0.09]', icon: ShieldCheck },
     { mode: 'edits-only', label: 'Edits only', shortLabel: 'Edits', pillWidth: '72px', description: 'Allow project edits; ask for commands and control.', pillClass: 'border-amber-400/35 bg-amber-500/[0.13] text-amber-100 hover:bg-amber-500/[0.18]', accentClass: 'text-amber-300', selectedMenuClass: 'bg-amber-500/[0.09]', icon: FilePenLine },
-    { mode: 'full-access', label: 'Full access', shortLabel: 'Full', pillWidth: '64px', description: 'Run routine work; ask only for critical actions.', pillClass: 'border-rose-400/35 bg-rose-500/[0.13] text-rose-100 hover:bg-rose-500/[0.18]', accentClass: 'text-rose-300', selectedMenuClass: 'bg-rose-500/[0.09]', icon: LockOpen }
+    { mode: 'full-access', label: 'Full access', shortLabel: 'Full', pillWidth: '64px', description: 'Run tools without permission checks or approval prompts.', pillClass: 'border-rose-400/35 bg-rose-500/[0.13] text-rose-100 hover:bg-rose-500/[0.18]', accentClass: 'text-rose-300', selectedMenuClass: 'bg-rose-500/[0.09]', icon: LockOpen }
 ]
 
 export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
@@ -419,11 +431,20 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
 }) {
     const [activeSubmenu, setActiveSubmenu] = useState<'model' | 'speed' | null>(null)
     const [showAccessMenu, setShowAccessMenu] = useState(false)
+    const [modelSearchOpen, setModelSearchOpen] = useState(false)
+    const [expandedModelGroup, setExpandedModelGroup] = useState<string | null>(null)
+    const modelSearchInputRef = useRef<HTMLInputElement | null>(null)
     const [submenuLeft, setSubmenuLeft] = useState({ model: 234, speed: 234 })
     const submenuCloseTimerRef = useRef<number | null>(null)
     const submenuContainerRef = useRef<HTMLDivElement | null>(null)
     const accessMenuRef = useRef<HTMLDivElement | null>(null)
     const selectedModelText = formatAssistantModelLabel(selectedModelLabel)
+    const modelGroups = groupAssistantModels(filteredModelOptions)
+    const visibleModelGroup = expandedModelGroup === '' ? null : expandedModelGroup && modelGroups.some(group => group.id === expandedModelGroup)
+        ? expandedModelGroup
+        : defaultExpandedAssistantModelGroup(modelGroups, selectedModel)
+    const canChooseSpeed = supportsAssistantFastMode(selectedModel)
+    const canChooseEffort = EFFORT_OPTIONS.length > 1
     const selectedEffortText = EFFORT_LABELS[selectedEffort] || selectedEffort
     const selectedEffortTone = getEffortTone(selectedEffort)
     const selectedEffortIndex = Math.max(0, EFFORT_OPTIONS.indexOf(selectedEffort))
@@ -441,7 +462,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     const menuRouteClass = 'group flex h-[36px] w-full items-center gap-3 rounded-lg px-2.5 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]'
     const menuOptionClass = 'flex w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]'
     const modelSubmenuPositionClass = traitsMenuOpensDown
-        ? 'absolute top-[76px] w-[252px] max-w-[calc(100vw-32px)]'
+        ? cn('absolute w-[252px] max-w-[calc(100vw-32px)]', canChooseEffort ? 'top-[76px]' : 'top-[42px]')
         : 'absolute bottom-0 w-[252px] max-w-[calc(100vw-32px)]'
     const speedSubmenuPositionClass = traitsMenuOpensDown
         ? 'absolute top-[106px] w-[216px] max-w-[calc(100vw-32px)]'
@@ -491,6 +512,25 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     useEffect(() => {
         if (!showTraitsDropdown) setActiveSubmenu(null)
     }, [showTraitsDropdown])
+
+    useEffect(() => {
+        if (modelSearchOpen) modelSearchInputRef.current?.focus()
+    }, [modelSearchOpen])
+
+    useEffect(() => {
+        if (!showTraitsDropdown && modelSearchOpen) {
+            setModelSearchOpen(false)
+            setModelQuery('')
+            setActiveModelIndex(0)
+        }
+    }, [showTraitsDropdown, modelSearchOpen, setModelQuery, setActiveModelIndex])
+
+    const closeModelSearch = () => {
+        setModelSearchOpen(false)
+        setModelQuery('')
+        setActiveModelIndex(0)
+        openSubmenu('model')
+    }
 
     useEffect(() => {
         if (!showAccessMenu) return
@@ -564,7 +604,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                     {showTraitsDropdown ? (
                         <div ref={submenuContainerRef} className="relative">
                             <div className={cn('w-[236px]', menuPanelClass)}>
-                                <div className="px-2.5 pb-2 pt-1.5">
+                                {canChooseEffort ? <div className="px-2.5 pb-2 pt-1.5">
                                     <div className="relative py-1">
                                         <input
                                             type="range"
@@ -587,7 +627,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                         <span>Faster</span>
                                         <span>Smarter</span>
                                     </div>
-                                </div>
+                                </div> : null}
                                 <div className="border-t border-[var(--surface-divider)] pt-1">
                                     <button
                                         type="button"
@@ -598,11 +638,11 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                     >
                                         <span className="min-w-0 flex-1 truncate font-medium text-sparkle-text">Model</span>
                                         <span className="inline-flex min-w-0 shrink-0 items-center gap-1">
-                                            <span className={cn('max-w-[128px] truncate text-right font-medium text-sparkle-text-dark', showModelRefreshState && 'assistant-model-name-shimmer')} aria-label={showModelRefreshState ? `Refreshing models; current model ${selectedModelText || 'not selected'}` : undefined}>{selectedModelText || 'Select'}</span>
+                                            <span className="max-w-[128px] truncate text-right font-medium text-sparkle-text-dark">{selectedModelText || 'Select'}</span>
                                             <ChevronDown size={14} className="shrink-0 -rotate-90 text-sparkle-text-muted transition-colors group-hover:text-sparkle-text-secondary" />
                                         </span>
                                     </button>
-                                    <button
+                                    {canChooseSpeed ? <button
                                         type="button"
                                         onMouseEnter={() => openSubmenu('speed')}
                                         onMouseLeave={scheduleSubmenuClose}
@@ -614,7 +654,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                             <span className={cn('truncate text-right font-medium text-sparkle-text-dark', fastModeEnabled && 'text-sparkle-text')}>{fastModeEnabled ? 'Fast' : 'Standard'}</span>
                                             <ChevronDown size={14} className="shrink-0 -rotate-90 text-sparkle-text-muted transition-colors group-hover:text-sparkle-text-secondary" />
                                         </span>
-                                    </button>
+                                    </button> : null}
                                 </div>
                                 {modelsError ? <p className="px-3 py-1 text-[12px] font-medium text-rose-300">{modelsError}</p> : null}
                             </div>
@@ -626,17 +666,109 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                 className={cn(modelSubmenuPositionClass, menuPanelClass, submenuMotionClass, getSubmenuVisibilityClass('model'))}
                                 style={{ left: submenuLeft.model }}
                             >
-                                    <div className="px-2.5 py-1.5 text-[12px] font-medium text-sparkle-text-dark">Models</div>
+                                    <div className="relative flex h-[32px] items-center px-1.5">
+                                        <div className={cn('flex w-full items-center transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', modelSearchOpen ? 'pointer-events-none translate-x-1 opacity-0' : 'translate-x-0 opacity-100')}>
+                                            <div className="min-w-0 flex-1 truncate px-1 text-[12px] font-medium text-sparkle-text-dark">Models</div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setModelSearchOpen(true)
+                                                    openSubmenu('model')
+                                                }}
+                                                aria-label="Search models"
+                                                title="Search models"
+                                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]"
+                                            >
+                                                <Search size={13} />
+                                            </button>
+                                        </div>
+                                        <div className={cn('absolute inset-x-1.5 flex items-center gap-1 transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', modelSearchOpen ? 'translate-x-0 opacity-100' : 'pointer-events-none -translate-x-1 opacity-0')}>
+                                            <div className="flex h-[26px] min-w-0 flex-1 items-center gap-1.5 rounded-md bg-white/[0.04] px-1.5 ring-1 ring-white/10 transition-colors focus-within:ring-[var(--accent-primary)]">
+                                                <Search size={12} className="shrink-0 text-sparkle-text-muted" aria-hidden="true" />
+                                                <input
+                                                    ref={modelSearchInputRef}
+                                                    value={modelQuery}
+                                                    onChange={(event) => {
+                                                        setModelQuery(event.currentTarget.value)
+                                                        setActiveModelIndex(0)
+                                                    }}
+                                                    onKeyDown={(event) => {
+                                                        if (event.key === 'Escape') {
+                                                            event.preventDefault()
+                                                            closeModelSearch()
+                                                        } else if (event.key === 'ArrowDown') {
+                                                            event.preventDefault()
+                                                            setActiveModelIndex((current) => filteredModelOptions.length > 0 ? (current + 1) % filteredModelOptions.length : 0)
+                                                        } else if (event.key === 'ArrowUp') {
+                                                            event.preventDefault()
+                                                            setActiveModelIndex((current) => filteredModelOptions.length > 0 ? (current - 1 + filteredModelOptions.length) % filteredModelOptions.length : 0)
+                                                        } else if (event.key === 'Enter') {
+                                                            const pick = filteredModelOptions[activeModelIndex] || filteredModelOptions[0]
+                                                            if (!pick) return
+                                                            setSelectedModel(pick.id)
+                                                            setShowModelDropdown(false)
+                                                            setModelQuery('')
+                                                            setActiveModelIndex(0)
+                                                            setModelSearchOpen(false)
+                                                            openSubmenu('model')
+                                                        }
+                                                    }}
+                                                    placeholder="Search models"
+                                                    aria-label="Search models"
+                                                    className="h-full w-full min-w-0 bg-transparent text-[12px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted/60"
+                                                />
+                                                {modelQuery ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setModelQuery('')
+                                                            setActiveModelIndex(0)
+                                                            modelSearchInputRef.current?.focus()
+                                                        }}
+                                                        aria-label="Clear model search"
+                                                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-sparkle-text-muted transition-colors hover:text-sparkle-text"
+                                                    >
+                                                        <X size={12} />
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={closeModelSearch}
+                                                aria-label="Close model search"
+                                                title="Close search"
+                                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]"
+                                            >
+                                                <X size={13} />
+                                            </button>
+                                        </div>
+                                    </div>
                                     <div
                                         ref={modelListRef}
                                         className="assistant-chat-scrollbar relative max-h-[min(196px,calc(100vh-136px))] overflow-y-auto"
+                                        onWheel={(event) => {
+                                            const list = event.currentTarget
+                                            const canScroll = event.deltaY < 0
+                                                ? list.scrollTop > 0
+                                                : list.scrollTop + list.clientHeight < list.scrollHeight - 1
+                                            if (canScroll) event.stopPropagation()
+                                        }}
                                     >
                                         {filteredModelOptions.length === 0 ? (
                                             <div className="px-2.5 py-2.5 text-[12px] text-sparkle-text-dark">No models found.</div>
-                                        ) : filteredModelOptions.map((model, index) => {
+                                        ) : modelGroups.map((group) => <div key={group.id}>
+                                            <button
+                                                type="button"
+                                                aria-expanded={Boolean(modelQuery.trim()) || visibleModelGroup === group.id}
+                                                onClick={() => setExpandedModelGroup(visibleModelGroup === group.id ? '' : group.id)}
+                                                className={cn(menuOptionClass, 'h-[30px] text-[12px] font-medium text-sparkle-text-secondary')}
+                                            >{group.label}<span className="ml-auto text-[10px] text-sparkle-text-muted">{group.models.length}</span><ChevronDown size={13} className={cn('text-sparkle-text-muted transition-transform', (modelQuery.trim() || visibleModelGroup === group.id) && 'rotate-180')} /></button>
+                                            {(modelQuery.trim() || visibleModelGroup === group.id) ? group.models.map(({ model, index }) => {
                                             const isActive = model.id === selectedModel
                                             const isHighlighted = index === activeModelIndex
                                             const isLatest = isLatestModel(model, latestModelId)
+                                            const isHarnessModel = isOpenCodeHarnessModel(model)
+                                            const isGptModel = isGptFamilyModel(model) && !isHarnessModel
                                             return (
                                                 <button
                                                     key={model.id}
@@ -645,6 +777,9 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                                     onClick={() => {
                                                         setSelectedModel(model.id)
                                                         setShowModelDropdown(false)
+                                                        setModelQuery('')
+                                                        setActiveModelIndex(0)
+                                                        setModelSearchOpen(false)
                                                         openSubmenu('model')
                                                     }}
                                                     className={cn(
@@ -652,17 +787,20 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                                         'h-[32px] text-[12px]',
                                                         isActive || isHighlighted ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-dark'
                                                     )}
+                                                    title={isHarnessModel ? 'OpenCode harness route' : undefined}
                                                 >
+                                                    {isGptModel ? <OpenAiLogo width={14} height={14} className="shrink-0 text-sparkle-text-secondary" aria-hidden="true" /> : isHarnessModel ? <OpenCodeLogo width={11} height={14} className="shrink-0 text-sparkle-text-secondary" aria-hidden="true" /> : null}
                                                     <span className="min-w-0 flex-1 truncate">{formatAssistantModelLabel(model.label || model.id)}</span>
+                                                    {isGptModel && isHarnessModel ? <span title="OpenCode harness route" className="inline-flex shrink-0 items-center"><OpenCodeLogo width={9} height={12} className="text-sparkle-text-muted" aria-hidden="true" /></span> : null}
                                                     {isLatest ? <span className="rounded-md bg-emerald-400/12 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200">Latest</span> : null}
                                                     {isActive ? <Check size={16} className="text-sparkle-text-secondary" /> : null}
                                                 </button>
                                             )
-                                        })}
+                                        }) : null}</div>)}
                                     </div>
                             </div>
 
-                            <div
+                            {canChooseSpeed ? <div
                                 onMouseEnter={() => openSubmenu('speed')}
                                 onMouseLeave={scheduleSubmenuClose}
                                 className={cn(speedSubmenuPositionClass, menuPanelClass, submenuMotionClass, getSubmenuVisibilityClass('speed'))}
@@ -688,7 +826,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                             {fastModeEnabled === fast ? <Check size={17} className="text-sparkle-text-secondary" /> : null}
                                         </button>
                                     ))}
-                            </div>
+                            </div> : null}
                         </div>
                     ) : null}
                 </div></AnchoredNativeOverlay>
@@ -700,12 +838,12 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                         'relative inline-flex h-7 w-fit min-w-0 max-w-full items-center overflow-hidden whitespace-nowrap rounded-md px-1 text-[12px] font-medium text-sparkle-text-secondary transition-colors hover:text-sparkle-text sm:px-1.5',
                         controlsLocked && 'cursor-not-allowed opacity-45 hover:text-sparkle-text-secondary'
                     )}
-                    title={showModelRefreshState ? 'Refreshing controls...' : 'Model, thinking, and speed'}
+                    title={showModelRefreshState ? 'Refreshing controls...' : `Model${canChooseEffort ? ', reasoning' : ''}${canChooseSpeed ? ', speed' : ''}`}
                 >
                     <span
                         className={cn(
                             'pointer-events-none absolute left-1 top-1/2 inline-flex -translate-y-1/2 items-center justify-center text-amber-200 transition-opacity duration-150 sm:left-1.5',
-                            fastModeEnabled ? 'opacity-100' : 'opacity-0'
+                            canChooseSpeed && fastModeEnabled ? 'opacity-100' : 'opacity-0'
                         )}
                         aria-hidden="true"
                     >
@@ -714,11 +852,11 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                     <span
                         className={cn(
                             'assistant-composer-footer-model-summary inline-flex min-w-0 max-w-full items-center gap-1.5 transition-[transform,gap] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]',
-                            fastModeEnabled && 'translate-x-[18px]'
+                            canChooseSpeed && fastModeEnabled && 'translate-x-[18px]'
                         )}
                     >
-                        <span className={cn('assistant-composer-footer-model-label min-w-0 truncate rounded px-0.5', showModelRefreshState && 'assistant-model-name-shimmer')} aria-label={showModelRefreshState ? `Refreshing models; current model ${selectedModelText || 'not selected'}` : undefined}>{selectedModelText}</span>
-                        <span className={cn('shrink-0', selectedEffortTone.textClass)}>{selectedEffortText}</span>
+                        <span className="assistant-composer-footer-model-label min-w-0 truncate rounded px-0.5">{selectedModelText}</span>
+                        {canChooseEffort ? <span className={cn('shrink-0', selectedEffortTone.textClass)}>{selectedEffortText}</span> : null}
                         <ChevronDown size={12} className="-mr-0.5 ml-0.5 shrink-0 text-sparkle-text-muted" />
                     </span>
                 </button>
@@ -835,10 +973,10 @@ export const ComposerStatusBar = memo(({
     <div className="flex items-center justify-between px-1 pt-2 text-[11px] font-medium text-sparkle-text-secondary">
         <div className="flex items-center gap-2">
             <span>Local</span>
-            {(isThinking || mentionLoading || branchesLoading) ? (
+            {(isThinking || mentionLoading || branchesLoading || modelsLoading) ? (
                 <span className="inline-flex items-center gap-1 text-[10px] text-sparkle-text-muted">
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/35" />
-                    <span>{isThinking ? thinkingLabel : mentionLoading ? 'Indexing...' : 'Loading...'}</span>
+                    <span>{isThinking ? thinkingLabel : mentionLoading ? 'Indexing...' : modelsLoading ? 'Loading models...' : 'Loading...'}</span>
                 </span>
             ) : null}
         </div>

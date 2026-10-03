@@ -79,6 +79,15 @@ for (const theme of THEMES) {
     assert.ok(getContrastRatio(status.onDanger, status.danger) >= MINIMUMS.textSecondary, `${theme.id}: danger foreground contrast`)
 }
 
+const contrastSample = THEMES[0]
+const softened = resolveThemeTokens(contrastSample.tokens, 70)
+const normal = resolveThemeTokens(contrastSample.tokens, 100)
+const strengthened = resolveThemeTokens(contrastSample.tokens, 150)
+assert.ok(getContrastRatio(softened.card, softened.bg) < getContrastRatio(normal.card, normal.bg), 'lower contrast must soften card surfaces')
+assert.ok(getContrastRatio(strengthened.card, strengthened.bg) > getContrastRatio(normal.card, normal.bg), 'higher contrast must strengthen card surfaces')
+assert.ok(getContrastRatio(softened.border, softened.bg) < getContrastRatio(normal.border, normal.bg), 'lower contrast must soften component borders')
+assert.ok(getContrastRatio(strengthened.border, strengthened.bg) > getContrastRatio(normal.border, normal.bg), 'higher contrast must strengthen component borders')
+
 const themeCss = readFileSync(resolve(import.meta.dir, '../src/renderer/src/styles/theme-tokens.css'), 'utf8')
 assert.match(themeCss, /--surface-topbar:\s*var\(--surface-chrome\)/, 'App top bar must use shared chrome')
 assert.match(themeCss, /--surface-sidebar:\s*var\(--surface-chrome\)/, 'App sidebar must use shared chrome')

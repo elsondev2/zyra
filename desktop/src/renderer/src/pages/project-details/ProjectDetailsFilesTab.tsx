@@ -243,7 +243,7 @@ export function ProjectDetailsFilesTab(props: ProjectDetailsFilesTabProps) {
                             <div
                                 key={node.path}
                                 className={cn(
-                                    "grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-white/5 px-4 py-0.5 transition-colors group cursor-pointer sm:grid-cols-12 hover:bg-white/5",
+                                    "grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-white/5 px-4 py-0.5 transition-colors group cursor-pointer [content-visibility:auto] [contain-intrinsic-size:32px] sm:grid-cols-12 hover:bg-white/5",
                                     node.isHidden && "opacity-50",
                                     isDragTarget && "bg-white/[0.03]",
                                     isDragTargetRoot && "bg-white/[0.06] border-white/20"
@@ -300,7 +300,7 @@ export function ProjectDetailsFilesTab(props: ProjectDetailsFilesTabProps) {
                                             isFolderLoading ? (
                                                 <RefreshCw size={12} className="text-white/40 animate-spin" />
                                             ) : (
-                                                <ChevronRight size={12} className={cn("text-white/30 transition-transform", isExpanded && "rotate-90")} />
+                                                <ChevronRight size={12} className={cn("text-white/30 transition-transform duration-150 ease-out motion-reduce:transition-none", isExpanded && "rotate-90")} />
                                             )
                                         ) : (
                                             <span className="w-3" />

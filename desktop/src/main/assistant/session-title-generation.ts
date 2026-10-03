@@ -23,7 +23,7 @@ const ATTACHMENT_LIMIT = 4
 const RETITLE_TURN_LIMIT = 4
 const RETITLE_USER_EXCERPT_LIMIT = 720
 const RETITLE_ASSISTANT_EXCERPT_LIMIT = 1_200
-const pendingTitleGenerationSessionIds = new Set<string>()
+const pendingTitleGenerationTasks = new Map<string, Promise<string | null>>()
 
 type AppendEvent = (
     type: AssistantDomainEvent['type'],
@@ -247,9 +247,18 @@ type SessionTitleGenerationTask = {
     announceState: boolean
 }
 
-async function runSessionTitleGeneration(args: SessionTitleGenerationTask): Promise<string | null> {
-    if (pendingTitleGenerationSessionIds.has(args.sessionId)) return null
-    pendingTitleGenerationSessionIds.add(args.sessionId)
+function runSessionTitleGeneration(args: SessionTitleGenerationTask): Promise<string | null> {
+    const pendingTask = pendingTitleGenerationTasks.get(args.sessionId)
+    if (pendingTask) return pendingTask
+    const task = generateSessionTitle(args)
+    pendingTitleGenerationTasks.set(args.sessionId, task)
+    void task.finally(() => {
+        if (pendingTitleGenerationTasks.get(args.sessionId) === task) pendingTitleGenerationTasks.delete(args.sessionId)
+    }).catch(() => undefined)
+    return task
+}
+
+async function generateSessionTitle(args: SessionTitleGenerationTask): Promise<string | null> {
     let settledState = false
     if (args.announceState) {
         const occurredAt = nowIso()
@@ -291,7 +300,6 @@ async function runSessionTitleGeneration(args: SessionTitleGenerationTask): Prom
         }
         return nextTitle
     } finally {
-        pendingTitleGenerationSessionIds.delete(args.sessionId)
         if (args.announceState && !settledState) {
             const occurredAt = nowIso()
             args.appendEvent('session.updated', occurredAt, {
@@ -323,6 +331,25 @@ export function queueGeneratedSessionTitle(args: {
         log.warn('[Assistant] Session title generation task failed:', error)
     })
     return task
+}
+
+export function regenerateSessionTitleFromPrompt(args: {
+    sessionId: string
+    threadId: string
+    messageText: string
+    seedTitle: string
+    cwd: string
+    preferredModel?: string | null
+    generateText: AssistantTitleTextGenerator
+    getSnapshot: () => { sessions: AssistantSession[] }
+    appendEvent: AppendEvent
+    onApplied?: (title: string) => void | Promise<void>
+}): Promise<string | null> {
+    return runSessionTitleGeneration({
+        ...args,
+        prompt: buildSessionTitlePrompt(args.messageText, args.seedTitle),
+        announceState: true
+    })
 }
 
 export function regenerateSessionTitle(args: {

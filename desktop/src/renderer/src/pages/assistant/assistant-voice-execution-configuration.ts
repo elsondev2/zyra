@@ -1,4 +1,5 @@
 import type { AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
+import { supportsAssistantFastMode } from './assistant-model-groups'
 
 export function buildAssistantVoiceExecutionConfiguration(input: {
     model: string
@@ -14,6 +15,6 @@ export function buildAssistantVoiceExecutionConfiguration(input: {
         effort: input.effort,
         interactionMode: input.interactionMode,
         profile: input.profile || 'default',
-        serviceTier: input.fastModeEnabled ? 'fast' : undefined
+        serviceTier: input.fastModeEnabled && supportsAssistantFastMode(input.model) ? 'fast' : undefined
     }
 }

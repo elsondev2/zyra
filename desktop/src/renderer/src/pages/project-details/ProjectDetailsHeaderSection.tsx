@@ -58,6 +58,12 @@ export function ProjectDetailsHeaderSection(props: ProjectDetailsHeaderSectionPr
         ].filter((path): path is string => typeof path === 'string' && path.trim().length > 0)
         return resolveNavigationRoot(project.path, roots)
     }, [project.path, settings?.additionalFolders, settings?.projectsFolder])
+    const projectArtworkPath = useMemo(() => {
+        const normalized = String(project.path || '').replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+        const overrides = settings?.projectIconOverrides || {}
+        const assigned = Object.entries(overrides).find(([path]) => path.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase() === normalized)?.[1]
+        return assigned || project.projectIconPath
+    }, [project.path, project.projectIconPath, settings?.projectIconOverrides])
     const displayProjectPath = useMemo(
         () => formatRootRelativePath(project.path, projectDisplayRoot),
         [project.path, projectDisplayRoot]
@@ -108,12 +114,12 @@ export function ProjectDetailsHeaderSection(props: ProjectDetailsHeaderSectionPr
                                 'shrink-0 rounded-xl flex items-center justify-center border border-white/10',
                                 isCondensedLayout ? 'h-12 w-12' : 'h-14 w-14'
                             )}
-                            style={{ background: `${themeColor}15` }}
+                            style={{ background: projectArtworkPath ? `${themeColor}15` : 'rgba(141, 216, 209, 0.06)' }}
                         >
                             <ProjectIcon
                                 projectType={project.type}
                                 framework={project.frameworks?.[0]}
-                                customIconPath={project.projectIconPath}
+                                customIconPath={projectArtworkPath}
                                 size={isCondensedLayout ? 28 : 32}
                             />
                         </div>
@@ -196,10 +202,10 @@ export function ProjectDetailsHeaderSection(props: ProjectDetailsHeaderSectionPr
                                 'flex items-center justify-center gap-2 rounded-lg bg-[var(--accent-primary)] text-sm font-medium text-white transition-colors hover:bg-[var(--accent-primary)]/80',
                                 isCondensedLayout ? 'h-10 w-10 xl:w-auto xl:px-3 xl:py-2.5' : 'h-11 w-11 lg:w-auto lg:px-4 lg:py-2.5'
                             )}
-                            title="Browse as Folder"
+                            title={props.accessoryMode ? 'Browse files' : 'Browse as Folder'}
                         >
                             <Folder size={16} />
-                            <span className={cn(isCondensedLayout ? 'hidden xl:inline' : 'hidden lg:inline')}>Browse Folder</span>
+                            <span className={cn(isCondensedLayout ? 'hidden xl:inline' : 'hidden lg:inline')}>{props.accessoryMode ? 'Browse Files' : 'Browse Folder'}</span>
                         </button>
 
                         <button
@@ -239,7 +245,7 @@ export function ProjectDetailsHeaderSection(props: ProjectDetailsHeaderSectionPr
                             menuPresentation="inline"
                             menuOpen={openWithMenuOpen}
                             onMenuOpenChange={setOpenWithMenuOpen}
-                            contextActions={[{
+                            contextActions={props.accessoryMode ? [] : [{
                                 id: 'assistant',
                                 label: 'Assistant',
                                 icon: 'assistant',

@@ -13,6 +13,12 @@ let hold = false
 let downloadedRoot = ''
 async function packageFiles(dir: string, name: string) {
     await mkdir(join(dir, '.codex-plugin'), { recursive: true })
+    if (name === 'clickup' || name === 'monday-com') {
+        const id = name === 'clickup' ? 'asdk_app_69431e6d26b88191b4029488aeb42f5b' : 'connector_690aabb71bf481918b8d5b614ed3fd4c'
+        await writeFile(join(dir, '.codex-plugin/plugin.json'), JSON.stringify({ name, version, description: 'App-only fixture.', apps: './.app.json' }))
+        await writeFile(join(dir, '.app.json'), JSON.stringify({ apps: { [name]: { id } } }))
+        return
+    }
     await mkdir(join(dir, 'skills/test'), { recursive: true })
     await writeFile(join(dir, '.codex-plugin/plugin.json'), JSON.stringify({ name, version, description: 'Fixture package.', skills: './skills' }))
     await writeFile(join(dir, 'skills/test/SKILL.md'), `---\nname: fixture-test\ndescription: Test fixture Skill.\n---\nRelease ${version}.`)
@@ -93,6 +99,19 @@ try {
     assert.equal(catalog.plugins.find(p => p.id === plugin.id)?.state, 'disabled', 'reinstallation never silently reactivates')
     assert.equal((await registry.getChatScope('plugin-chat'))?.plugins[0].releaseId, release.id, 'updates retain the new Chat\'s pinned release')
     await registry.setPluginState(plugin.id, 'active')
+    for (const name of ['clickup', 'monday-com']) {
+        const download = await registry.acquisitions.start(name, 42)
+        const ready = await finished(download.id)
+        assert.equal(ready.status, 'ready', `${name} passes the catalog acquisition gate without skills`)
+        assert.equal(ready.inspection?.release.skills.length, 0)
+        assert.equal(ready.inspection?.manifest.contributions.mcp, './.app.json')
+        const installed = await registry.installInspectedPlugin({ reviewId: ready.inspection!.reviewId, confirmed: true }, 42)
+        const app = installed.catalog.plugins.find(entry => entry.name === name)!
+        const appRelease = installed.catalog.releases.find(entry => entry.id === app.activeReleaseId)!
+        const scope = await registry.createChatScope(`app-${name}`, null, true, { pluginId: app.id, releaseId: appRelease.id, contentDigest: appRelease.contentDigest })
+        assert.equal(scope.plugins[0]?.mcpPath, './.app.json')
+        assert.equal((await registry.getInstalledMcpSource(app.id))?.servers[0]?.name, name)
+    }
     await assert.rejects(() => registry.createChatScope('outdated-selection', null, true, selection), /changed|unavailable/)
 
     const cancelReady = await registry.acquisitions.start('vercel', 42)

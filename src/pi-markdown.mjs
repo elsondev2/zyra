@@ -1,4 +1,4 @@
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown } from "./runtime/terminal/src/index.js";
 
 const ansi = {
   bold: "\x1b[1m",

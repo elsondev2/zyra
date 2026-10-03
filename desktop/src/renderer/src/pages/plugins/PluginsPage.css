@@ -5,6 +5,7 @@
     --plugin-hover: color-mix(in srgb, var(--color-text) 4%, transparent);
     font-size: 13px;
 }
+.plugin-settings-inline { --plugin-secondary: var(--settings-text-secondary); --plugin-divider: var(--settings-border); --plugin-hover: var(--settings-row-hover); color: var(--settings-text); font-size: 13px; }
 .plugin-directory { height: 100%; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; background: var(--color-bg); }
 .plugin-back-link { margin: -12px 0 20px -8px; }
 .plugin-directory-column { width: min(100%, 840px); margin: 0 auto; padding: clamp(32px, 7vh, 76px) 40px 72px; }
@@ -37,6 +38,7 @@
 .plugin-row-content { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1; text-align: left; padding: 16px 4px; border-radius: 4px; }
 .plugin-row-content:hover { background: var(--plugin-hover); }
 .plugin-row-icon { flex-shrink: 0; width: 36px; color: var(--plugin-secondary); }
+.plugin-row-logo { width: 28px; height: 28px; object-fit: contain; border-radius: 5px; margin: 0 4px; }
 .plugin-row-copy { flex: 1; min-width: 0; }
 .plugin-row-copy strong { display: block; font-size: 14px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5; }
 .plugin-row-copy > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--plugin-secondary); margin-top: 3px; line-height: 1.5; font-size: 12.5px; }
@@ -101,10 +103,17 @@
 .plugin-store-toolbar { display: flex; gap: 12px; margin: 28px 0 30px; }
 .plugin-store-installed { margin-bottom: 20px; }
 .plugin-store-installed-heading { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-.plugin-store-installed-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 16px; list-style: none; padding: 8px 0 0; }
+.plugin-store-installed-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 28px; list-style: none; padding: 12px 0; }
 .plugin-store-installed-grid li { display: flex; align-items: center; min-width: 0; }
-.plugin-store-installed-grid .plugin-row-content { width: auto; gap: 6px; padding: 12px 0; }
-.plugin-store-installed-grid .plugin-row-copy strong { font-size: 13px; }
+.plugin-store-installed-grid .plugin-row-content { flex: 1; min-width: 0; }
+.plugin-store-grid li { display: flex; align-items: center; min-width: 0; }
+.plugin-store-item { padding-right: 6px; border-radius: 6px; transition: background-color 150ms; }
+.plugin-store-item:hover, .plugin-store-item:focus-within { background: var(--plugin-hover); }
+.plugin-store-item > .plugin-row-content:hover { background: transparent; }
+.plugin-store-item > .plugin-icon-button { margin-left: 4px; }
+.plugin-install-toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); z-index: 100; padding: 12px 18px; border: 1px solid var(--plugin-divider); border-radius: 8px; color: var(--color-text); background: var(--color-card); box-shadow: 0 8px 24px #0003; animation: plugin-toast 4s ease both; }
+@keyframes plugin-toast { 0% { opacity: 0; translate: 0 8px; } 8%, 90% { opacity: 1; translate: 0 0; } 100% { opacity: 0; translate: 0 4px; } }
+.plugin-skill-logo { width: 22px; height: 22px; object-fit: contain; flex-shrink: 0; }
 .plugin-store-category { margin-bottom: 28px; }
 .plugin-store-icon { position: relative; display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border-radius: 8px; color: var(--plugin-secondary); }
 .plugin-store-icon img { width: 100%; height: 100%; object-fit: contain; }
@@ -121,15 +130,52 @@
 .plugin-product-identity { display: flex; gap: 16px; align-items: center; min-width: 0; }
 .plugin-product-identity .plugin-store-icon { width: 48px; height: 48px; }
 .plugin-product-identity h1 { font-size: 23px; line-height: 1.35; font-weight: 550; overflow-wrap: anywhere; }
-.plugin-product-identity p { margin-top: 5px; font-size: 13px; color: var(--plugin-secondary); line-height: 1.5; }
+.plugin-product-description { margin-top: 18px; max-width: 72ch; font-size: 13px; color: var(--plugin-secondary); line-height: 1.7; white-space: pre-line; overflow-wrap: anywhere; }
 .plugin-product-status { color: var(--plugin-secondary); margin-top: 10px; font-size: 12px; }
 .plugin-product-section { margin-top: 28px; }
-.plugin-product-section > h2 { font-size: 14px; font-weight: 550; padding-bottom: 10px; border-bottom: 1px solid var(--plugin-divider); }
+.plugin-product-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 4px; }
+.plugin-product-section-heading h2 { font-size: 12px; font-weight: 500; color: var(--plugin-secondary); }
 .plugin-product-contribution { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
 .plugin-product-contribution strong, .plugin-product-skills strong { font-weight: 500; }
 .plugin-product-contribution > span { color: var(--plugin-secondary); font-size: 12px; }
+.plugin-product-capability { display: grid; grid-template-columns: 18px 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 52px; padding: 10px 0; line-height: 1.5; }
+.plugin-product-capability > svg { color: var(--plugin-secondary); }
+.plugin-product-capability strong { font-weight: 500; font-size: 13px; }
+.plugin-product-capability-label { display: inline-flex; align-items: center; gap: 7px; }
+.plugin-product-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; padding: 1px 5px; border-radius: 5px; color: var(--plugin-secondary); background: var(--plugin-hover); font-size: 11px; font-variant-numeric: tabular-nums; }
+.plugin-product-capability-description { color: var(--plugin-secondary); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.plugin-product-capability-state { display: inline-flex; align-items: center; gap: 6px; color: var(--plugin-secondary); font-size: 11.5px; white-space: nowrap; }
+.plugin-product-connection-action { min-height: 24px; padding: 0; font-size: 11.5px; }
+.plugin-product-connections { margin-top: 8px; }
+.plugin-product-connect-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; }
+.plugin-product-connect-row strong { font-weight: 500; font-size: 12px; }
+.plugin-product-connect-row p { margin-top: 2px; color: var(--plugin-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.plugin-product-skill-disclosure > summary { border-bottom: none; cursor: pointer; list-style: none; }
+.plugin-product-skill-disclosure > summary::-webkit-details-marker { display: none; }
+.plugin-product-skill-disclosure > summary:hover { background: var(--plugin-hover); }
+.plugin-product-skill-disclosure > button { width: 100%; text-align: left; cursor: pointer; }
+.plugin-product-skill-disclosure > button:hover { background: var(--plugin-hover); }
+.plugin-product-disclosure-chevron { transition: transform 380ms cubic-bezier(.22,1,.36,1); }
+.plugin-product-skill-disclosure[data-open="true"] .plugin-product-disclosure-chevron { transform: rotate(180deg); }
+.plugin-product-skill-disclosure .plugin-product-skills { margin: 0 0 12px 30px; max-height: 260px; overflow-y: auto; }
+.plugin-product-footer { margin-top: 28px; padding-top: 8px; }
+.plugin-product-metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; color: var(--plugin-secondary); font-size: 11.5px; line-height: 1.6; }
+.plugin-product-metadata strong { color: var(--color-text); font-weight: 500; }
+.plugin-product-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.plugin-product-link { display: inline-flex; align-items: center; padding: 6px 11px; border: 1px solid var(--plugin-divider); border-radius: 999px; font-size: 11.5px; line-height: 1.4; color: var(--plugin-secondary); white-space: nowrap; transition: color 240ms ease, background-color 240ms ease, border-color 240ms ease; }
+.plugin-product-link-icon { flex-shrink: 0; margin-right: 6px; }
+.plugin-product-link-icon-website { color: light-dark(#2563b0, #79b5ef); }
+.plugin-product-link-icon-privacy { color: light-dark(#25805a, #6cc7a0); }
+.plugin-product-link-icon-terms { color: light-dark(#9b691f, #dfb269); }
+.plugin-product-link-icon-source { color: light-dark(#7851b1, #b49add); }
+.plugin-product-link-arrow { display: inline-flex; flex-shrink: 0; width: 0; margin-left: 0; opacity: 0; overflow: hidden; transform: translate(-3px, 2px); transition: width 380ms cubic-bezier(.22, 1, .36, 1), margin-left 380ms cubic-bezier(.22, 1, .36, 1), opacity 280ms ease, transform 380ms cubic-bezier(.22, 1, .36, 1); }
+.plugin-product-link-arrow svg { flex-shrink: 0; }
+.plugin-product-link:hover, .plugin-product-link:focus-visible { background: var(--plugin-hover); color: var(--color-text); border-color: color-mix(in srgb, var(--color-text) 22%, transparent); }
+.plugin-product-link:hover .plugin-product-link-arrow, .plugin-product-link:focus-visible .plugin-product-link-arrow { width: 14px; margin-left: 7px; opacity: 1; transform: translate(0, 0); }
 .plugin-product-skills { list-style: none; padding: 0; }
-.plugin-product-skills li { padding: 7px 0; }
+.plugin-product-skills li { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; }
+.plugin-product-skills li > div { min-width: 0; }
+@media (prefers-reduced-motion: reduce) { .plugin-install-toast { animation: none; } .plugin-product-disclosure-chevron { transition: none; } }
 .plugin-product-skills p { font-size: 12px; line-height: 1.5; color: var(--plugin-secondary); margin-top: 2px; }
 .plugin-product-more { margin-top: 14px; }
 .plugin-product-more summary { cursor: pointer; color: var(--plugin-secondary); font-size: 12px; }
@@ -143,6 +189,9 @@ body.compact-mode .plugin-row-content { padding-top: 12px; padding-bottom: 12px;
     .plugin-product-header { flex-wrap: wrap; gap: 16px; }
     .plugin-product-identity h1 { font-size: 21px; }
     .plugin-product-breadcrumb { margin-bottom: 20px; }
+    .plugin-product-capability { grid-template-columns: 18px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; padding: 12px 0; }
+    .plugin-product-capability-description { grid-column: 2; grid-row: 2; }
+    .plugin-product-capability-state, .plugin-product-connection-action { grid-column: 3; grid-row: 1 / span 2; }
     .plugin-directory-actions { flex-wrap: wrap; }
     .plugin-store-grid { grid-template-columns: minmax(0, 1fr); }
     .plugin-store-installed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

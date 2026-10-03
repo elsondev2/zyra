@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantAccountOverview, AssistantAccountPlanType, AssistantModelInfo } from '@shared/assistant/contracts'
-import type { OnboardingAuthMethod, OpenAIConnectionMethodStatus, OpenAIConnectionsStatus } from '@shared/onboarding/contracts'
+import type { ChatGptDeviceCode, ChatGptSignInMethod, OnboardingAuthMethod, OpenAIConnectionMethodStatus, OpenAIConnectionsStatus } from '@shared/onboarding/contracts'
 import { useSettings } from '@/lib/settings'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
@@ -140,6 +140,10 @@ export function useOpenAIAccountSettings({ usageActive = false, connectionsActiv
     const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
     const [apiKeyDraft, setApiKeyDraft] = useState('')
     const [disconnectMethod, setDisconnectMethod] = useState<OnboardingAuthMethod | null>(null)
+    const [chatGptAuthenticationSuccessOpen, setChatGptAuthenticationSuccessOpen] = useState(false)
+    const [chatGptDeviceCode, setChatGptDeviceCode] = useState<ChatGptDeviceCode | null>(null)
+    const [chatGptDeviceCodeOpen, setChatGptDeviceCodeOpen] = useState(false)
+    const chatGptDeviceCodeDismissedRef = useRef(false)
 
     const loadOverview = useCallback(async (forceRefresh = false) => {
         if (!forceRefresh && accountSettingsCache.overview && isAccountCacheFresh(accountSettingsCache.overviewAt)) {
@@ -216,24 +220,63 @@ export function useOpenAIAccountSettings({ usageActive = false, connectionsActiv
         await Promise.all([loadConnectionState(true, 'retry'), ...(usageActive ? [loadOverview(true)] : [])])
     }, [loadConnectionState, loadOverview, usageActive])
 
-    const connectChatGpt = useCallback(async () => {
+    const connectChatGpt = useCallback(async (signInMethod: ChatGptSignInMethod = 'browser') => {
         setConnectionAction('chatgpt')
         setConnectionError(null)
+        setChatGptDeviceCode(null)
+        setChatGptDeviceCodeOpen(false)
+        chatGptDeviceCodeDismissedRef.current = false
+        const deviceCodePolling = signInMethod === 'device-code'
+            ? window.setInterval(() => {
+                void window.devscope.onboarding.getChatGptDeviceCode().then((result) => {
+                    if (result.success && result.deviceCode && !chatGptDeviceCodeDismissedRef.current) {
+                        setChatGptDeviceCode(result.deviceCode)
+                        setChatGptDeviceCodeOpen(true)
+                    }
+                })
+            }, 350)
+            : null
         try {
-            const result = await window.devscope.onboarding.connectChatGpt({ analyticsAction: connections?.chatgpt?.configured ? 'replace' : 'connect' })
-            if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'ChatGPT could not be verified.' : result.error)
+            const result = await window.devscope.onboarding.connectChatGpt({ analyticsAction: connections?.chatgpt?.configured ? 'replace' : 'connect', signInMethod })
+            if (!result.success) throw Object.assign(new Error(result.error), { code: result.code })
+            if (!result.status.verified) throw new Error(result.status.detail || 'ChatGPT could not be verified.')
             invalidateSettingsModels()
             invalidateAccountRuntimeCache({ clearOverview: true, clearConnections: true })
             setOverview(null)
             setOverviewLoading(true)
             setConnections(null)
             await Promise.all([loadConnectionState(true), ...(usageActive ? [loadOverview(true)] : [])])
+            setChatGptDeviceCode(null)
+            setChatGptDeviceCodeOpen(false)
+            setChatGptAuthenticationSuccessOpen(true)
         } catch (error) {
-            setConnectionError(error instanceof Error ? error.message : 'ChatGPT connection failed.')
+            if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ZYRA_OAUTH_CANCELLED')) {
+                setConnectionError(error instanceof Error ? error.message : 'ChatGPT connection failed.')
+            }
         } finally {
+            if (deviceCodePolling !== null) window.clearInterval(deviceCodePolling)
             setConnectionAction(null)
         }
     }, [connections?.chatgpt?.configured, loadConnectionState, loadOverview, usageActive])
+
+    const cancelChatGpt = useCallback(async () => {
+        try {
+            const result = await window.devscope.onboarding.cancelChatGpt()
+            if (!result.success) throw new Error(result.error)
+            if (result.cancelled) {
+                chatGptDeviceCodeDismissedRef.current = true
+                setChatGptDeviceCode(null)
+                setChatGptDeviceCodeOpen(false)
+            }
+        } catch (error) {
+            setConnectionError(error instanceof Error ? error.message : 'Could not cancel ChatGPT sign-in.')
+        }
+    }, [])
+
+    const dismissChatGptDeviceCode = useCallback(() => {
+        chatGptDeviceCodeDismissedRef.current = true
+        setChatGptDeviceCodeOpen(false)
+    }, [])
 
     const connectApiKey = useCallback(async () => {
         const key = apiKeyDraft.trim()
@@ -331,5 +374,5 @@ export function useOpenAIAccountSettings({ usageActive = false, connectionsActiv
         : settings.assistantDefaultModel.startsWith('openai/') ? 'api-key' : null
     const connectionBusy = connectionAction !== null
 
-    return { settings, updateSettings, overview, overviewLoading, overviewError, desktopHost, connectionError, connectionAction, apiKeyDialogOpen, setApiKeyDialogOpen, apiKeyDraft, setApiKeyDraft, disconnectMethod, setDisconnectMethod, loadOverview, refreshAll, connectChatGpt, connectApiKey, switchDefaultConnection, disconnect, applyAccountOverview, usageCards, initialAccountLoading, displayAccountValue, connectionLabel, accountPlan, chatGptConnection, apiKeyConnection, activeDefaultMethod, connectionBusy }
+    return { settings, updateSettings, overview, overviewLoading, overviewError, desktopHost, connectionError, connectionAction, apiKeyDialogOpen, setApiKeyDialogOpen, apiKeyDraft, setApiKeyDraft, disconnectMethod, setDisconnectMethod, chatGptAuthenticationSuccessOpen, setChatGptAuthenticationSuccessOpen, chatGptDeviceCode, chatGptDeviceCodeOpen, dismissChatGptDeviceCode, loadOverview, refreshAll, connectChatGpt, cancelChatGpt, connectApiKey, switchDefaultConnection, disconnect, applyAccountOverview, usageCards, initialAccountLoading, displayAccountValue, connectionLabel, accountPlan, chatGptConnection, apiKeyConnection, activeDefaultMethod, connectionBusy }
 }

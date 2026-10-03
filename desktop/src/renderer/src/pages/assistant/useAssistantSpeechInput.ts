@@ -82,22 +82,6 @@ const appendSpeechToDraft = (baseText: string, spokenText: string) => {
     return /\s$/.test(baseText) ? `${baseText}${normalizedSpokenText}` : `${baseText} ${normalizedSpokenText}`
 }
 
-const normalizeBrowserSpeechError = (error: string): { kind: AssistantSpeechErrorKind; message: string | null } => {
-    switch (error) {
-        case 'not-allowed':
-        case 'service-not-allowed':
-            return { kind: 'permission', message: 'Microphone permission was denied.' }
-        case 'audio-capture':
-            return { kind: 'capture', message: 'No microphone was found.' }
-        case 'network':
-            return { kind: 'network', message: 'Browser dictation could not reach its speech service.' }
-        case 'no-speech':
-            return { kind: 'no-speech', message: null }
-        default:
-            return { kind: 'unknown', message: 'Browser dictation failed.' }
-    }
-}
-
 const microphoneErrorKind = (error: unknown): AssistantSpeechErrorKind => {
     const name = error instanceof DOMException
         ? error.name
@@ -115,9 +99,9 @@ export function useAssistantSpeechInput({
     setComposerCursor,
     textareaRef,
     disabled,
-    isConnected,
     engine,
-    scopeKey
+    scopeKey,
+    onSubmitTranscript
 }: {
     text: string
     setText: Dispatch<SetStateAction<string>>
@@ -127,6 +111,7 @@ export function useAssistantSpeechInput({
     isConnected: boolean
     engine: AssistantTranscriptionEngine
     scopeKey: string
+    onSubmitTranscript?: (draftText: string) => void | Promise<void>
 }) {
     const speechRecognitionCtor = useMemo(() => getSpeechRecognitionCtor(), [])
     const audioContextCtor = useMemo(() => getAudioContextCtor(), [])
@@ -137,12 +122,17 @@ export function useAssistantSpeechInput({
     const waveformLastEmitAtRef = useRef(0)
     const textAtStartRef = useRef('')
     const finalTranscriptRef = useRef('')
+    const latestBrowserTranscriptRef = useRef('')
+    const browserStopRequestedRef = useRef(false)
     const requestIdRef = useRef(0)
     const mountedRef = useRef(true)
     const startingRef = useRef(false)
     const autoSubmitRef = useRef(false)
-    const availableRef = useRef({ disabled, isConnected, engine, scopeKey })
-    availableRef.current = { disabled, isConnected, engine, scopeKey }
+    const availableRef = useRef({ disabled, engine, scopeKey })
+    availableRef.current = { disabled, engine, scopeKey }
+    const submitTranscriptRef = useRef(onSubmitTranscript)
+    submitTranscriptRef.current = onSubmitTranscript
+    const submittingRef = useRef<number | null>(null)
 
     const [isStarting, setIsStarting] = useState(false)
     const [isRecording, setIsRecording] = useState(false)
@@ -153,11 +143,12 @@ export function useAssistantSpeechInput({
     const [speechErrorKind, setSpeechErrorKind] = useState<AssistantSpeechErrorKind | null>(null)
 
     const isSupported = useMemo(() => {
-        if (engine === 'browser') return Boolean(speechRecognitionCtor)
         return typeof navigator !== 'undefined'
             && Boolean(navigator.mediaDevices?.getUserMedia)
             && Boolean(audioContextCtor)
-            && typeof window.devscope?.assistant?.transcribeVoice === 'function'
+            && (engine === 'browser'
+                ? Boolean(speechRecognitionCtor)
+                : typeof window.devscope?.assistant?.transcribeVoice === 'function')
     }, [audioContextCtor, engine, speechRecognitionCtor])
 
     const durationLabel = useMemo(() => formatAssistantVoiceDuration(durationMs), [durationMs])
@@ -213,14 +204,18 @@ export function useAssistantSpeechInput({
         })
     }, [setComposerCursor, textareaRef])
 
-    const applyTranscript = useCallback((spokenText: string) => {
+    const applyTranscript = useCallback((spokenText: string, focusAtEnd = true) => {
         const nextText = appendSpeechToDraft(textAtStartRef.current, spokenText)
         setText(nextText)
-        syncTextareaToEnd(nextText)
+        if (focusAtEnd) syncTextareaToEnd(nextText)
+        return nextText
     }, [setText, syncTextareaToEnd])
 
     const stopBrowserRecording = useCallback(() => {
-        recognitionRef.current?.stop()
+        if (browserStopRequestedRef.current) return
+        browserStopRequestedRef.current = true
+        finalTranscriptRef.current = latestBrowserTranscriptRef.current
+        try { recognitionRef.current?.stop() } catch {}
         setIsRecording(false)
     }, [])
 
@@ -237,10 +232,12 @@ export function useAssistantSpeechInput({
     }, [])
 
     const startBrowserRecording = useCallback(() => {
-        if (!speechRecognitionCtor || disabled || !isConnected || isRecording || isTranscribing || isStarting) return
+        if (!speechRecognitionCtor || recognitionRef.current) return
         setSpeechError(null)
         setSpeechErrorKind(null)
         finalTranscriptRef.current = ''
+        latestBrowserTranscriptRef.current = ''
+        browserStopRequestedRef.current = false
         textAtStartRef.current = text
 
         const recognition = new speechRecognitionCtor()
@@ -248,30 +245,69 @@ export function useAssistantSpeechInput({
         recognition.interimResults = true
         recognition.maxAlternatives = 1
         recognition.lang = 'en-US'
+        let finished = false
+        let browserError: string | null = null
+        const finish = () => {
+            if (finished) return
+            finished = true
+            if (recognitionRef.current === recognition) recognitionRef.current = null
+            setIsRecording(false)
+            const requestId = requestIdRef.current
+            const transcript = (finalTranscriptRef.current || latestBrowserTranscriptRef.current).trim()
+            void (async () => {
+                try {
+                    const recording = await teardownRecorder(false)
+                    const payload = recording && createAssistantVoicePayload(recording.chunks, recording.sampleRateHz)
+                    if (!payload) throw new Error('No audio was captured. Try dictation again.')
+                    const saved = await window.devscope.assistant.saveVoiceHistory({
+                        engine: 'browser', recording: payload,
+                        ...(browserError ? { error: browserError } : transcript ? { transcript } : { error: 'Browser speech did not recognize anything.' })
+                    })
+                    if (!saved.success) throw new Error(saved.error || 'Could not save voice history.')
+                    if (requestIdRef.current === requestId && !browserError && !transcript) {
+                        setSpeechErrorKind('no-speech')
+                        setSpeechError('Browser speech did not recognize anything.')
+                    }
+                } catch (error) {
+                    if (requestIdRef.current === requestId) {
+                        setSpeechErrorKind('runtime')
+                        setSpeechError(error instanceof Error ? error.message : 'Could not save browser dictation.')
+                    }
+                } finally {
+                    if (requestIdRef.current === requestId) resetRecorderPresentation()
+                }
+            })()
+        }
         recognition.onresult = (event) => {
-            let interimTranscript = ''
-            for (let index = event.resultIndex; index < event.results.length; index += 1) {
+            if (browserStopRequestedRef.current) return
+            const finalParts: string[] = []
+            const interimParts: string[] = []
+            for (let index = 0; index < event.results.length; index += 1) {
                 const result = event.results[index]
                 const transcript = String(result?.[0]?.transcript || '').trim()
                 if (!transcript) continue
-                if (result.isFinal) {
-                    finalTranscriptRef.current = [finalTranscriptRef.current.trim(), transcript].filter(Boolean).join(' ').trim()
-                    interimTranscript = ''
-                } else {
-                    interimTranscript = transcript
-                }
+                if (result.isFinal) finalParts.push(transcript)
+                else interimParts.push(transcript)
             }
-            applyTranscript([finalTranscriptRef.current.trim(), interimTranscript.trim()].filter(Boolean).join(' ').trim())
+            finalTranscriptRef.current = finalParts.join(' ')
+            latestBrowserTranscriptRef.current = [...finalParts, ...interimParts].join(' ')
+            applyTranscript(latestBrowserTranscriptRef.current, false)
         }
         recognition.onerror = (event) => {
-            const normalized = normalizeBrowserSpeechError(String(event.error || ''))
-            setSpeechErrorKind(normalized.kind)
-            if (normalized.message) setSpeechError(normalized.message)
+            if (browserStopRequestedRef.current && event.error === 'aborted') return
+            browserError = event.error === 'not-allowed'
+                ? 'Microphone access was denied for browser dictation.'
+                : event.error === 'network'
+                    ? 'Browser speech service could not connect.'
+                    : event.error === 'no-speech'
+                        ? 'Browser speech did not recognize anything.'
+                        : `Browser dictation failed (${event.error || 'unknown error'}).`
+            setSpeechErrorKind(event.error === 'not-allowed' ? 'permission' : event.error === 'network' ? 'network' : event.error === 'no-speech' ? 'no-speech' : 'runtime')
+            setSpeechError(browserError)
+            finish()
+            try { recognition.abort() } catch {}
         }
-        recognition.onend = () => {
-            recognitionRef.current = null
-            setIsRecording(false)
-        }
+        recognition.onend = finish
 
         try {
             recognitionRef.current = recognition
@@ -279,14 +315,15 @@ export function useAssistantSpeechInput({
             recognition.start()
         } catch {
             recognitionRef.current = null
-            setIsRecording(false)
+            browserError = 'Browser dictation could not start.'
             setSpeechErrorKind('runtime')
-            setSpeechError('Browser dictation is unavailable in this runtime.')
+            setSpeechError(browserError)
+            finish()
         }
-    }, [applyTranscript, disabled, isConnected, isRecording, isStarting, isTranscribing, speechRecognitionCtor, text])
+    }, [applyTranscript, resetRecorderPresentation, speechRecognitionCtor, teardownRecorder, text])
 
-    const startCodexRecording = useCallback(async () => {
-        if (!audioContextCtor || disabled || !isConnected || isRecording || isTranscribing || startingRef.current) return
+    const startCodexRecording = useCallback(async (recordingEngine: AssistantTranscriptionEngine = 'codex') => {
+        if (!audioContextCtor || disabled || isRecording || isTranscribing || startingRef.current) return
         if (!navigator.mediaDevices?.getUserMedia) {
             setSpeechErrorKind('runtime')
             setSpeechError('Microphone capture is unavailable in this runtime.')
@@ -300,6 +337,7 @@ export function useAssistantSpeechInput({
         resetRecorderPresentation()
         textAtStartRef.current = text
         requestIdRef.current += 1
+        const recordingRequestId = requestIdRef.current
         const recordingScopeKey = scopeKey
 
         let stream: MediaStream | null = null
@@ -318,9 +356,9 @@ export function useAssistantSpeechInput({
             })
             const latest = availableRef.current
             if (!mountedRef.current
+                || requestIdRef.current !== recordingRequestId
                 || latest.disabled
-                || !latest.isConnected
-                || latest.engine !== 'codex'
+                || latest.engine !== recordingEngine
                 || latest.scopeKey !== recordingScopeKey) {
                 stream.getTracks().forEach((track) => track.stop())
                 return
@@ -328,6 +366,11 @@ export function useAssistantSpeechInput({
 
             audioContext = new audioContextCtor()
             await audioContext.resume()
+            if (requestIdRef.current !== recordingRequestId) {
+                stream.getTracks().forEach((track) => track.stop())
+                await audioContext.close().catch(() => undefined)
+                return
+            }
             sourceNode = audioContext.createMediaStreamSource(stream)
             processorNode = audioContext.createScriptProcessor(RECORDER_BUFFER_SIZE, 1, 1)
             silentGainNode = audioContext.createGain()
@@ -393,7 +436,7 @@ export function useAssistantSpeechInput({
             try { silentGainNode?.disconnect() } catch {}
             stream?.getTracks().forEach((track) => track.stop())
             await audioContext?.close().catch(() => undefined)
-            if (mountedRef.current) {
+            if (mountedRef.current && requestIdRef.current === recordingRequestId) {
                 setSpeechErrorKind(microphoneErrorKind(error))
                 setSpeechError(describeAssistantMicrophoneError(error))
                 resetRecorderPresentation()
@@ -402,12 +445,14 @@ export function useAssistantSpeechInput({
             startingRef.current = false
             if (mountedRef.current) setIsStarting(false)
         }
-    }, [audioContextCtor, disabled, isConnected, isRecording, isTranscribing, resetRecorderPresentation, scopeKey, text])
+    }, [audioContextCtor, disabled, isRecording, isTranscribing, resetRecorderPresentation, scopeKey, text])
 
-    const submitCodexRecording = useCallback(async () => {
-        if (!recorderRuntimeRef.current || isTranscribing) return
+    const submitCodexRecording = useCallback(async (send = false) => {
+        if (!recorderRuntimeRef.current || isTranscribing || submittingRef.current !== null) return
+        const submittedScope = availableRef.current.scopeKey
         const requestId = requestIdRef.current + 1
         requestIdRef.current = requestId
+        submittingRef.current = requestId
         setSpeechError(null)
         setSpeechErrorKind(null)
         setIsTranscribing(true)
@@ -418,16 +463,18 @@ export function useAssistantSpeechInput({
             const payload = createAssistantVoicePayload(recording.chunks, recording.sampleRateHz)
             if (!payload) throw new Error('No audio was captured. Try recording again.')
             const result = await window.devscope.assistant.transcribeVoice(payload)
-            if (requestIdRef.current !== requestId) return
+            if (requestIdRef.current !== requestId || !mountedRef.current || availableRef.current.scopeKey !== submittedScope) return
             if (!result.success) throw new Error(result.error || 'Voice transcription failed.')
             if (!result.text.trim()) throw new Error('ChatGPT returned an empty transcription.')
-            applyTranscript(result.text)
+            const draftText = applyTranscript(result.text, !send)
+            if (send) await submitTranscriptRef.current?.(draftText)
         } catch (error) {
             if (requestIdRef.current === requestId) {
                 setSpeechErrorKind('runtime')
                 setSpeechError(error instanceof Error ? error.message : 'Voice transcription failed.')
             }
         } finally {
+            if (submittingRef.current === requestId) submittingRef.current = null
             if (requestIdRef.current === requestId) {
                 setIsTranscribing(false)
                 resetRecorderPresentation()
@@ -437,29 +484,47 @@ export function useAssistantSpeechInput({
 
     const cancelCodexRecording = useCallback(() => {
         requestIdRef.current += 1
+        submittingRef.current = null
         setIsTranscribing(false)
         void teardownRecorder(true)
     }, [teardownRecorder])
 
+    const stopBrowserOnInput = useCallback(() => {
+        if (engine !== 'browser') return
+        if (!recognitionRef.current && (startingRef.current || recorderRuntimeRef.current)) {
+            cancelCodexRecording()
+            return
+        }
+        if (recognitionRef.current) stopBrowserRecording()
+    }, [cancelCodexRecording, engine, stopBrowserRecording])
+
     const startRecording = useCallback(() => {
+        if (recognitionRef.current || recorderRuntimeRef.current || startingRef.current || isTranscribing) return
         if (engine === 'browser') {
-            startBrowserRecording()
+            void startCodexRecording('browser').then(() => {
+                if (recorderRuntimeRef.current) startBrowserRecording()
+            })
         } else {
             void startCodexRecording()
         }
-    }, [engine, startBrowserRecording, startCodexRecording])
+    }, [engine, isTranscribing, startBrowserRecording, startCodexRecording])
 
     const submitRecording = useCallback(() => {
         if (engine === 'browser') {
-            stopBrowserRecording()
+            if (recognitionRef.current) stopBrowserRecording()
         } else {
             void submitCodexRecording()
         }
     }, [engine, stopBrowserRecording, submitCodexRecording])
 
+    const submitAndSendRecording = useCallback(() => {
+        if (engine === 'codex') void submitCodexRecording(true)
+    }, [engine, submitCodexRecording])
+
     const cancelRecording = useCallback(() => {
         if (engine === 'browser') {
             cancelBrowserRecording()
+            cancelCodexRecording()
         } else {
             cancelCodexRecording()
         }
@@ -474,17 +539,17 @@ export function useAssistantSpeechInput({
     }, [isRecording, startRecording, submitRecording])
 
     useEffect(() => {
-        if (engine !== 'codex' || !isRecording || durationMs < ASSISTANT_VOICE_MAX_DURATION_MS || autoSubmitRef.current) return
+        if (!isRecording || durationMs < ASSISTANT_VOICE_MAX_DURATION_MS || autoSubmitRef.current) return
         autoSubmitRef.current = true
         submitRecording()
     }, [durationMs, engine, isRecording, submitRecording])
 
     useEffect(() => {
-        if (!(disabled || !isConnected)) return
+        if (!disabled) return
         requestIdRef.current += 1
         cancelBrowserRecording()
         cancelCodexRecording()
-    }, [cancelBrowserRecording, cancelCodexRecording, disabled, isConnected])
+    }, [cancelBrowserRecording, cancelCodexRecording, disabled])
 
     useEffect(() => {
         requestIdRef.current += 1
@@ -523,8 +588,10 @@ export function useAssistantSpeechInput({
         speechErrorKind,
         startRecording,
         submitRecording,
+        submitAndSendRecording,
         cancelRecording,
         toggleRecording,
+        stopBrowserOnInput,
         stopRecording: submitRecording
     }
 }

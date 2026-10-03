@@ -12,12 +12,19 @@ export function createWorkflowCallFingerprint(input = {}) {
     stableKey: input.stableKey,
     prompt: input.prompt,
     definitionRevision: input.definitionRevision,
+    agentDefinition: input.agentDefinition,
     selectedModelPolicy: input.selectedModelPolicy,
     tools: input.tools,
     capabilities: input.capabilities,
     isolation: input.isolation,
     writeScope: input.writeScope,
     schema: input.schema,
+    effort: input.effort,
+    permissionMode: input.permissionMode,
+    readScope: input.readScope,
+    task: input.task,
+    role: input.role,
+    modelPolicy: input.modelPolicy,
   })).digest("hex");
 }
 

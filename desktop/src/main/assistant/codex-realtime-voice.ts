@@ -197,7 +197,7 @@ export class ChatGptRealtimeVoiceRuntime extends EventEmitter {
         this.emitClientMessages(session, messages)
     }
 
-    async requestSpeech(text: string, canonicalMessageId?: string): Promise<void> {
+    async requestSpeech(text: string, canonicalMessageId?: string, voiceTaskId?: string): Promise<void> {
         const session = this.requireActiveSession()
         const normalized = String(text || '').trim()
         if (!normalized) throw new Error('Speech text is required.')
@@ -209,7 +209,7 @@ export class ChatGptRealtimeVoiceRuntime extends EventEmitter {
             channel: 'speakable',
             content: [{ type: 'input_text', text: chunk }]
         }))
-        this.emitClientMessages(session, messages, canonicalMessageId)
+        this.emitClientMessages(session, messages, canonicalMessageId, voiceTaskId)
     }
 
     presentComposerResponse(input: { turnId: string; text?: string; error?: string; canonicalMessageId?: string }): void {
@@ -276,7 +276,8 @@ export class ChatGptRealtimeVoiceRuntime extends EventEmitter {
     private emitClientMessages(
         session: DirectRealtimeSession,
         messages: AssistantRealtimeVoiceClientMessage[],
-        canonicalMessageId?: string
+        canonicalMessageId?: string,
+        voiceTaskId?: string
     ): void {
         if (this.activeSession !== session || session.closed || messages.length === 0) return
         for (let offset = 0; offset < messages.length; offset += MAX_CLIENT_COMMAND_MESSAGES) {
@@ -288,6 +289,7 @@ export class ChatGptRealtimeVoiceRuntime extends EventEmitter {
                 realtimeSessionId: session.realtimeSessionId,
                 realtimeSessionGeneration: session.realtimeSessionGeneration,
                 ...(canonicalMessageId ? { canonicalMessageId } : {}),
+                ...(voiceTaskId ? { voiceTaskId } : {}),
                 messages: messages.slice(offset, offset + MAX_CLIENT_COMMAND_MESSAGES)
             }
             this.emitVoiceEvent(command)

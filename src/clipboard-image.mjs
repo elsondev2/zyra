@@ -1,14 +1,13 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createPlatformClipboard } from "./runtime/engine/src/utils/platform-clipboard.js";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
-const localRequire = createRequire(import.meta.url);
 const POWERSHELL_TIMEOUT_MS = 5000;
 let nativeClipboard;
 let nativeClipboardLoaded = false;
@@ -43,7 +42,7 @@ export function readImageDimensions(data, mimeType = "image/png") {
 }
 
 async function readNativeClipboardImage(clipboard) {
-  if (!clipboard?.hasImage?.()) return null;
+  if (!(await clipboard?.hasImage?.())) return null;
   try {
     const value = await clipboard.getImageBinary();
     const bytes = Buffer.from(value ?? []);
@@ -55,25 +54,8 @@ async function readNativeClipboardImage(clipboard) {
 }
 
 function loadNativeClipboard() {
-  if (nativeClipboardLoaded) return nativeClipboard;
-  nativeClipboardLoaded = true;
-  const requires = [localRequire];
-  try {
-    const piEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
-    const piRoot = path.dirname(path.dirname(piEntry));
-    requires.push(createRequire(path.join(piRoot, "package.json")));
-  } catch {
-    // The PowerShell fallback remains available when Pi's optional native addon is absent.
-  }
-  for (const requireClipboard of requires) {
-    try {
-      nativeClipboard = requireClipboard("@mariozechner/clipboard");
-      break;
-    } catch {
-      // Try the next resolution root.
-    }
-  }
-  return nativeClipboard;
+ if (!nativeClipboardLoaded) { nativeClipboardLoaded = true; nativeClipboard = createPlatformClipboard(); }
+ return nativeClipboard;
 }
 
 async function readClipboardImageViaPowerShell(options = {}) {

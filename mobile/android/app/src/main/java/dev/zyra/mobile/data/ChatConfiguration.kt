@@ -15,9 +15,9 @@ data class ChatConfiguration(val model: String = "", val thinking: String = "", 
 
 /** Unknown or not-yet-loaded permissions must never look like granted access. */
 fun permissionLabel(mode: String): String = when (mode) {
-    "approval-required" -> "Ask before actions"
-    "auto-review" -> "Automatic review"
-    "edits-only" -> "Allow file edits"
+    "approval-required" -> "Supervised"
+    "auto-review" -> "Auto review"
+    "edits-only" -> "Edits only"
     "full-access" -> "Full access"
     else -> "Permissions unavailable"
 }

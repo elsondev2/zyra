@@ -44,8 +44,16 @@ export function useFilePreviewEditSession({
     const pendingExternalActionRef = useRef<(() => void | Promise<void>) | null>(null)
 
     const isDirty = draftContent !== sourceContent
+    const sessionFilePathRef = useRef(file.path)
+    const editStateRef = useRef({ mode, isDirty })
+    editStateRef.current = { mode, isDirty }
 
     useEffect(() => {
+        const fileChanged = sessionFilePathRef.current !== file.path
+        sessionFilePathRef.current = file.path
+        // File watchers and post-save refreshes must not reset an active editor.
+        // Explicit reload/revert still owns replacing the current draft.
+        if (!fileChanged && (editStateRef.current.mode === 'edit' || editStateRef.current.isDirty)) return
         setMode(initialMode)
         setSourceContent(content)
         setDraftContent(content)
@@ -57,7 +65,7 @@ export function useFilePreviewEditSession({
         pendingExternalActionRef.current = null
         setFileModifiedAt(typeof modifiedAt === 'number' ? modifiedAt : null)
         setConflictModifiedAt(null)
-    }, [content, initialMode, modifiedAt, truncated])
+    }, [content, file.path, initialMode, modifiedAt, truncated])
 
     useEffect(() => {
         if (isDirty || mode === 'edit') return

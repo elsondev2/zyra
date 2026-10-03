@@ -7,6 +7,7 @@ const ownedFiles = [
     new URL('../src/renderer/src/pages/Settings.tsx', import.meta.url),
     ...[
         'AssistantSettings.tsx',
+        'ChatDefaultsSettings.tsx',
         'ProviderModelSettings.tsx',
         'PermissionsSettings.tsx',
         'MemorySettings.tsx',
@@ -42,19 +43,34 @@ assert.match(assistant, /title="Chat behavior" searchSection="Assistant defaults
 assert.match(assistant, /title="Reasoning" searchSection="Reasoning and context"/)
 assert.match(assistant, /title="Conversation display" searchSection="Output and history"/)
 assert.match(assistant, /description="Set Zyra's tone without changing its tools or abilities\."/)
+assert.match(assistant, /view === 'defaults' \? <ChatDefaultsSettings \/>/)
 assert.doesNotMatch(assistant, /assistantDefaultModel|assistantTitleModel|assistantTitleAutoRegenerate|assistantDefaultEffort|assistantDefaultFastMode|assistantDefaultRuntimeMode|assistantDefaultWebSearch|assistantDefaultWebFetch|assistantContextCompactionThresholdTokens|assistantAutoReconnect|assistantShowDiagnostics/)
-assert.match(assistant, /updateSettings\(\{ assistantDefaultPromptTemplate: promptTemplateDraft \}\)/)
+assert.doesNotMatch(assistant, /title="Default prompt"|title="Permission mode"|title="Busy send behavior"/)
+
+const defaults = source('ChatDefaultsSettings.tsx')
+assert.match(defaults, /export function ChatDefaultsSettings\(\)/)
+assert.doesNotMatch(defaults, /SettingsPageContainer/)
+assert.match(defaults, /ChatDefaultModelPicker/, 'Chat defaults uses the searchable provider-aware model picker rather than a native select')
+for (const key of ['assistantDefaultModel', 'assistantDefaultEffort', 'assistantDefaultFastMode']) {
+    assert.match(defaults, new RegExp(key), `Chat defaults keeps ${key}`)
+}
+for (const effort of ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.match(defaults, new RegExp(`'${effort}'`), `Chat defaults keeps ${effort} reasoning effort`)
+}
+assert.match(defaults, /retainSavedModel/)
+assert.match(defaults, /title="Default prompt"/)
+assert.match(defaults, /title="Permission mode"/)
+assert.match(defaults, /title="Busy send behavior"/)
+assert.match(defaults, /updateSettings\(\{ assistantDefaultPromptTemplate: promptTemplateDraft \}\)/)
 
 const models = source('ProviderModelSettings.tsx')
 assert.match(models, /export function ProviderModelSettings\(\)/)
 assert.doesNotMatch(models, /SettingsPageContainer/)
-for (const key of ['assistantDefaultModel', 'assistantDefaultEffort', 'assistantDefaultFastMode', 'assistantTitleModel', 'assistantTitleAutoRegenerate', 'assistantTitleAutoRegenerateTurns']) {
+for (const key of ['assistantTitleModel', 'assistantTitleAutoRegenerate', 'assistantTitleAutoRegenerateTurns']) {
     assert.match(models, new RegExp(key), `Provider models keeps ${key}`)
 }
-for (const effort of ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
-    assert.match(models, new RegExp(`'${effort}'`), `Provider models keeps ${effort} reasoning effort`)
-}
 assert.match(models, /retainSavedModel/)
+assert.match(models, /ChatDefaultModelPicker/, 'Automatic titles uses the same searchable provider-aware model picker')
 assert.match(models, /DEFAULT_ASSISTANT_TITLE_MODEL/)
 assert.match(models, /MIN_ASSISTANT_AUTO_TITLE_TURNS/)
 assert.match(models, /MAX_ASSISTANT_AUTO_TITLE_TURNS/)
@@ -63,9 +79,7 @@ assert.match(models, /disabled=\{!settings\.assistantTitleAutoRegenerate\}/)
 const permissions = source('PermissionsSettings.tsx')
 assert.match(permissions, /export function ChatAccessSettings/)
 assert.match(permissions, /searchSection="Assistant defaults"/)
-for (const mode of ['approval-required', 'auto-review', 'edits-only', 'full-access']) {
-    assert.match(permissions, new RegExp(`<option value="${mode}">`))
-}
+assert.doesNotMatch(permissions, /title="Permission mode"/)
 assert.match(permissions, /assistantDefaultWebSearch/)
 assert.match(permissions, /assistantDefaultWebFetch/)
 
@@ -100,7 +114,8 @@ assert.equal((connections.match(/<ChromeBrowserConnectionSettings \/>/g) || []).
 assert.equal((connections.match(/<MobileConnectionSettings \/>/g) || []).length, 1)
 
 const archived = source('ArchivedChatsSettings.tsx')
-assert.match(archived, /title="Chats" navigation=\{<SettingsPageTabs family="chats" \/>\}/)
+assert.match(archived, /<SettingsPageContainer title="Archived chats">/)
+assert.doesNotMatch(archived, /SettingsPageTabs/)
 assert.match(archived, /createSettingsRowTargetId\('Archive', 'Search'\)/)
 assert.match(archived, /archiveSessionResult/)
 assert.match(archived, /deleteSessionResult/)
@@ -117,6 +132,6 @@ const privacy = source('DataPrivacySettings.tsx')
 assert.match(privacy, /title="Privacy & data"/)
 assert.match(privacy, /<AnalyticsPrivacyRow/)
 assert.match(privacy, /control=\{<SettingsButton onClick=\{clearCache\}>Clear cache<\/SettingsButton>\}/)
-assert.match(privacy, /to="\/settings\/assistant\/archived"/)
+assert.doesNotMatch(privacy, /Archived chats|\/settings\/assistant\/archived/)
 
 console.log('Settings redistribution: owned syntax, view splits, control ownership, stable legacy row sections and safety boundaries: ok')

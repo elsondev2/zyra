@@ -42,7 +42,7 @@ export type AssistantQueuedComposerMessage = {
     prompt: string
     contextFiles: ComposerContextFile[]
     dispatchMode: 'queue' | 'force'
-    status: 'queued' | 'paused'
+    status: 'queued' | 'paused' | 'compacting'
 }
 
 export type AssistantComposerDisabledReason = 'no-session' | 'project-required'
@@ -96,6 +96,8 @@ export type AssistantComposerProps = {
     projectRoots?: AssistantComposerProjectRoot[]
     projectChoices?: AssistantProjectChoice[]
     projectContextDisabled?: boolean
+    projectContextUnavailableReason?: string | null
+    onProjectContextUnavailable?: (reason: string) => void
     onSelectProject?: (projectId: string | null) => Promise<void> | void
     onCreateProject?: () => Promise<void> | void
     acceptBrowserAnnotations?: boolean

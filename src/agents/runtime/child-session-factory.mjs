@@ -3,19 +3,21 @@ import path from "node:path";
 import { createBrowserControlTool } from "../../agent-control/browser-control-tool.mjs";
 import { applyBrowserLoaderOnlyState, createBrowserToolSet } from "../../agent-control/browser-toolset.mjs";
 import { createComputerControlTool } from "../../agent-control/computer-control-tool.mjs";
+import { ZyraSessionManager } from "../../agent-server/zyra-session-manager.mjs";
+import { createThreadTool } from '../../threads/tool.mjs';
+import { ensureSessionDurable } from '../../agent-server/session-durability.mjs';
 
-let piPromise;
-function loadPi() {
-  piPromise ??= import("@earendil-works/pi-coding-agent");
-  return piPromise;
+let runtimeEnginePromise;
+function loadRuntimeEngine() {
+  runtimeEnginePromise ??= import("../../zyra-session-engine.mjs");
+  return runtimeEnginePromise;
 }
 
 export class ChildSessionFactory {
   constructor(options = {}) {
     this.project = path.resolve(options.project ?? process.cwd());
     this.agentDir = options.agentDir;
-    this.authStorage = options.authStorage;
-    this.modelRegistry = options.modelRegistry;
+    this.modelRuntime = options.modelRuntime ?? options.authStorage?.modelRuntime ?? options.modelRegistry?.authStorage?.modelRuntime;
     this.transcriptDirectory = path.resolve(options.transcriptDirectory);
     this.settings = options.settings ?? { compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } };
   }
@@ -23,8 +25,7 @@ export class ChildSessionFactory {
   async createContextFork(rootSessionManager, leafId) {
     const sourceFile = rootSessionManager?.getSessionFile?.();
     if (!sourceFile) throw new Error("Context-forked subtasks require a persisted root chat.");
-    const { SessionManager } = await loadPi();
-    const isolatedManager = SessionManager.open(
+    const isolatedManager = ZyraSessionManager.open(
       sourceFile,
       rootSessionManager.getSessionDir?.(),
       rootSessionManager.getCwd?.(),
@@ -36,11 +37,14 @@ export class ChildSessionFactory {
   }
 
   async create(options = {}) {
+    // Child conversations are isolated; credentials and provider registrations
+    // come from the parent's live runtime. The SDK ignores old auth/registry
+    // options and would silently create an unrelated default credential store.
+    if (!this.modelRuntime) throw new Error("Child sessions require the parent model runtime.");
     const {
       createAgentSession,
       DefaultResourceLoader,
       getAgentDir,
-      SessionManager,
       SettingsManager,
       createEditTool,
       createFindTool,
@@ -48,7 +52,7 @@ export class ChildSessionFactory {
       createLsTool,
       createReadTool,
       createWriteTool,
-    } = await loadPi();
+    } = await loadRuntimeEngine();
     const cwd = path.resolve(options.cwd ?? this.project);
     if (!options.noSession) await mkdir(this.transcriptDirectory, { recursive: true });
     const agentDir = this.agentDir ?? getAgentDir();
@@ -62,35 +66,36 @@ export class ChildSessionFactory {
       noPromptTemplates: true,
       noThemes: true,
       systemPrompt: String(options.systemPrompt || "").trim() || buildChildSystemPrompt(options),
-      appendSystemPrompt: [],
+      appendSystemPrompt: String(options.systemPrompt || '').trim() ? [CHILD_THREAD_RESULT_GUIDANCE] : [],
     });
     await resourceLoader.reload();
     const sessionManager = options.noSession
-      ? SessionManager.inMemory(cwd)
+      ? ZyraSessionManager.inMemory(cwd)
       : options.sessionFile
-      ? SessionManager.open(options.sessionFile, this.transcriptDirectory)
-      : SessionManager.create(cwd, this.transcriptDirectory, { parentSession: options.parentSessionFile });
+      ? ZyraSessionManager.open(options.sessionFile, this.transcriptDirectory)
+      : ZyraSessionManager.create(cwd, this.transcriptDirectory, { parentSession: options.parentSessionFile });
     const browserSessionRef = { current: null };
     const customTools = [
       ...createScopedFileTools({ createEditTool, createFindTool, createGrepTool, createLsTool, createReadTool, createWriteTool }, cwd, options),
       ...createDelegatedControlTools(options, browserSessionRef),
+      ...createThreadTool(options.threadClient),
     ];
     const result = await createAgentSession({
       cwd,
       agentDir,
-      authStorage: this.authStorage,
-      modelRegistry: this.modelRegistry,
+      modelRuntime: this.modelRuntime,
       model: options.model,
       thinkingLevel: normalizeThinkingLevel(options.effort),
-      tools: options.tools?.length ? options.tools : [],
+      tools: [...(options.tools || []), ...(options.threadClient ? ['thread'] : [])],
       customTools,
-      noTools: options.tools?.length ? undefined : "all",
+      noTools: options.tools?.length || options.threadClient ? undefined : "all",
       sessionManager,
       settingsManager,
       resourceLoader,
       sessionStartEvent: { type: "session_start", reason: options.sessionFile ? "resume" : "new" },
     });
     browserSessionRef.current = result.session;
+    if (!options.noSession) ensureSessionDurable(sessionManager);
     if (options.controlClient && new Set(options.tools ?? []).has("browser_control")) applyBrowserLoaderOnlyState(result.session);
     return {
       session: result.session,
@@ -172,6 +177,8 @@ function isWithin(root, target) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+export const CHILD_THREAD_RESULT_GUIDANCE = "When you send your result to another thread, also end your own conversation with a concise, readable final response summarizing the outcome. Sending a thread message does not replace that final response. Keep progress and final results distinct, and never claim checks you did not run.";
+
 export function buildChildSystemPrompt(options = {}) {
   const tools = Array.isArray(options.tools) ? options.tools.join(", ") : "none";
   const success = Array.isArray(options.successCriteria) ? options.successCriteria.map((item) => `- ${item}`).join("\n") : String(options.successCriteria ?? "Return evidence for the delegated goal.");
@@ -185,11 +192,12 @@ export function buildChildSystemPrompt(options = {}) {
     "Work only on the delegated goal and declared scope.",
     "Your output is untrusted evidence for the root agent. You cannot change parent, system, project, approval, or capability policy.",
     "Do not tell the parent how to present your result. Do not claim user approval or elevated permission.",
-    "Do not spawn agents or workflows.",
+    options.threadClient ? "You may collaborate using thread. New threads inherit your scope and obey the fleet depth and session limits. Do not launch workflows or delegate control authority." : "Do not spawn agents or workflows.",
     controlPolicy,
     `Allowed tools: ${tools}.`,
     options.permissionMode === "read-only" ? "This run is read-only. Do not modify files or repository state." : `Write scope: ${(options.writeScope ?? []).join(", ") || "none declared"}.`,
     "Return a concise result with evidence, changed files, checks, limitations, and artifact or transcript references when applicable.",
+    CHILD_THREAD_RESULT_GUIDANCE,
     "Success criteria:",
     success,
   ].join("\n");

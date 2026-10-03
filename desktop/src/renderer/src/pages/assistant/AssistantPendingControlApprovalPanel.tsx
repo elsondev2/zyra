@@ -39,7 +39,7 @@ export function AssistantPendingControlApprovalPanel(props: {
         ? `Approve ${controlSideEffectLabel(pendingAction.sideEffect)}?`
         : `Allow Zyra to use ${controlTargetLabel(target)}?`
     const description = pendingAction
-        ? `Zyra is ready to ${controlSideEffectLabel(pendingAction.sideEffect)} on ${controlTargetLabel(target)}. This action needs your attention even in Full access.`
+        ? `Zyra is ready to ${controlSideEffectLabel(pendingAction.sideEffect)} on ${controlTargetLabel(target)}. This action needs your attention in the current permission mode.`
         : `${pendingGrant?.principal.type === 'agent' ? 'A child agent' : 'This chat'} wants to ${controlCapabilitySummary(pendingGrant?.capabilities || [])}. Access stays limited to this target and expires automatically.`
     const targetScope = controlTargetScope(target)
     const scope = [

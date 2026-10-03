@@ -1,0 +1,13 @@
+{
+  "name": "@zyra/engine",
+  "version": "0.6.2",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "license": "MIT",
+  "zyraConfig": {
+    "name": "zyra",
+    "configDir": ".zyra"
+  }
+}

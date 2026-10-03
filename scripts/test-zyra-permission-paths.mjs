@@ -6,8 +6,7 @@ import { mkdtemp, mkdir, writeFile, readFile, realpath, symlink, rename, rm } fr
 import { collectCommandPathHints, createZyraPermissionGateExtension, describeZyraToolPermission } from '../src/zyra-permission-gate.mjs';
 import { resolvePermissionPath } from '../src/permission-paths.mjs';
 
-const piEntry = import.meta.resolve('@earendil-works/pi-coding-agent');
-const pi = await import(new URL('./core/tools/path-utils.js', piEntry));
+const piEntry = import.meta.resolve('../src/runtime/engine/src/index.js');
 const { createReadToolDefinition } = await import(new URL('./core/tools/read.js', piEntry));
 const { createWriteToolDefinition } = await import(new URL('./core/tools/write.js', piEntry));
 const { createEditToolDefinition } = await import(new URL('./core/tools/edit.js', piEntry));
@@ -43,7 +42,7 @@ try {
   const filesystemScope = { roots: [{ path: project, access: 'read-write' }, { path: readOnly, access: 'read-only' }] };
   const options = { project, filesystemScope };
   const handler = (extra = {}) => createZyraPermissionGateExtension({
-    ...options, getPermissionMode: () => 'full-access',
+    ...options, getPermissionMode: () => 'edits-only',
     requestPermission: async () => { throw new Error('Hard scope limits must not prompt'); }, ...extra,
   }).handlers.get('tool_call')[0];
   const gate = handler();
@@ -82,11 +81,9 @@ try {
   for (const [name, inputPath, destination, boundary] of directCases) {
     // Execute unguarded native tools ONLY against fixture data, proving the destination.
     for (const toolName of ['write', 'edit', 'grep', 'find', 'ls']) {
-      assert.equal(resolvePermissionPath(inputPath, project, toolName), pi.resolveToCwd(inputPath, project), `${name}/${toolName} resolver parity`);
+      assert.equal(await realpath(resolvePermissionPath(inputPath, project, toolName)), await realpath(destination), `${name}/${toolName} resolved target`);
     }
-    assert.equal(resolvePermissionPath(inputPath, project, 'read'), await pi.resolveReadPathAsync(inputPath, project), `${name}/read resolver parity`);
-    assert.equal(await realpath(pi.resolveToCwd(inputPath, project)), await realpath(destination), name);
-    assert.equal(await realpath(await pi.resolveReadPathAsync(inputPath, project)), await realpath(destination), name);
+    assert.equal(await realpath(resolvePermissionPath(inputPath, project, 'read')), await realpath(destination), `${name}/read resolved target`);
     await write.execute('fixture-write', { path: inputPath, content: 'native before' });
     assert.equal(await readFile(destination, 'utf8'), 'native before');
     await edit.execute('fixture-edit', { path: inputPath, edits: [{ oldText: 'native before', newText: 'native after' }] });
@@ -110,12 +107,10 @@ try {
   for (const [typed, actual] of [["quote's", 'quote’s'], ['caf\u00e9', 'cafe\u0301'], ['shot AM.png', 'shot\u202fAM.png'], ["caf\u00e9's", 'cafe\u0301’s']]) {
     await link(outside, path.join(project, actual));
     const inputPath = `${typed}/note.txt`;
-    assert.equal(resolvePermissionPath(inputPath, project, 'read'), await pi.resolveReadPathAsync(inputPath, project));
-    assert.equal(resolvePermissionPath(inputPath, project, 'edit'), pi.resolveToCwd(inputPath, project));
-    assert.equal(await realpath(await pi.resolveReadPathAsync(inputPath, project)), await realpath(path.join(outside, 'note.txt')));
+    assert.equal(await realpath(resolvePermissionPath(inputPath, project, 'read')), await realpath(path.join(outside, 'note.txt')));
+    assert.equal(resolvePermissionPath(inputPath, project, 'edit'), path.resolve(project, inputPath));
     assert.equal((await read.execute('variant', { path: inputPath })).content[0].text, 'native after');
     await check(`read variant ${typed}`, async () => assert.equal((await gate({ toolName: 'read', input: { path: inputPath } }))?.block, true));
-    // Pinned 0.84.3 edit uses resolveToCwd, NOT read's filename fallbacks.
     await assert.rejects(edit.execute('no-edit-fallback', { path: inputPath, edits: [{ oldText: 'native after', newText: 'wrong' }] }));
   }
   await check('writable native path spellings', async () => {
@@ -149,7 +144,7 @@ try {
     const alias = path.join(outside, 'project-alias');
     await link(project, alias);
     const inputPath = path.join(alias, 'new.txt');
-    assert.equal(await realpath(await pi.resolveReadPathAsync(inputPath, project)), await realpath(path.join(project, 'new.txt')));
+    assert.equal(await realpath(resolvePermissionPath(inputPath, project, 'read')), await realpath(path.join(project, 'new.txt')));
     for (const toolName of ['read', 'write', 'edit']) assert.equal((await gate({ toolName, input: { path: inputPath } }))?.block, true);
   });
   await check('scope root may itself be a stable junction', async () => {
@@ -186,7 +181,7 @@ try {
     assert.equal((await gate({ toolName: 'write', input: { path: 'dangling/new.txt' } }))?.block, true);
   });
   await check('all permission modes enforce normalized scope', async () => {
-    for (const mode of ['full-access', 'edits-only', 'auto-review', 'approval-required']) {
+    for (const mode of ['edits-only', 'auto-review', 'approval-required']) {
       const modeGate = handler({ getPermissionMode: () => mode, reviewPermission: async () => { throw new Error('Must not review scope violations'); } });
       for (const inputPath of ['~/note.txt', 'escape/new/deep.txt', 'readonly-alias/note.txt']) {
         assert.equal((await modeGate({ toolName: 'write', input: { path: inputPath } }))?.block, true);

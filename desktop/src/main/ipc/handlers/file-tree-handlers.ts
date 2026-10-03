@@ -41,6 +41,8 @@ const PREVIEW_MAX_BYTES = 8 * 1024 * 1024
 const BINARY_DETECTION_BYTES = 4096
 const FILE_METADATA_CONCURRENCY = 24
 const DIRECTORY_CHILD_HINT_CONCURRENCY = 12
+const DIRECTORY_READ_CONCURRENCY = 16
+const TREE_IO_CONCURRENCY = 32
 const SKIPPED_TREE_DIRECTORY_NAMES = new Set(['node_modules', '.git'])
 
 async function mapWithConcurrency<T, R>(values: readonly T[], concurrency: number, worker: (value: T) => Promise<R>): Promise<R[]> {
@@ -55,6 +57,25 @@ async function mapWithConcurrency<T, R>(values: readonly T[], concurrency: numbe
     }
     await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, () => runWorker()))
     return results
+}
+
+function createIoLimiter(maxConcurrent: number) {
+    let active = 0
+    const waiting: Array<() => void> = []
+    return async <T>(task: () => Promise<T>): Promise<T> => {
+        if (active >= maxConcurrent) {
+            await new Promise<void>(resolve => waiting.push(resolve))
+        } else {
+            active += 1
+        }
+        try {
+            return await task()
+        } finally {
+            const next = waiting.shift()
+            if (next) next()
+            else active -= 1
+        }
+    }
 }
 
 function includeTreeEntry(name: string, showHidden: boolean): boolean {
@@ -115,6 +136,9 @@ export async function handleGetFileTree(
     const includeDirectoryChildHint = options?.includeDirectoryChildHint ?? false
     const resolvedProjectPath = resolve(projectPath)
     const resolvedRootPath = resolve(options?.rootPath || projectPath)
+    // A deep monorepo can start many recursive directory workers; bound actual disk I/O
+    // across the entire request rather than only within each directory.
+    const limitIo = createIoLimiter(TREE_IO_CONCURRENCY)
 
     try {
         const normalizedProjectPath = normalizePathForComparison(resolvedProjectPath)
@@ -150,12 +174,12 @@ export async function handleGetFileTree(
         async function readDirRec(currentPath: string, depth: number): Promise<FileTreeNode[]> {
             if (maxDepth >= 0 && depth > maxDepth) return []
 
-            const entries = await readdir(currentPath, { withFileTypes: true })
+            const entries = await limitIo(() => readdir(currentPath, { withFileTypes: true }))
             const concurrency = includeFileSize
                 ? FILE_METADATA_CONCURRENCY
                 : includeDirectoryChildHint
                     ? DIRECTORY_CHILD_HINT_CONCURRENCY
-                    : entries.length || 1
+                    : DIRECTORY_READ_CONCURRENCY
             const nodes = await mapWithConcurrency(entries, concurrency, async (entry) => {
                 const isHiddenEntry = entry.name.startsWith('.')
                 if (!includeTreeEntry(entry.name, showHidden)) return null
@@ -196,7 +220,7 @@ export async function handleGetFileTree(
                     }
 
                     try {
-                        const stats = await stat(fullPath)
+                        const stats = await limitIo(() => stat(fullPath))
                         return {
                             name: entry.name,
                             path: fullPath,

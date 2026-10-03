@@ -18,6 +18,8 @@ import { AssistantBrowserWorkspace, type AssistantBrowserWorkspaceController } f
 import { AssistantFilesWorkspace } from '../AssistantFilesWorkspace'
 import { AssistantFleetWorkspace } from '../AssistantFleetWorkspace'
 import { AssistantPreviewResourceNavigator } from '../AssistantPreviewResourceNavigator'
+import { buildAssistantResourceIndex } from '../assistant-resource-index'
+import { assistantResourceForPath } from '../assistant-resource-labels'
 import { AssistantResourcesWorkspace } from '../AssistantResourcesWorkspace'
 import { AssistantReviewLanding } from '../AssistantReviewLanding'
 import { AssistantTerminalWorkspace } from '../AssistantTerminalWorkspace'
@@ -128,7 +130,14 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
         void window.devscope.assistantUtility.tabReady(windowId, tab.id)
     }, [tab.id, tab.workspace, windowId])
 
-    const previewResourceNavigator = tab.workspace === 'resources' && preview.previewFile ? (
+    const previewResources = useMemo(() => preview.previewFile
+        ? buildAssistantResourceIndex({ turns, projectPath: tab.projectPath || null }).resources
+        : [], [turns, tab.projectPath, Boolean(preview.previewFile)])
+    const previewDisplayFile = preview.previewFile ? {
+        ...preview.previewFile,
+        displayName: assistantResourceForPath(previewResources, preview.previewFile.path)?.title || preview.previewFile.displayName
+    } : null
+    const previewResourceNavigator = preview.previewFile && (tab.workspace === 'resources' || preview.previewFile.type === 'image') ? (
         <AssistantPreviewResourceNavigator
             turns={turns}
             projectPath={tab.projectPath || null}
@@ -139,8 +148,8 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
     ) : undefined
     const previewModal = preview.previewFile ? (
         <FilePreviewModal
-            file={preview.previewFile}
-            previewTabs={preview.previewTabs}
+              file={previewDisplayFile!}
+              previewTabs={preview.previewTabs.map(item => ({ ...item, file: { ...item.file, displayName: assistantResourceForPath(previewResources, item.file.path)?.title || item.file.displayName } }))}
             activePreviewTabId={preview.activePreviewTabId}
             content={preview.previewContent}
             loading={preview.loadingPreview}

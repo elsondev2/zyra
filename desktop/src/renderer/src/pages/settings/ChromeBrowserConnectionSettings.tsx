@@ -1,8 +1,9 @@
 import { CHROME_EXTENSION_STORE_URL } from '@shared/chrome-extension-identity'
 import { useEffect, useState } from 'react'
-import { Copy, FolderOpen, ArrowUpRight } from 'lucide-react'
+import { Copy, FolderOpen, ArrowUpRight, CirclePause, CirclePlay } from 'lucide-react'
 import type { ControlPairingState } from '@shared/agent-control/contracts'
 import { SettingsButton, SettingsRow, SettingsSection } from './settings-layout'
+import { SettingsHoverActionButton } from './SettingsHoverActionButton'
 import chromeLogo from '@/assets/browser-logos/chrome.svg'
 export function ChromeBrowserConnectionSettings() {
     const [pairing, setPairing] = useState<ControlPairingState>({ state: 'stopped' })
@@ -24,11 +25,11 @@ export function ChromeBrowserConnectionSettings() {
     return <SettingsSection title="Chrome browser">
         <SettingsRow title="Zyra Browser" description="Install once, then click the Zyra icon in Chrome to chat." icon={<img src={chromeLogo} width={16} height={16} alt="" aria-hidden="true" />} info={<p>Your extension connects automatically while Zyra is open. Click its icon to chat about the current tab, or ask any Desktop chat to use your named Chrome browser. Connection status updates automatically.</p>} status={pairing.state === 'paired' ? 'Connected' : pairing.automaticConnectionPaused ? 'Paused' : 'Waiting for Chrome'} statusTone={pairing.state === 'paired' ? 'ready' : 'muted'} control={<>
             {CHROME_EXTENSION_STORE_URL
-                ? <SettingsButton disabled={busy} onClick={() => void run(() => window.devscope.openBrowserPreviewExternal(CHROME_EXTENSION_STORE_URL!))}><ArrowUpRight size={12}/>{pairing.state === 'paired' ? 'View extension' : 'Install extension'}</SettingsButton>
-                : <SettingsButton disabled={busy} onClick={() => void run(() => window.devscope.agentControl.openChromeExtensionFolder())}><FolderOpen size={12}/>Extension folder</SettingsButton>}
+                ? <SettingsHoverActionButton label={pairing.state === 'paired' ? 'View extension' : 'Install extension'} icon={<ArrowUpRight size={13} />} disabled={busy} onClick={() => void run(() => window.devscope.openBrowserPreviewExternal(CHROME_EXTENSION_STORE_URL!))} />
+                : <SettingsHoverActionButton label="Extension folder" icon={<FolderOpen size={13} />} disabled={busy} onClick={() => void run(() => window.devscope.agentControl.openChromeExtensionFolder())} />}
             {!pairing.automaticConnectionPaused
-                ? <SettingsButton variant="ghost" disabled={busy} onClick={() => void run(() => window.devscope.agentControl.stopChromePairing())}>Pause connection</SettingsButton>
-                : <SettingsButton variant="ghost" disabled={busy} onClick={() => void run(() => window.devscope.agentControl.startChromePairing())}>Resume connection</SettingsButton>}
+                ? <SettingsHoverActionButton label="Pause connection" icon={<CirclePause size={15} />} variant="ghost" disabled={busy} onClick={() => void run(() => window.devscope.agentControl.stopChromePairing())} />
+                : <SettingsHoverActionButton label="Resume connection" icon={<CirclePlay size={15} />} variant="ghost" disabled={busy} onClick={() => void run(() => window.devscope.agentControl.startChromePairing())} />}
         </>}>
             {!CHROME_EXTENSION_STORE_URL && <p className="mt-2 text-xs text-[var(--settings-text-secondary)]">The store release is not available yet. In chrome://extensions, enable Developer mode and load the extension folder.</p>}
             <details className="mt-3 text-xs text-[var(--settings-text-secondary)]"><summary className="cursor-pointer">Advanced connection</summary>

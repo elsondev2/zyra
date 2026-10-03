@@ -84,6 +84,8 @@ export interface RealtimeSpeechItem {
     narrationId: string
     deliveryId: string
     canonicalMessageId: string
+    /** Private task result: commit the foreground's actual reply instead of replaying an existing message. */
+    voiceTaskId?: string
     text: string
     safeFacts: string[]
     expiresAt: string
@@ -128,6 +130,7 @@ export type RealtimeDomainEvent =
         providerItemId: string
         transcriptSource?: 'turn' | 'chunk'
         text: string
+        voiceTaskId?: string
     })
     | (RealtimeEventBase & { type: 'realtime.transcript.suppressed'; providerItemId: string; role: 'user' | 'assistant' })
     | (RealtimeEventBase & {

@@ -114,6 +114,8 @@ function isValidClientCommand(event: AssistantRealtimeVoiceClientCommandEvent): 
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/.test(event.commandId)) return false
     if (event.canonicalMessageId !== undefined
         && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/.test(event.canonicalMessageId)) return false
+    if (event.voiceTaskId !== undefined
+        && (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/.test(event.voiceTaskId) || event.canonicalMessageId)) return false
     if (!Number.isSafeInteger(event.realtimeSessionGeneration) || event.realtimeSessionGeneration < 1) return false
     if (!Array.isArray(event.messages) || event.messages.length === 0 || event.messages.length > MAX_COMMAND_MESSAGES) return false
     return event.messages.every((message) => {

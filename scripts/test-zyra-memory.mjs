@@ -31,8 +31,17 @@ import {
   writeZyraPhase2WorkerOutput,
 } from "../src/zyra-memory.mjs";
 import { createMemoryController } from "../src/memory/zyra-memory-controller.mjs";
+import { createZyraMemoryRunner } from "../src/memory/zyra-memory-runner.mjs";
+import {
+  createZyraMemoryHarnessPromptService,
+  ZYRA_MEMORY_WORKER_SYSTEM_PROMPT,
+} from "../src/memory/zyra-memory-harness-worker.mjs";
 import { readMemoryStateFile, writeMemoryStateFile } from "../src/memory/zyra-memory-state.mjs";
-import { findProjectInstructionFiles, runZyraMemoryConsolidation } from "../src/zyra-sdk.mjs";
+import {
+  findProjectInstructionFiles,
+  runZyraHarnessBackgroundTextPrompt,
+  runZyraMemoryConsolidation,
+} from "../src/zyra-sdk.mjs";
 
 function withTempRoot(fn) {
   const root = mkdtempSync(path.join(os.tmpdir(), "zyra-memory-"));
@@ -682,6 +691,135 @@ async function runMemoryWorkerRepairRegression() {
   });
 }
 
+async function runMemoryWorkerModelSelectionRegression() {
+  await withTempRootAsync(async (root) => {
+    ensureZyraMemory(root);
+    const sessionFile = path.join(root, ".zyra", "sessions", "model-selection.jsonl");
+    mkdirSync(path.dirname(sessionFile), { recursive: true });
+    writeFileSync(sessionFile, "", "utf8");
+    const runtime = {
+      root,
+      project: root,
+      session: {
+        sessionManager: {
+          getSessionId: () => "model-selection-thread",
+          getSessionFile: () => sessionFile,
+          getCwd: () => root,
+          getEntries: () => [{
+            type: "message",
+            timestamp: "2026-05-24T00:00:00.000Z",
+            message: { role: "user", content: "remember model selection for memory work" },
+          }],
+        },
+      },
+    };
+    const workerSettings = [];
+    const runner = createZyraMemoryRunner({
+      root,
+      defaultModel: "openai-codex/gpt-5.6-sol",
+      resolveModelSelection: async () => ({ model: "anthropic/claude-sonnet-5", thinking: "low" }),
+      createWorkerSession: async ({ model, thinking }) => {
+        workerSettings.push({ model, thinking });
+        const state = { messages: [] };
+        return {
+          session: {
+            state,
+            async prompt() {
+              state.messages.push({
+                role: "assistant",
+                content: [{ type: "text", text: JSON.stringify({ rollout_summary: "", rollout_slug: "", raw_memory: "" }) }],
+              });
+            },
+            async dispose() {},
+          },
+        };
+      },
+    });
+
+    const result = await runner.runConsolidation(runtime, { root, skipStartup: true });
+    assert.equal(result.stage1.noOutput, 1);
+    assert.deepEqual(workerSettings, [{ model: "anthropic/claude-sonnet-5", thinking: "low" }]);
+  });
+}
+
+async function runMemoryWorkerHarnessRegression() {
+  await withTempRootAsync(async (root) => {
+    ensureZyraMemory(root);
+    const sessionFile = path.join(root, ".zyra", "sessions", "harness-memory.jsonl");
+    mkdirSync(path.dirname(sessionFile), { recursive: true });
+    writeFileSync(sessionFile, "", "utf8");
+    const model = { provider: "opencode-harness", id: "opencode/big-pickle" };
+    const runtime = {
+      root,
+      project: root,
+      session: {
+        sessionManager: {
+          getSessionId: () => "harness-memory-thread",
+          getSessionFile: () => sessionFile,
+          getCwd: () => root,
+          getEntries: () => [{
+            type: "message",
+            timestamp: "2026-05-24T00:00:00.000Z",
+            message: { role: "user", content: "remember model selection for memory work" },
+          }],
+        },
+        modelRegistry: {
+          find: (provider, id) => provider === model.provider && id === model.id ? model : undefined,
+        },
+      },
+    };
+    const textTurns = [];
+    let released = 0;
+    const harnessDependencies = {
+      cwd: root,
+      detectHarness: async () => ({ executable: "opencode-fixture" }),
+      ensureHarnessServe: async ({ cwd, executable }) => {
+        assert.equal(cwd, root);
+        assert.equal(executable, "opencode-fixture");
+        return {
+          baseUrl: "http://127.0.0.1:4321",
+          client: { password: "fixture-password" },
+          release() { released += 1; },
+        };
+      },
+      runHarnessTextTurn: async (turn) => {
+        textTurns.push(turn);
+        const text = turn.context.messages[0]?.content === "generate title"
+          ? "Generated title"
+          : JSON.stringify({ rollout_summary: "", rollout_slug: "", raw_memory: "" });
+        return { text };
+      },
+    };
+    const runTextPrompt = createZyraMemoryHarnessPromptService(harnessDependencies);
+    const runner = createZyraMemoryRunner({
+      root,
+      defaultModel: "openai-codex/gpt-5.6-sol",
+      resolveModelSelection: async () => ({ model: "opencode-harness/opencode/big-pickle", thinking: "medium" }),
+      runTextPrompt,
+      createWorkerSession: async () => { throw new Error("The Pi child session must not handle harness memory work."); },
+    });
+
+    const result = await runner.runConsolidation(runtime, { root, skipStartup: true });
+    assert.equal(result.stage1.noOutput, 1);
+    assert.equal(textTurns.length, 1);
+    assert.equal(textTurns[0]?.modelId, model.id);
+    assert.equal(textTurns[0]?.context.systemPrompt, ZYRA_MEMORY_WORKER_SYSTEM_PROMPT);
+    assert.equal(textTurns[0]?.variant, "medium");
+    assert.equal(released, 1);
+
+    const title = await runZyraHarnessBackgroundTextPrompt(
+      "opencode-harness/opencode/big-pickle",
+      "generate title",
+      { thinking: "low", cwd: root, harnessDependencies },
+    );
+    assert.equal(title, "Generated title");
+    assert.equal(textTurns.length, 2);
+    assert.equal(textTurns[1]?.modelId, model.id);
+    assert.equal(textTurns[1]?.context.systemPrompt, undefined);
+    assert.equal(released, 2);
+  });
+}
+
 async function runMemoryWorkerNoOutputRegression() {
   await withTempRootAsync(async (root) => {
     ensureZyraMemory(root);
@@ -949,6 +1087,8 @@ runMemoryControllerThreadModeRegression();
 runMemoryResetRegression();
 runMemoryPollutionRegression();
 await runMemoryWorkerRepairRegression();
+await runMemoryWorkerModelSelectionRegression();
+await runMemoryWorkerHarnessRegression();
 await runMemoryWorkerNoOutputRegression();
 await runMemoryStartupWorkerSkipsCurrentRegression();
 runOverviewRegression();

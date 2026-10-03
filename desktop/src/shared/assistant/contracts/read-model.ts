@@ -416,7 +416,11 @@ export interface AssistantModelInfo {
     label: string
     description?: string
     supportedEfforts?: AssistantReasoningEffort[]
+    inputModes?: string[]
     contextWindow?: number | null
+    pricing?: import('../../../../../src/model-pricing/index.mjs').ModelPricing | null
+    pricingFetchedAt?: string
+    pricingSource?: string
 }
 
 export type AssistantAccountPlanType =
@@ -539,6 +543,7 @@ export interface AssistantThreadDetailBootstrap {
 }
 
 export type AssistantDomainEventType =
+    | 'models.updated'
     | 'session.created'
     | 'session.selected'
     | 'session.updated'

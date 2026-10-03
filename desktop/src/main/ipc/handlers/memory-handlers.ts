@@ -1,8 +1,19 @@
 import { resolveZyraDataRoot } from '../../zyra/zyra-data-root'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { ZyraMemoryLayer, ZyraMemoryOverview, ZyraMemoryJobStatus } from '../../../shared/contracts/memory-contracts'
 import { resolveZyraRoot } from '../../zyra/zyra-root'
+
+type MemoryModelPreferenceStore = {
+    readZyraMemoryModelPreference: () => string
+    saveZyraMemoryModelPreference: (preference: unknown) => Promise<string>
+}
+
+async function loadMemoryModelPreferenceStore(): Promise<MemoryModelPreferenceStore> {
+    const file = join(resolveZyraRoot(), 'src', 'memory', 'zyra-memory-model-preferences.mjs')
+    return import(/* @vite-ignore */ pathToFileURL(file).href) as Promise<MemoryModelPreferenceStore>
+}
 
 function toTitle(fileName: string): string {
     return basename(fileName, '.md')
@@ -70,8 +81,8 @@ export async function handleMemoryGetOverview() {
             memoryDirectory,
             sessionsDirectory,
             cliPath: join(resolveZyraRoot(), 'bin', 'zyra.mjs'),
-            defaultModel: 'openai-codex/gpt-5.5',
-            defaultThinking: 'medium',
+            defaultModel: 'Automatic (provider-aware)',
+            defaultThinking: 'Provider-specific',
             memoryLayers,
             recommendedPrompts: recommendedLayer ? parseRecommendedPrompts(recommendedLayer.content) : []
         }
@@ -82,6 +93,25 @@ export async function handleMemoryGetOverview() {
             success: false as const,
             error: error instanceof Error ? error.message : 'Failed to read Zyra memory.'
         }
+    }
+}
+
+export async function handleMemoryGetModelPreference() {
+    try {
+        const store = await loadMemoryModelPreferenceStore()
+        return { success: true as const, preference: store.readZyraMemoryModelPreference() }
+    } catch (error) {
+        return { success: false as const, error: error instanceof Error ? error.message : 'Memory model preference could not be read.' }
+    }
+}
+
+export async function handleMemorySetModelPreference(preference: unknown) {
+    try {
+        const store = await loadMemoryModelPreferenceStore()
+        const saved = await store.saveZyraMemoryModelPreference(preference)
+        return { success: true as const, preference: saved }
+    } catch (error) {
+        return { success: false as const, error: error instanceof Error ? error.message : 'Memory model preference could not be saved.' }
     }
 }
 

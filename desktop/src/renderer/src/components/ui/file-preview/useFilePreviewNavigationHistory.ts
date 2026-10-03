@@ -43,6 +43,7 @@ function buildNavigationEntry(file: PreviewFile, mediaItems: PreviewMediaItem[])
 
 function buildNavigationOptions(entry: PreviewNavigationEntry): PreviewOpenOptions {
     return {
+        displayName: entry.file.displayName,
         startInEditMode: entry.file.startInEditMode === true,
         focusLine: entry.file.focusLine || undefined,
         htmlLocation: entry.file.htmlLocation ? { ...entry.file.htmlLocation } : undefined,

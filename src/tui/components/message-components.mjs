@@ -23,6 +23,7 @@ const commandOutputPreviewRows = 3;
 export class UserMessageComponent {
   constructor(key, text, theme = fallbackTheme, options = {}) {
     this.key = key;
+    this.isTranscript = true;
     const parsed = parseMessageAttachments(text);
     const legacy = extractLegacyImageMarkers(parsed.body);
     this.text = legacy.text;
@@ -80,10 +81,11 @@ function extractLegacyImageMarkers(value) {
 export class AssistantMessageComponent {
   constructor(key, content = { text: "" }, theme = fallbackTheme, options = {}) {
     this.key = key;
+    this.isTranscript = true;
     this.content = content;
     this.theme = theme;
     this.final = options.final === true;
-    this.showDivider = options.showDivider === true;
+    this.showMarker = options.showMarker === true;
   }
 
   setHost(host) {
@@ -93,7 +95,7 @@ export class AssistantMessageComponent {
   setContent(content, options = {}) {
     this.content = content;
     this.final = Boolean(options.final ?? this.final);
-    if (options.showDivider !== undefined) this.showDivider = options.showDivider === true;
+    if (options.showMarker !== undefined) this.showMarker = options.showMarker === true;
     this.host?.invalidate();
   }
 
@@ -102,14 +104,15 @@ export class AssistantMessageComponent {
     if (!text) return [];
     const contentWidth = Math.max(24, width - assistantPadding.length);
     const rendered = trimOuterBlankLines(renderMarkdown(text, contentWidth, this.theme));
-    const divider = `${assistantPadding}${this.theme.toolRailFg ?? this.theme.dimMuted ?? this.theme.muted}${"─".repeat(Math.max(1, width - assistantPadding.length))}${reset}`;
-    return ["", ...(this.showDivider ? [divider] : []), ...rendered.map((line) => line.trim() ? `${assistantPadding}${line}` : "")];
+    const marker = `${this.theme.dimMuted ?? this.theme.muted}•${reset} `;
+    return ["", ...rendered.map((line, index) => line.trim() ? `${this.showMarker && index === 0 ? marker : assistantPadding}${line}` : "")];
   }
 }
 
 export class ToolMessageComponent {
   constructor(key, toolState = {}, theme = fallbackTheme) {
     this.key = key;
+    this.isTranscript = true;
     this.toolState = toolState;
     this.theme = theme;
     this.spacingKind = "tool";
@@ -132,6 +135,7 @@ export class ToolMessageComponent {
 class CommandSummaryComponent {
   constructor(key, commands = [], theme = fallbackTheme, status = "checked") {
     this.key = key;
+    this.isTranscript = true;
     this.commands = [...commands];
     this.theme = theme;
     this.status = status;

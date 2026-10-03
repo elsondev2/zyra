@@ -6,6 +6,7 @@ import log from 'electron-log'
 import { devscopeCore } from '../../core/devscope-core'
 import { getInstalledIdes, launchProjectInIde } from '../../inspectors/system/windows-ides'
 import type { ScanProjectsResult } from '../../services/project-discovery-service'
+import { discoverLocalGitHubProjects } from '../../services/devscope-github-discovery'
 
 export async function handleSelectFolder(event: Electron.IpcMainInvokeEvent) {
     log.info('IPC: selectFolder')
@@ -107,6 +108,14 @@ export async function handleScanProjects(
         )
     }
     return result
+}
+
+export async function handleDiscoverLocalGitHubProjects(_event: Electron.IpcMainInvokeEvent, paths: string[]) {
+    try {
+        return { success: true, ...await discoverLocalGitHubProjects(Array.isArray(paths) ? paths : []) }
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Could not check GitHub repositories.' }
+    }
 }
 
 export async function handleIndexAllFolders(

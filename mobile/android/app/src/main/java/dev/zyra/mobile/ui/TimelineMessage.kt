@@ -27,6 +27,7 @@ import kotlinx.coroutines.delay
 @Composable fun TimelineMessage(item: TimelineItem, media: @Composable () -> Unit = {}, copyable: Boolean = true, questionAnswers: List<dev.zyra.mobile.data.QuestionAnswer> = emptyList(), inspect: () -> Unit) {
     var reasoningOpen by rememberSaveable(item.id) { mutableStateOf(false) }
     var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
+    var promptExpanded by rememberSaveable(item.id) { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     LaunchedEffect(copied) { if (copied) { delay(1600); copied = false } }
@@ -42,7 +43,16 @@ import kotlinx.coroutines.delay
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                     media()
-                    if (attachmentBody.body.isNotBlank()) Markdown(attachmentBody.body, preserveLineBreaks = true, selectable = copyable)
+                    val longPrompt = attachmentBody.body.length > 600 || attachmentBody.body.lineSequence().count() > 6
+                    if (attachmentBody.body.isNotBlank()) {
+                        if (longPrompt && !promptExpanded) {
+                            Text(attachmentBody.body, style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
+                            TextButton({ promptExpanded = true }, contentPadding = PaddingValues(top = 4.dp)) { Text("Show more") }
+                        } else {
+                            Markdown(attachmentBody.body, preserveLineBreaks = true, selectable = copyable)
+                            if (longPrompt) TextButton({ promptExpanded = false }, contentPadding = PaddingValues(top = 4.dp)) { Text("Show less") }
+                        }
+                    }
                     if (attachmentBody.files.isNotEmpty()) { Spacer(Modifier.height(8.dp)); MessageFiles(attachmentBody.files) }
                 }
             }

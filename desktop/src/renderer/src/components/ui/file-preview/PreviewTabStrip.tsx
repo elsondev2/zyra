@@ -47,12 +47,6 @@ function SortablePreviewTab({
                 registerNode(tab.id, node)
             }}
             onClick={onSelect}
-            onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    onSelect()
-                }
-            }}
             className={cn(
                 'group/tab relative inline-flex h-full min-w-0 max-w-[220px] items-center gap-1.5 border-r border-[var(--surface-divider)] px-2 text-[11px] font-normal transition-[background-color,color,opacity] duration-150',
                 active ? 'bg-[var(--surface-active)] text-sparkle-text' : 'bg-transparent text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
@@ -64,7 +58,17 @@ function SortablePreviewTab({
             }}
             {...attributes}
             {...listeners}
-            title={tab.file.name}
+            onKeyDown={(event) => {
+                if (event.key === ' ') {
+                    listeners?.onKeyDown?.(event)
+                    return
+                }
+                if (event.key === 'Enter') {
+                    event.preventDefault()
+                    onSelect()
+                }
+            }}
+            title={tab.file.displayName || tab.file.name}
         >
             <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
                 <FileEntryIcon
@@ -74,7 +78,7 @@ function SortablePreviewTab({
                     className="size-3.5 shrink-0"
                 />
             </span>
-            <span className="min-w-0 flex-1 truncate text-left">{tab.file.name}</span>
+            <span className="min-w-0 flex-1 truncate text-left">{tab.file.displayName || tab.file.name}</span>
             {active && activeTabDirty ? (
                 <span className="size-1.5 shrink-0 rounded-full bg-amber-300/85" aria-hidden="true" />
             ) : null}
@@ -88,7 +92,7 @@ function SortablePreviewTab({
                     'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-sparkle-text-muted transition-colors',
                     active ? 'hover:bg-black/[0.12] hover:text-sparkle-text-secondary' : 'hover:bg-white/[0.06] hover:text-sparkle-text-secondary'
                 )}
-                title={`Close ${tab.file.name}`}
+                title={`Close ${tab.file.displayName || tab.file.name}`}
             >
                 <X size={10} />
             </button>

@@ -157,6 +157,7 @@ export class EditorComponent {
 
   render(width) {
     this.lastRenderWidth = Math.max(3, Number(width) || 80);
+    this.hasTranscript = Boolean(this.options.getHasTranscript?.() ?? this.hasTranscript);
     const lines = [];
     const turnActive = Boolean(this.options.isRunActive?.() || this.options.getBusy?.() || this.waiting);
     const isBusy = turnActive && !this.options.suppressWorking?.();

@@ -33,6 +33,7 @@ export async function runTerminalInputLoop(onInput, options = {}, controls = {})
     ...options,
     theme: options.theme,
     getBusy: controls.getBusy,
+    getHasTranscript: () => host.hasTranscript,
     getActivityLabel: controls.getActivityLabel,
     suppressWorking: controls.suppressWorking,
     onSubmit: onInput,

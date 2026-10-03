@@ -49,9 +49,10 @@ mock.module('electron', () => ({
     nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
     webContents: { fromId: () => null },
     safeStorage: { isEncryptionAvailable: () => false },
+    shell: { openExternal: electronNoop, openPath: async () => '' },
     globalShortcut: { register: () => true, unregisterAll: electronNoop }
 }))
-const { ZyraPiRuntime, buildArgumentPreviewPatch, buildLiveAssistantTurnUsage, classifyZyraToolActivity, completeAssistantTurnUsage, mergeAssistantTurnUsage, resolveAssistantUsageMessageIdentity, shouldAccountAssistantMessageUsage } = await import('../src/main/assistant/zyra-pi-runtime')
+const { ZyraRuntime, buildArgumentPreviewPatch, buildLiveAssistantTurnUsage, classifyZyraToolActivity, completeAssistantTurnUsage, mergeAssistantTurnUsage, resolveAssistantUsageMessageIdentity, shouldAccountAssistantMessageUsage } = await import('../src/main/assistant/zyra-runtime')
 const { resolveLiveContextUsage } = await import('../../src/live-context-usage.mjs')
 const { ZyraAccountService } = await import('../src/main/assistant/zyra-account-service')
 
@@ -192,9 +193,9 @@ const structuredEditPreview = buildArgumentPreviewPatch('edit', {
 assert.match(structuredEditPreview || '', /^--- a\/desktop\/src\/example\.ts/m, 'structured edit calls produce a Review-compatible provisional patch')
 assert.match(structuredEditPreview || '', /-const oldValue = true[\s\S]*\+const newValue = true/)
 assert.match(structuredEditPreview || '', /-export \{ oldValue \}[\s\S]*\+export \{ newValue \}/)
-const zyraRuntimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const zyraRuntimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 assert.match(zyraRuntimeSource, /sessionUsage && metadata\?\.replay !== true/, 'historical replay cannot replace the current cumulative session-cost snapshot')
-const { deleteAssistantSessionAction, interruptAssistantTurnAction } = await import('../src/main/assistant/service-session-actions')
+const { deleteAssistantSessionAction, interruptAssistantTurnAction, selectAssistantSessionAction } = await import('../src/main/assistant/service-session-actions')
 const {
     findDuplicateProjectedActivityIds,
     findDuplicateProjectedMessageIds,
@@ -296,8 +297,8 @@ const canonicalProjection = projectCanonicalTimeline([
 assert.deepEqual(
     canonicalProjection.messages.map((message) => message.id),
     [
-        `assistant-message-user-pi-message:user:${canonicalUserTimestamp}`,
-        `assistant-message-pi-message:assistant:${canonicalAssistantTimestamp}`
+        `assistant-message-user-zyra-message:user:${canonicalUserTimestamp}`,
+        `assistant-message-zyra-message:assistant:${canonicalAssistantTimestamp}`
     ],
     'canonical history and live bridge events must project the same stable message IDs'
 )
@@ -333,7 +334,7 @@ const canonicalAbortedProjection = projectCanonicalTimeline([
         }
     }
 ], 'canonical:aborted', 'aborted-key', new Date(canonicalUserTimestamp).toISOString(), 0)
-const canonicalInterruptedActivity = canonicalAbortedProjection.activities.find((activity) => activity.id === `shared-error:pi-message:assistant:${canonicalAssistantTimestamp + 100}`)
+const canonicalInterruptedActivity = canonicalAbortedProjection.activities.find((activity) => activity.id === `shared-error:zyra-message:assistant:${canonicalAssistantTimestamp + 100}`)
 assert.equal(canonicalInterruptedActivity?.tone, 'warning', 'a canonical TUI abort must project as an intentional interruption rather than an Assistant error')
 assert.equal(canonicalInterruptedActivity?.summary, 'Assistant interrupted')
 assert.equal(canonicalInterruptedActivity?.payload?.['status'], 'cancelled')
@@ -519,10 +520,10 @@ const staleGpt56ModelCapabilities: AssistantModelInfo = {
 }
 assert.deepEqual(
     getAssistantModelReasoningEfforts(staleGpt56ModelCapabilities),
-    ['low', 'medium', 'high', 'xhigh', 'max'],
-    'GPT-5.6 max must survive model metadata from a Pi adapter that only advertises xhigh'
+    ['low', 'medium', 'high', 'xhigh'],
+    'explicit provider capabilities take precedence over legacy model-name assumptions'
 )
-assert.equal(coerceAssistantReasoningEffortForModel('max', staleGpt56ModelCapabilities), 'max')
+assert.equal(coerceAssistantReasoningEffortForModel('max', staleGpt56ModelCapabilities), 'medium')
 assert.equal(coerceAssistantReasoningEffortForModel('max', 'openai-codex/gpt-5.6-terra'), 'max')
 assert.equal(coerceAssistantReasoningEffortForModel('max', 'openai-codex/gpt-5.5'), 'xhigh')
 assert.equal(coerceAssistantReasoningEffortForModel('minimal', 'openai-codex/gpt-5.6-sol'), 'low')
@@ -533,7 +534,7 @@ assert.equal((buildEffortSliderTicks(5).match(/radial-gradient/g) || []).length,
 const thoughtMarkdown = '**Planning package read**\n\nI should inspect package.json before answering.'
 const narrationText = 'I’ll read `package.json` once, then summarize it.'
 
-const runtime = new ZyraPiRuntime()
+const runtime = new ZyraRuntime()
 const runtimeEvents: AssistantRuntimeEvent[] = []
 runtime.on('runtime', (event: AssistantRuntimeEvent) => runtimeEvents.push(event))
 
@@ -561,7 +562,7 @@ const context = {
     lastUsage: null
 }
 
-const reconnectRuntime = new ZyraPiRuntime()
+const reconnectRuntime = new ZyraRuntime()
 let reconnectWorkerAlive = false
 let reconnectRequestCount = 0
 const reconnectWorker = {
@@ -613,7 +614,7 @@ assert.equal(reconnectRequestCount, 1, 'transport detachment reattaches without 
 assert.equal(reconnectContext.connected, true)
 assert.equal(reconnectContext.connectPromise, null, 'a completed connect promise cannot block the next reconnect cycle')
 
-const cancelledConnectRuntime = new ZyraPiRuntime()
+const cancelledConnectRuntime = new ZyraRuntime()
 const cancelledConnectEvents: AssistantRuntimeEvent[] = []
 cancelledConnectRuntime.on('runtime', (event: AssistantRuntimeEvent) => cancelledConnectEvents.push(event))
 let resolveCancelledConnect!: (result: Record<string, unknown>) => void
@@ -852,7 +853,7 @@ assert.match(bridgeSource, /estimatedTokensAfter/, 'the Pi bridge must retain bo
 assert.match(bridgeSource, /requestedThreadId = payload\.threadId \|\| payload\.providerThreadId/, 'desktop must prefer the canonical threadId while accepting the legacy providerThreadId alias')
 assert.match(bridgeSource, /type === ["']generate_text["']/, 'title generation must use the Pi bridge instead of launching a detached Codex app-server')
 assert.match(bridgeSource, /normalizeAgentSurfaceTool/, 'Pi tool events must cross the desktop bridge through the shared agent-surface normalizer')
-const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 const accountServiceSource = readFileSync(new URL('../src/main/assistant/zyra-account-service.ts', import.meta.url), 'utf8')
 const chatGptAccountSource = readFileSync(new URL('../../src/chatgpt-account.mjs', import.meta.url), 'utf8')
 assert.match(runtimeSource, /threadId: requestedThreadId[\s\S]*noSession: false/, 'desktop chats must create persistent Pi threads that the TUI can resolve')
@@ -862,7 +863,7 @@ assert.doesNotMatch(accountServiceSource, /zyra-sdk\.mjs/, 'Desktop account sett
 assert.doesNotMatch(chatGptAccountSource, /getCodexCliUsageAuth|Codex CLI auth|sign in with the Codex CLI|\.codex[\\/]auth/, '/codexusage must never fall back to the retired Codex CLI credentials')
 assert.doesNotMatch(chatGptAccountSource, /Zyra auth storage|Zyra subscription login/, 'the account source must not be presented as a Zyra-owned subscription')
 
-const separationRuntime = new ZyraPiRuntime()
+const separationRuntime = new ZyraRuntime()
 const separationEvents: AssistantRuntimeEvent[] = []
 separationRuntime.on('runtime', (event: AssistantRuntimeEvent) => separationEvents.push(event))
 const separationContext = {
@@ -925,7 +926,7 @@ const finalCompletedIndex = runtimeEvents.indexOf(completions[1]!)
 assert.ok(planningCompletedIndex < toolIndex, 'tool activity must follow the planning response')
 assert.ok(toolIndex < finalCompletedIndex, 'final completion must follow tool activity')
 
-const replayGuardRuntime = new ZyraPiRuntime()
+const replayGuardRuntime = new ZyraRuntime()
 const replayGuardEvents: AssistantRuntimeEvent[] = []
 replayGuardRuntime.on('runtime', (event: AssistantRuntimeEvent) => replayGuardEvents.push(event))
 const replayGuardContext = {
@@ -1018,7 +1019,7 @@ assert.equal(
     'interrupted',
     'agent_end must preserve the aborted assistant response as an interrupted TUI turn'
 )
-assert.equal(liveAbortedCompletion?.itemId, `pi-message:assistant:${liveAbortedTimestamp}`, 'live terminal metadata keeps the canonical assistant message identity')
+assert.equal(liveAbortedCompletion?.itemId, `zyra-message:assistant:${liveAbortedTimestamp}`, 'live terminal metadata keeps the canonical assistant message identity')
 assert.equal(liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.errorMessage : null, 'Request was aborted')
 assert.equal(replayGuardContext.activeTurnId, null)
 
@@ -1388,6 +1389,54 @@ const projectedSession: AssistantSession = {
     threadIds: [projectedThread.id],
     threads: [projectedThread]
 }
+const navigationStartingThread: AssistantThread = {
+    ...projectedThread,
+    state: 'starting',
+    messageCount: 1,
+    messages: [{ id: 'navigation-user-prompt', role: 'user', text: 'Work in the background', turnId: null, createdAt: projectedThread.createdAt, updatedAt: projectedThread.updatedAt }]
+}
+const navigationNextThread: AssistantThread = {
+    ...projectedThread,
+    id: 'navigation-next-thread',
+    providerThreadId: 'navigation-next-provider'
+}
+const navigationNextSession: AssistantSession = {
+    ...projectedSession,
+    id: 'navigation-next-session',
+    activeThreadId: navigationNextThread.id,
+    threadIds: [navigationNextThread.id],
+    threads: [navigationNextThread]
+}
+let navigationSnapshot: AssistantSnapshot = {
+    snapshotSequence: 0,
+    updatedAt: projectedThread.createdAt,
+    selectedSessionId: projectedSession.id,
+    playground: { rootPath: null, labs: [] },
+    sessions: [{ ...projectedSession, threads: [navigationStartingThread] }, navigationNextSession],
+    knownModels: []
+}
+const retainedNavigationContexts = new Set([projectedThread.providerThreadId!, navigationNextThread.providerThreadId!])
+const navigationBackgroundChanges: Array<{ threadId: string; backgrounded: boolean }> = []
+const navigationDeps = {
+    ensureReady: async () => undefined,
+    getSnapshot: () => navigationSnapshot,
+    runtime: {
+        disconnect: (threadId: string) => { retainedNavigationContexts.delete(threadId) },
+        setNavigationBackgrounded: (threadId: string, backgrounded: boolean) => {
+            navigationBackgroundChanges.push({ threadId, backgrounded })
+        }
+    },
+    appendEvent: (type: string, _occurredAt: string, payload: Record<string, unknown>) => {
+        if (type === 'session.selected') navigationSnapshot = { ...navigationSnapshot, selectedSessionId: String(payload.sessionId) }
+    }
+} as never
+await selectAssistantSessionAction(navigationDeps, navigationNextSession.id)
+assert.equal(retainedNavigationContexts.has(projectedThread.providerThreadId!), true, 'leaving a chat during first-turn startup must retain its runtime for sendPrompt')
+assert.deepEqual(navigationBackgroundChanges[0], { threadId: projectedThread.id, backgrounded: true })
+await selectAssistantSessionAction(navigationDeps, projectedSession.id)
+assert.equal(retainedNavigationContexts.has(projectedThread.providerThreadId!), true, 'returning to the in-flight chat keeps its runtime attached')
+assert.deepEqual(navigationBackgroundChanges.at(-1), { threadId: projectedThread.id, backgrounded: false })
+
 const deletionFallbackSession: AssistantSession = {
     ...projectedSession,
     id: 'session-deletion-fallback',
@@ -1456,6 +1505,7 @@ await interruptAssistantTurnAction({
         knownModels: []
     }),
     runtime: {
+        hasSession: () => true,
         interruptTurn: async (threadId: string, turnId?: string) => {
             startupInterruptCalls.push({ threadId, turnId })
         }
@@ -1602,7 +1652,7 @@ const liveInterruptedActivities = findProjectedRecord(projectedThread.id)?.threa
     activity.turnId === 'turn-live-aborted' && activity.turnTerminalOutcome === 'interrupted'
 )) || []
 assert.equal(liveInterruptedActivities.length, 1, 'live interrupted completion projects one authoritative terminal activity')
-assert.equal(liveInterruptedActivities[0]?.id, `shared-error:pi-message:assistant:${liveAbortedTimestamp}`)
+assert.equal(liveInterruptedActivities[0]?.id, `shared-error:zyra-message:assistant:${liveAbortedTimestamp}`)
 
 const recoveredTurnEvents = replayGuardEvents.filter((event) => event.turnId === 'turn-live-recovered')
 const recoveredTurnCompletionIndex = recoveredTurnEvents.findIndex((event) => event.type === 'turn.completed')
@@ -1815,7 +1865,7 @@ assert.equal(persistedMessages.size, 3)
 assert.equal(persistedMessages.get(finalMessageId), finalMarkdown, 'the persistence-facing final message must preserve exact Markdown')
 assert.equal(persistedMessages.get(finalMessageId)?.includes(planningText), false, 'the final message must not inherit planning text')
 
-const fileChangeRuntime = new ZyraPiRuntime()
+const fileChangeRuntime = new ZyraRuntime()
 const fileChangeEvents: AssistantRuntimeEvent[] = []
 fileChangeRuntime.on('runtime', (event: AssistantRuntimeEvent) => fileChangeEvents.push(event))
 const fileChangeContext = {
@@ -2022,7 +2072,7 @@ assert.equal(
     'turn-scoped runtime failures must remain visible in the canonical timeline'
 )
 
-const failedTurnRuntime = new ZyraPiRuntime()
+const failedTurnRuntime = new ZyraRuntime()
 const failedTurnEvents: AssistantRuntimeEvent[] = []
 let failedPromptPayload: Record<string, unknown> | null = null
 failedTurnRuntime.on('runtime', (event: AssistantRuntimeEvent) => failedTurnEvents.push(event))
@@ -2075,7 +2125,7 @@ assert.equal(
 assert.equal(failedTurnContext.activeTurnId, null)
 assert.equal(failedPromptPayload?.['skipTitleGeneration'], true, 'Desktop prompt transport must suppress the bridge worker\'s duplicate title request')
 
-const transportFailureRuntime = new ZyraPiRuntime()
+const transportFailureRuntime = new ZyraRuntime()
 const transportFailureEvents: AssistantRuntimeEvent[] = []
 transportFailureRuntime.on('runtime', (event: AssistantRuntimeEvent) => transportFailureEvents.push(event))
 const transportFailureTurnId = 'turn-transport-error'
@@ -2105,7 +2155,7 @@ assert.equal(
 assert.equal(transportFailureContext.connected, false)
 assert.equal(transportFailureContext.activeTurnId, null)
 
-const serverOwnedDisconnectRuntime = new ZyraPiRuntime()
+const serverOwnedDisconnectRuntime = new ZyraRuntime()
 const serverOwnedDisconnectEvents: AssistantRuntimeEvent[] = []
 serverOwnedDisconnectRuntime.on('runtime', (event: AssistantRuntimeEvent) => serverOwnedDisconnectEvents.push(event))
 const serverOwnedTurnId = 'turn-server-owned-disconnect'
@@ -2136,7 +2186,34 @@ assert.equal(serverOwnedDisconnectEvents.some((event) => event.type === 'session
 assert.equal(serverOwnedDisconnectContext.activeTurnId, serverOwnedTurnId)
 assert.equal(serverOwnedDisconnectContext.completedTurnIds.has(serverOwnedTurnId), false, 'the later canonical completion must remain eligible')
 
-const networkRetryRuntime = new ZyraPiRuntime()
+const backgroundNavigationRuntime = new ZyraRuntime()
+const backgroundNavigationEvents: AssistantRuntimeEvent[] = []
+backgroundNavigationRuntime.on('runtime', (event: AssistantRuntimeEvent) => backgroundNavigationEvents.push(event))
+let backgroundWorkerDisposed = false
+const backgroundNavigationContext = {
+    ...serverOwnedDisconnectContext,
+    localThreadId: 'thread-navigation-startup',
+    providerThreadId: 'provider-navigation-startup',
+    activeTurnId: null as string | null,
+    connectPromise: Promise.resolve() as Promise<void> | null,
+    worker: { dispose: () => { backgroundWorkerDisposed = true } }
+}
+const backgroundNavigationInternals = backgroundNavigationRuntime as any
+backgroundNavigationInternals.sessions.set(backgroundNavigationContext.localThreadId, backgroundNavigationContext)
+backgroundNavigationInternals.sessions.set(backgroundNavigationContext.providerThreadId, backgroundNavigationContext)
+backgroundNavigationRuntime.setNavigationBackgrounded(backgroundNavigationContext.localThreadId, true)
+backgroundNavigationRuntime.releaseNavigationBackgroundedThread(backgroundNavigationContext.localThreadId)
+assert.equal(backgroundWorkerDisposed, false, 'navigation cannot detach while prompt connection is still being established')
+backgroundNavigationContext.connectPromise = null
+backgroundNavigationContext.activeTurnId = 'turn-navigation-startup'
+backgroundNavigationRuntime.releaseNavigationBackgroundedThread(backgroundNavigationContext.localThreadId)
+assert.equal(backgroundWorkerDisposed, false, 'navigation cannot detach a running server-owned turn')
+backgroundNavigationContext.activeTurnId = null
+backgroundNavigationRuntime.releaseNavigationBackgroundedThread(backgroundNavigationContext.localThreadId)
+assert.equal(backgroundWorkerDisposed, true, 'the background connection is released after its turn becomes idle')
+assert.equal(backgroundNavigationEvents.some((event) => event.type === 'session.state.changed'), false, 'idle navigation cleanup cannot mark a completed chat as stopped')
+
+const networkRetryRuntime = new ZyraRuntime()
 const networkRetryEvents: AssistantRuntimeEvent[] = []
 networkRetryRuntime.on('runtime', (event: AssistantRuntimeEvent) => networkRetryEvents.push(event))
 const networkRetryTurnId = 'turn-network-recovery'
@@ -2228,7 +2305,7 @@ assert.equal(transportRecoveryIssue?.recoverable, true)
 // This catches a missing user-turn boundary even when assistant streaming works.
 const { HostRouter } = await import('../../mobile/gateway/src/router.mjs')
 const { BodyCache } = await import('../../mobile/gateway/src/projection.mjs')
-const phoneRuntime = new ZyraPiRuntime()
+const phoneRuntime = new ZyraRuntime()
 const phoneContext = {
     ...context, activeTurnId: null, completedTurnIds: new Set<string>(),
     assistantMessageSequence: 0, activeAssistantItemId: null, lastAssistantItemId: null,

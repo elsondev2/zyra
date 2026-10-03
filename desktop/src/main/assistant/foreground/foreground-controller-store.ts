@@ -21,6 +21,7 @@ const CONTROLLER_SCHEMA_VERSION = 1
 
 export interface ForegroundControllerStore {
     initializeConversation(route: ForegroundRoute): ForegroundRoute
+    initializeConversations?(routes: readonly ForegroundRoute[]): ForegroundRoute[]
     activeRoute(conversationId: string): ForegroundRoute | null
     routeHistory(conversationId: string): ForegroundRoute[]
     scopeBinding(routeId: string): RealtimeScopeBinding | null

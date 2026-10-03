@@ -8,7 +8,18 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "zyra.mjs");
 const args = process.argv.slice(2);
 
-if (process.env.ZYRA_STANDALONE === "1") {
+if (args[0] === 'desktop' && args.length === 1) {
+  try {
+    const { launchInstalledDesktop } = await import('../src/desktop-app.mjs');
+    const result = await launchInstalledDesktop();
+    if (!result.launched) throw new Error(result.reason);
+    process.stdout.write('Opening Zyra Desktop.\n');
+    process.exit(0);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+} else if (process.env.ZYRA_STANDALONE === "1") {
   process.env.ZYRA_CALLER_CWD ??= process.cwd();
   await runStandalone(args);
 } else if (isZyraVersionRequest(args)) {

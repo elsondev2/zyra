@@ -7,11 +7,11 @@ import type {
     AppearanceUiFont
 } from '@/lib/settings'
 import type { ThemeDefinition, ThemeTokens } from '@/lib/settings-theme-catalog'
-import { SettingsButton, SettingsNotice, SettingsRow, SettingsSection } from '../settings-layout'
+import { SettingsButton, SettingsNotice, SettingResetButton, SettingsRow, SettingsSection } from '../settings-layout'
 import { createSettingsRowTargetId } from '../settings-search'
+import { ZyraColorPicker } from './ZyraColorPicker'
 
-const TOKEN_LABELS: ReadonlyArray<{ key: keyof ThemeTokens; label: string }> = [
-    { key: 'bg', label: 'Background' },
+const TOKEN_LABELS: ReadonlyArray<{ key: keyof ThemeTokens; label: string }> = [    { key: 'bg', label: 'Background' },
     { key: 'text', label: 'Foreground' },
     { key: 'textDark', label: 'Strong text' },
     { key: 'textDarker', label: 'Subtle text' },
@@ -24,6 +24,10 @@ const TOKEN_LABELS: ReadonlyArray<{ key: keyof ThemeTokens; label: string }> = [
     { key: 'secondary', label: 'Theme secondary' },
     { key: 'accent', label: 'Surface accent' }
 ]
+
+function differs(current: string, fallback: string): boolean {
+    return current.toLowerCase() !== fallback.toLowerCase()
+}
 
 function EditableHexValue({
     label,
@@ -59,12 +63,12 @@ function EditableHexValue({
 
     return (
         <div className="zyra-theme-color-control ml-auto flex h-8 w-[160px] min-w-0 overflow-hidden rounded-md border border-[var(--settings-border)] bg-[var(--settings-control)]">
-            <input
-                type="color"
+            <ZyraColorPicker
+                label={label}
                 value={value}
-                onChange={(event) => onCommit(event.target.value.toLowerCase())}
-                aria-label={`${label} color picker`}
-                className="zyra-native-color-input h-full w-11 shrink-0"
+                onChange={(next) => {
+                    if (next !== value.toLowerCase()) onCommit(next)
+                }}
             />
             <input
                 type="text"
@@ -88,6 +92,8 @@ export function AppearanceThemeController({
     mode,
     theme,
     accent,
+    baseTokens,
+    baseAccent,
     uiFont,
     codeFont,
     customActive,
@@ -99,6 +105,8 @@ export function AppearanceThemeController({
     mode: AppearanceThemeMode
     theme: ThemeDefinition
     accent: AccentColor
+    baseTokens: ThemeTokens
+    baseAccent: AccentColor
     uiFont: AppearanceUiFont
     codeFont: AppearanceCodeFont
     customActive: boolean
@@ -167,12 +175,18 @@ export function AppearanceThemeController({
                 <SettingsRow
                     title="Accent primary"
                     description="Set the main action and focus color."
+                    resetAction={differs(accent.primary, baseAccent.primary) ? (
+                        <SettingResetButton label="Accent primary" onClick={() => onAccentChange({ name: 'Custom', primary: baseAccent.primary, secondary: accent.secondary })} />
+                    ) : null}
                     control={<EditableHexValue label="Accent primary" value={accent.primary} onCommit={(primary) => onAccentChange({ name: 'Custom', primary, secondary: accent.secondary })} />}
                     searchTargetId={createSettingsRowTargetId('Theme', 'Accent primary')}
                 />
                 <SettingsRow
                     title="Accent secondary"
                     description="Set the companion color used in supporting states."
+                    resetAction={differs(accent.secondary, baseAccent.secondary) ? (
+                        <SettingResetButton label="Accent secondary" onClick={() => onAccentChange({ name: 'Custom', primary: accent.primary, secondary: baseAccent.secondary })} />
+                    ) : null}
                     control={<EditableHexValue label="Accent secondary" value={accent.secondary} onCommit={(secondary) => onAccentChange({ name: 'Custom', primary: accent.primary, secondary })} />}
                     searchTargetId={createSettingsRowTargetId('Theme', 'Accent secondary')}
                 />
@@ -185,6 +199,9 @@ export function AppearanceThemeController({
                             key={key}
                             title={label}
                             description={`Set the ${label.toLowerCase()} color.`}
+                            resetAction={differs(theme.tokens[key], baseTokens[key]) ? (
+                                <SettingResetButton label={label} onClick={() => onTokensChange({ ...theme.tokens, [key]: baseTokens[key] })} />
+                            ) : null}
                             control={(
                                 <EditableHexValue
                                     label={label}

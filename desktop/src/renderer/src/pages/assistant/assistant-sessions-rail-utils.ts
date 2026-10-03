@@ -58,14 +58,20 @@ export type AssistantSessionsRailProps = {
 }
 
 export function isAssistantDraftThread(thread: AssistantThread): boolean {
+    if (thread.source === 'subagent') return false
     const userVisibleMessages = (thread.messages || []).filter((message) => message.role !== 'system')
     return userVisibleMessages.length === 0
         && !thread.latestTurn
         && !thread.activePlan
         && (thread.messageCount || 0) === 0
-        && thread.proposedPlans.length === 0
-        && thread.pendingApprovals.length === 0
-        && thread.pendingUserInputs.length === 0
+        && (thread.activityCount || 0) === 0
+        && (thread.activities || []).length === 0
+        && (thread.proposedPlanCount || 0) === 0
+        && (thread.proposedPlans || []).length === 0
+        && !thread.hasPendingApprovals
+        && !thread.hasPendingUserInputs
+        && (thread.pendingApprovals || []).length === 0
+        && (thread.pendingUserInputs || []).length === 0
 }
 
 export function isAssistantDraftSession(session: AssistantSession): boolean {
@@ -187,12 +193,13 @@ export function resolveAssistantThreadStatusPill(
         }
     }
     if (!attentionPending && latestTurn?.state === 'interrupted') {
+        if (isActiveThread || thread.lastSeenCompletedTurnId === latestTurn.id) return resolveAssistantThreadRecencyPill(thread, isActiveThread, recencyTierByThreadId)
         return {
             label: 'Stopped',
             colorClass: 'text-sparkle-text-muted',
             dotClass: 'bg-sparkle-text-muted/55',
             pulse: false,
-            showLabel: false
+            showLabel: true
         }
     }
     if (!attentionPending && isAssistantThreadActivelyWorking(thread) && phase.key !== 'background') {
@@ -310,11 +317,11 @@ export function getAssistantThreadLastMessageAt(thread: AssistantThread | null):
         return getSortableTimestamp(messageAt) > getSortableTimestamp(latest) ? messageAt : latest
     }, null)
 
-    return latestMessageAt
-        || thread.latestTurn?.completedAt
-        || thread.latestTurn?.startedAt
-        || thread.latestTurn?.requestedAt
-        || thread.createdAt
+    // A shell and a hydrated thread must sort identically. An older retained
+    // message cannot replace the latest completed turn's activity boundary.
+    return [latestMessageAt, thread.latestTurn?.completedAt, thread.latestTurn?.startedAt,
+        thread.latestTurn?.requestedAt, thread.createdAt].filter((value): value is string => Boolean(value))
+        .sort((left, right) => getSortableTimestamp(right) - getSortableTimestamp(left))[0] || ''
 }
 
 export function getSessionLastActivityAt(session: AssistantSession): string {
@@ -436,7 +443,7 @@ export function buildSessionSubagentTree(session: AssistantSession): AssistantSe
     const primaryThread = getPrimarySessionThread(session)
     if (!primaryThread) return []
 
-    const subagentThreads = session.threads.filter(isAssistantSubagentThread)
+    const subagentThreads = session.threads.filter(thread => thread.id !== primaryThread.id && isAssistantSubagentThread(thread))
     if (subagentThreads.length === 0) return []
 
     const nodeById = new Map<string, AssistantSessionThreadTreeNode>(

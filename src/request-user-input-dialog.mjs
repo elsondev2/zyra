@@ -1,5 +1,5 @@
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, Editor, Key, matchesKey, Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "./runtime/engine/src/index.js";
+import { Container, Editor, Key, matchesKey, Text, wrapTextWithAnsi } from "./runtime/terminal/src/index.js";
 import { buildTerminalTheme } from "./terminal-theme.mjs";
 import { isRequestUserInputAnswerComplete, normalizeRequestUserInputQuestions } from "./request-user-input.mjs";
 

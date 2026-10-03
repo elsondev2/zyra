@@ -587,7 +587,7 @@ const hostSource = readFileSync(new URL('../src/main/agent-control/browser-surfa
 const browserDriverSource = readFileSync(new URL('../src/main/agent-control/drivers/zyra-browser-driver.ts', import.meta.url), 'utf8')
 const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
 const browserViewManagerSource = readFileSync(new URL('../src/main/browser-view-manager.ts', import.meta.url), 'utf8')
-const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 assert(surfaceRequestsSource.includes('onBrowserSurfaceRequest'))
 assert(surfaceRequestsSource.includes('request.threadId !== threadRef.current'))
 assert(surfaceRequestsSource.includes('if (request.reveal) callbacks.current.revealInspector()'), 'reveals use the current mounted callback rather than a stale closure')

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import { cn } from '@/lib/utils'
 import PreviewBody from './PreviewBody'
@@ -31,6 +31,19 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
     const pendingMarkdownModeLocationRef = useRef<{ filePath: string; targetMode: 'preview' | 'edit'; sourceLine: number } | null>(null)
     const activeFilePathRef = useRef(props.file.path)
     const [previewEditor, setPreviewEditor] = useState<MonacoEditor.IStandaloneCodeEditor | null>(null)
+
+    // A navigator should never take space away from the file preview in a compact window.
+    // Users can still reopen it from the existing header control when they need it.
+    useEffect(() => {
+        const compactViewport = window.matchMedia('(max-width: 720px)')
+        const closeNavigatorWhenCompact = () => {
+            if (compactViewport.matches) props.setLeftPanelOpen(false)
+        }
+        closeNavigatorWhenCompact()
+        compactViewport.addEventListener('change', closeNavigatorWhenCompact)
+        return () => compactViewport.removeEventListener('change', closeNavigatorWhenCompact)
+    }, [props.setLeftPanelOpen])
+
     const handlePreviewEditorMount = useCallback((editor: MonacoEditor.IStandaloneCodeEditor | null) => {
         setPreviewEditor(editor)
         if (!editor) return
@@ -420,11 +433,13 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                         rightInspector={expandedRightInspector}
                     />
                 ) : (
-                    <div className="flex min-h-0 min-w-0 flex-1">
+                    <div className="relative flex min-h-0 min-w-0 flex-1">
+                        {windowedNavigatorEnabled && leftPanelOpen ? <button type="button" onClick={() => setLeftPanelOpen(false)} className="absolute inset-0 z-10 hidden bg-black/45 max-[720px]:block" aria-label="Close file navigator" /> : null}
                         {windowedNavigatorEnabled ? (
                             <aside
                                 className={cn(
                                     'relative flex shrink-0 flex-col overflow-hidden border-r transition-[width,opacity,transform,border-color] ease-out',
+                                    'max-[720px]:absolute max-[720px]:inset-y-0 max-[720px]:left-0 max-[720px]:z-20 max-[720px]:shadow-2xl',
                                     isResizingPanels ? 'duration-0' : 'duration-200',
                                     leftPanelOpen
                                         ? 'translate-x-0 border-white/[0.06] bg-sparkle-card opacity-100'

@@ -1,20 +1,13 @@
 import { isBrowserExtension } from '@/lib/browser-extension'
-import { createContext, Suspense, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAssistantStoreSelector } from '@/lib/assistant/store'
 import { ConnectedAssistantSessionsRail } from './AssistantConnectedSessionsRail'
 import { AssistantTransientToast, useAssistantTransientToast } from './AssistantPageHelpers'
-import { resolveAssistantPaneLayout, type AssistantPaneLayout } from './assistant-pane-layout'
+import { resolveAssistantPaneLayout } from './assistant-pane-layout'
 import { useAssistantPageSidebarState } from './useAssistantPageSidebarState'
 
-type WorkspaceLayout = ReturnType<typeof useAssistantPageSidebarState> & { paneLayout: AssistantPaneLayout }
-const WorkspaceLayoutContext = createContext<WorkspaceLayout | null>(null)
-
-export function useAssistantWorkspaceLayout() {
-    const layout = useContext(WorkspaceLayoutContext)
-    if (!layout) throw new Error('Assistant pages require the shared workspace layout.')
-    return layout
-}
+import { AssistantWorkspaceContext } from './assistant-workspace-context'
 
 // Own the actual sidebar, its subscriptions and local list state above route children.
 // Only the content pane suspends or unmounts when moving between Chat and Plugins.
@@ -65,7 +58,7 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
 
     useEffect(() => { setExtensionDrawerOpen(false) }, [selectedSessionId, pathname])
 
-    return <WorkspaceLayoutContext.Provider value={{ ...sidebar, paneLayout }}>
+    return <AssistantWorkspaceContext.Provider value={{ ...sidebar, paneLayout }}>
         <div className="flex h-full min-h-0 overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]" data-assistant-workspace="true">
             {isBrowserExtension && extensionDrawerOpen && <button className="absolute inset-0 z-40 bg-black/25" aria-label="Close chats" onClick={() => setExtensionDrawerOpen(false)} />}
             <div className={isBrowserExtension && extensionDrawerOpen ? 'extension-chat-drawer h-full' : 'contents'}>
@@ -94,5 +87,5 @@ export function AssistantWorkspaceLayout({ children }: { children: ReactNode }) 
             </div>
             <AssistantTransientToast toast={toast} />
         </div>
-    </WorkspaceLayoutContext.Provider>
+    </AssistantWorkspaceContext.Provider>
 }

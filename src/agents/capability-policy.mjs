@@ -6,7 +6,7 @@ const CONTROL_CAPABILITIES = new Set([
   "observe.structure", "observe.screenshot", "navigate", "pointer.click", "pointer.move", "pointer.drag",
   "keyboard.type", "keyboard.key", "scroll", "form.select", "window.focus",
 ]);
-const KNOWN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "web_search", "web_fetch", ...DELEGATABLE_CONTROL_TOOLS]);
+const KNOWN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", ...DELEGATABLE_CONTROL_TOOLS]);
 const CONTROL_TOOL_RE = /(?:browser|chrome|computer|windows|desktop|agent[_-]?control|pair|click|navigate|screenshot)/i;
 const DESTRUCTIVE_GIT_RE = /\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\s+--force|rebase|merge|cherry-pick)\b/i;
 const SENSITIVE_COMMAND_RE = /\b(?:deploy|publish|release|terraform\s+apply|kubectl\s+(?:apply|delete)|rm\s+-rf|format\s+[a-z]:|drop\s+(?:database|table))\b/i;
@@ -58,7 +58,7 @@ export function attenuateAgentCapabilities(definition = {}, request = {}, policy
   }
 
   if (requestedTools.includes("bash")) {
-    warnings.push("Removed bash because Pi's unrestricted shell cannot enforce a child read/write scope.");
+    warnings.push("Removed bash because the unrestricted shell cannot enforce a child read/write scope.");
   }
   if (["writer", "full-access"].includes(permissionMode) && !uniqueStrings(request.writeScope ?? definition.writeScope).length) {
     warnings.push("Writer has no declared write scope; execution must remain blocked until scope is declared.");

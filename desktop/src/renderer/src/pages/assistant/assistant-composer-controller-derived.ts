@@ -28,6 +28,7 @@ type AssistantComposerSettingsDefaults = Pick<
 type ComposerModelOption = AssistantModelInfo
 
 function isRetiredModel(model: ComposerModelOption): boolean {
+    if (model.supportedEfforts !== undefined) return false
     const value = `${model.label || ''} ${model.id || ''}`.toLowerCase()
     return /(?:^|[/\s])gpt-5\.2(?:$|[\s-])/.test(value)
 }
@@ -126,7 +127,7 @@ export function useAssistantComposerSessionDefaults(input: {
     const baseInteractionMode: AssistantInteractionMode = fallbackComposerState.interactionMode || 'default'
     const resolvedModel = String(fallbackComposerState.model || '').trim()
     const rawAvailableModelOptions = (
-        modelOptions?.length
+        modelOptions !== undefined
             ? modelOptions
             : (resolvedModel ? [{ id: resolvedModel, label: resolvedModel }] : [])
     ).filter((model) => !isRetiredModel(model))

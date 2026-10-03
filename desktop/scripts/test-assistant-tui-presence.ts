@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { assistantMobileDevices, assistantSessionMobileDevices, hasAssistantTuiPresence, isAssistantSessionOpenInTui } from '../src/renderer/src/pages/assistant/assistant-tui-presence'
 import { resolveAssistantAgentInboxSettledInitialCount } from '../src/renderer/src/pages/assistant/assistant-agent-inbox-settled-window'
+import { resolveAssistantInboxModelPresentation } from '../src/renderer/src/pages/assistant/assistant-model-labels'
 import { mergeCanonicalPresenceObservation } from '../src/main/assistant/service-canonical-presence'
 import { areAssistantSessionsRailSelectionsEqual } from '../src/renderer/src/lib/assistant/assistant-store-selection-helpers'
 
@@ -51,6 +52,21 @@ assert.equal(resolveAssistantAgentInboxSettledInitialCount(0), 1)
 assert.equal(resolveAssistantAgentInboxSettledInitialCount(36), 1)
 assert.equal(resolveAssistantAgentInboxSettledInitialCount(38), 2)
 assert.equal(resolveAssistantAgentInboxSettledInitialCount(185), 5)
+assert.deepEqual(resolveAssistantInboxModelPresentation('opencode-harness/opencode/mimo-v2.6-flash-free'), {
+    modelName: 'mimo-v2.6-flash-free',
+    provider: 'opencode-harness'
+}, 'Inbox model text shows only the harness model name and identifies its source for the icon')
+assert.deepEqual(resolveAssistantInboxModelPresentation('openai-codex/gpt-6-luna'), {
+    modelName: 'gpt-6-luna',
+    provider: 'openai-codex'
+}, 'Codex model labels show only the model name and identify OpenAI for the icon')
+assert.deepEqual(resolveAssistantInboxModelPresentation('openai/gpt-5'), {
+    modelName: 'gpt-5',
+    provider: 'openai'
+}, 'all provider/model labels omit the provider text')
+assert.deepEqual(resolveAssistantInboxModelPresentation('gpt-5'), { modelName: 'gpt-5', provider: null }, 'unqualified model names remain unchanged')
+assert.deepEqual(resolveAssistantInboxModelPresentation(null), { modelName: '', provider: null })
+assert.deepEqual(resolveAssistantInboxModelPresentation('opencode-harness/'), { modelName: '', provider: 'opencode-harness' }, 'an incomplete harness route never leaks its provider path into the model label')
 
 const indicatorSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTuiPresenceIndicator.tsx', import.meta.url), 'utf8')
 const headerSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationHeader.tsx', import.meta.url), 'utf8')
@@ -71,6 +87,9 @@ assert.match(railSource, /isAssistantSessionOpenInTui\(session\)[\s\S]*<Assistan
 assert.match(railSource, /hasAssistantTuiPresence\(thread\.canonicalPresence\)[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\} compact/, 'visible nested thread rows preserve thread-specific TUI presence')
 assert.match(selectionSource, /presence\?\.clients[\s\S]*client\.clientId[\s\S]*client\.surface/, 'rail equality invalidates when TUI clients attach or detach without changing turn state')
 assert.match(inboxSource, /tuiOpen: isAssistantSessionOpenInTui\(session\)/, 'Inbox items derive TUI presence from their own canonical chat')
+assert.match(inboxSource, /resolveAssistantInboxModelPresentation\(item\.thread\?\.model\)/, 'Active work rows format the canonical thread model for display')
+assert.match(inboxSource, /model\.provider[\s\S]*<SettingsProviderIcon provider=/, 'Active work rows use the provider icon instead of provider text')
+assert.match(inboxSource, /\{model\.modelName \|\| 'Assistant'\}/, 'Active work rows show only the formatted model name')
 assert.equal((inboxSource.match(/<AssistantTuiPresenceIndicator focusable=\{false\} \/>/g) || []).length, 2, 'both Inbox card and slim-row presentations show the TUI icon')
 assert.equal((inboxSource.match(/mobileDevices=\{item\.mobileDevices\}/g) || []).length, 2, 'both Inbox layouts show the phone icon beside TUI presence')
 assert.match(headerSource, /mobileDevices=\{mobileDevices\}/)
@@ -80,10 +99,10 @@ assert.doesNotMatch(inboxSource, /AssistantTuiPresenceIndicator focusable=\{fals
 assert.match(inboxSource, /absolute bottom-1\.5 right-2[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}/, 'Inbox cards place TUI presence at the bottom-right corner')
 assert.match(inboxSource, /function AgentInboxSlimRow[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}[\s\S]*formatAssistantSidebarRelativeTime\(item\.activityAt\)/, 'Inbox slim rows align TUI presence before relative time')
 assert.match(railSource, /\{tuiOpen \? <AssistantTuiPresenceIndicator[\s\S]*\{timeLabel\}/, 'standard chat rows align TUI presence before relative time')
-assert.match(inboxSource, /function InboxRowActions[\s\S]*pointer-events-none absolute right-0 top-1\/2[\s\S]*showLabel \? 'w-\[4\.75rem\]' : 'w-\[3\.25rem\]'/, 'Inbox actions overlay a fixed trailing slot without changing the row width')
-assert.match(inboxSource, /group-hover\/agent-inbox-row:-translate-x-6[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}/, 'the terminal presence icon still slides left to clear the fixed action slot')
-assert.match(inboxSource, /translate-x-1 -translate-y-1\/2[\s\S]*group-hover\/agent-inbox-row:translate-x-0/, 'Inbox actions retain their restrained slide-in motion without layout reflow')
-assert.doesNotMatch(inboxSource, /group-hover\/agent-inbox-row:grid-cols-\[0fr\]/, 'Inbox hover actions cannot reflow or newly trim the row title')
+assert.ok(/function InboxRowActions[\s\S]*inFlow\s*\? 'relative max-w-0[\s\S]*group-hover\/agent-inbox-row:max-w-\[3\.25rem\]/.test(inboxSource), 'slim-row actions expand inside the row as they enter')
+assert.match(inboxSource, /function AgentInboxSlimRow[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}[\s\S]*group-hover\/agent-inbox-row:max-w-0[\s\S]*<InboxRowActions[^>]*inFlow/, 'presence icons remain in flow while the time yields its space to the actions')
+assert.match(inboxSource, /translate-x-1 opacity-0[\s\S]*group-hover\/agent-inbox-row:translate-x-0[\s\S]*group-hover\/agent-inbox-row:opacity-100/, 'Inbox actions keep their restrained slide-in motion')
+assert.doesNotMatch(inboxSource, /group-hover\/agent-inbox-row:-translate-x-6/, 'presence icons no longer move into the action controls')
 assert.match(inboxSource, /data-agent-inbox-layout-id[\s\S]*useLayoutEffect[\s\S]*cubic-bezier\(0\.22, 1, 0\.36, 1\)/, 'Inbox rows animate smoothly between Settled, Recent, and Active work')
 assert.match(inboxSource, /measureSettledInitialWindow[\s\S]*headerBounds\.bottom - scrollerBounds\.top \+ scroller\.scrollTop[\s\S]*scrollerBounds\.height - headerContentBottom/, 'the initial Settled batch is measured from the remaining at-rest sidebar height even after the list scrolls')
 assert.match(inboxSource, /new ResizeObserver\(measureSettledInitialWindow\)/, 'resizing the sidebar recomputes the visible Settled batch')

@@ -211,7 +211,9 @@ assert.deepEqual(
     'a first send keeps the lightweight working indicator visible until real work exists instead of rendering an empty disclosure'
 )
 const initialWorkingMarkup = renderToStaticMarkup(createElement(TimelineWorkingIndicator, { startedAt: iso(0) }))
-assert.equal(initialWorkingMarkup.includes('data-assistant-work-summary-shell="true"'), true, 'the first working state uses the same compact shell as Worked for')
+assert.equal(initialWorkingMarkup.includes('data-assistant-working-indicator="true"'), true, 'the first working state is a plain timed indicator until actual work arrives')
+assert.equal(initialWorkingMarkup.includes('lucide-chevron-right'), false, 'startup has nothing to expand')
+assert.equal(initialWorkingMarkup.includes('h-px'), false, 'startup does not flash a work divider')
 assert.equal(initialWorkingMarkup.includes('data-assistant-working-dots="true"'), true, 'the shared shell indicates active work with three dots')
 assert.equal(initialWorkingMarkup.includes('mr-0.5 inline-flex'), true, 'the Working label keeps a quiet two-pixel breath after its activity dots')
 assert.equal(initialWorkingMarkup.includes('animate-spin'), false, 'the first working state does not switch to a separate spinner layout')
@@ -475,6 +477,23 @@ assert.equal(
     'completed',
     'authoritative completed usage wins over an earlier transient error activity'
 )
+const recoveredFalseFailureRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(
+        [recoveredUser, recoveredProgress, recoveredFinal],
+        [
+            activity({ id: 'recovered-tool-before-error', turnId: recoveredTurnId, millisecond: 650 }),
+            { ...recoveredTransportError, turnTerminalOutcome: 'failed' },
+            activity({ id: 'recovered-tool-after-error', turnId: recoveredTurnId, millisecond: 800 })
+        ]
+    ), false, null),
+    messages: [recoveredUser, recoveredProgress, recoveredFinal],
+    turnUsageById: new Map([[recoveredTurnId, recoveredUsage]]),
+    latestAssistantMessageId: recoveredFinal.id,
+    latestTurnStartedAt: recoveredUser.createdAt,
+    isWorking: false
+})
+assert.equal(recoveredFalseFailureRows[1]?.kind === 'turn-work-summary' ? recoveredFalseFailureRows[1].outcome : null, 'completed', 'server completion clears an earlier false terminal failure')
+assert.equal(recoveredFalseFailureRows.some(row => row.kind === 'activity' && row.activity.id === recoveredTransportError.id), false, 'the false terminal failure is not shown beside a completed answer')
 
 const unresolvedTransientTurnId = 'turn-with-recoverable-error'
 const unresolvedTransientUser = message({
@@ -1616,7 +1635,9 @@ assert.equal(timelineRowsSource.includes('Loading chat...'), true)
 assert.equal(timelineRowsSource.includes('h-full min-h-0'), true, 'chat loading state fills the conversation viewport before centering')
 assert.equal(timelineRowsSource.includes("'mt-2 flex items-center justify-between gap-3 px-1 transition-opacity'"), true, 'user message metadata keeps a stable action row')
 assert.equal(timelineRowsSource.includes("minimal ? 'opacity-0 focus-within:opacity-100 group-hover/user-message:opacity-100' : 'opacity-100'"), true, 'Detailed keeps metadata visible while Minimal reveals it on hover or keyboard focus')
-assert.equal(timelineRowsSource.includes('statusTextRef.current.textContent = formatWorkingIndicatorStatus'), true, 'the standalone working timer updates without a once-per-second React commit')
+const workingIndicatorSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineWorkingIndicator.tsx', import.meta.url), 'utf8')
+assert.equal(workingIndicatorSource.includes('statusTextRef.current.textContent = formatWorkingIndicatorStatus'), true, 'the standalone working timer updates without a once-per-second React commit')
+assert.equal(timelineRowsSource.includes("export { TimelineWorkingIndicator } from './AssistantTimelineWorkingIndicator'"), true, 'existing callers retain the same startup indicator export')
 
 const conversationTimelinePaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationTimelinePane.tsx', import.meta.url), 'utf8')
 const mountedVirtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')

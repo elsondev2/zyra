@@ -1,11 +1,12 @@
 import { memo, useState } from 'react'
-import { Archive, Bot, Check, Copy, Folder, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, Radio, SquarePen, Trash2 } from 'lucide-react'
+import { Archive, Check, Copy, Folder, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, Radio, SquarePen, Trash2 } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import type { AssistantChatDisplayMode } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { copyTextToClipboard } from './AssistantPageHelpers'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
+import { AssistantAgentPresenceIndicator } from './AssistantAgentPresenceIndicator'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
 import { assistantMobileDevices, assistantMobileVoiceDevice, hasAssistantTuiPresence } from './assistant-tui-presence'
 
@@ -181,21 +182,12 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                         )}
                         openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
                     />
-                    {tuiOpen ? <AssistantTuiPresenceIndicator /> : null}
-                    {mobileDevices.length > 0 || mobileVoiceDevice ? <AssistantTuiPresenceIndicator mobileDevices={mobileDevices} mobileVoiceDevice={mobileVoiceDevice} /> : null}
-                </div>
-                {activeThreadIsSubagent && activeThreadLabel ? (
-                    <span
-                        className={cn(
-                            'inline-flex max-w-[180px] shrink-0 items-center gap-1 font-medium leading-none text-violet-100',
-                            minimal ? 'px-1 text-[10px] text-violet-200/65' : 'rounded-full border border-violet-400/20 bg-violet-500/[0.08] px-2 py-0.5 text-[9px]'
-                        )}
-                        title={`Viewing subagent thread: ${activeThreadLabel}`}
-                    >
-                        <Bot size={9} />
-                        <span className="truncate">{activeThreadLabel}</span>
+                    <span className="inline-flex shrink-0 items-center" data-assistant-presence-group>
+                        <AssistantAgentPresenceIndicator thread={activeThreadIsSubagent ? { source: 'subagent', agentNickname: activeThreadLabel, agentRole: null } : null} />
+                        {tuiOpen ? <AssistantTuiPresenceIndicator /> : null}
+                        {mobileDevices.length > 0 || mobileVoiceDevice ? <AssistantTuiPresenceIndicator mobileDevices={mobileDevices} mobileVoiceDevice={mobileVoiceDevice} /> : null}
                     </span>
-                ) : null}
+                </div>
                 {remotePresenceLabel ? (
                     <span
                         className={cn(
@@ -223,8 +215,8 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     type="button"
                     onClick={onToggleRightSidebar}
                     className="ml-2 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
-                    title={rightPanelOpen ? 'Close review workspace' : 'Open review workspace'}
-                    aria-label={rightPanelOpen ? 'Close review workspace' : 'Open review workspace'}
+                    title={rightPanelOpen ? 'Close inspector' : 'Open inspector'}
+                    aria-label={rightPanelOpen ? 'Close inspector' : 'Open inspector'}
                     aria-pressed={rightPanelOpen && rightPanelMode === 'review'}
                 >
                     <RightSidebarIcon size={14} strokeWidth={1.7} />

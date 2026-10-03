@@ -1,13 +1,16 @@
 import { act } from 'react'
 import { AssistantBrowserBackgroundPicker } from '../../src/renderer/src/pages/assistant/AssistantBrowserBackgroundPicker'
 import { AssistantBrowserHistoryPanel } from '../../src/renderer/src/pages/assistant/AssistantBrowserHistoryPanel'
-import { NativeOverlayPortal } from '../../src/renderer/src/components/ui/native-overlay-portal'
+import { AssistantBrowserBookmarksPanel } from '../../src/renderer/src/pages/assistant/AssistantBrowserBookmarksPanel'
+import { NativeOverlayPortal, NativeOverlayVisibilityScope } from '../../src/renderer/src/components/ui/native-overlay-portal'
 import { useFilePreviewChrome } from '../../src/renderer/src/components/ui/file-preview/useFilePreviewChrome'
 import { createRoot } from 'react-dom/client'
 import { AssistantBrowserDownloadsButton, type BrowserDownloadsApi } from '../../src/renderer/src/pages/assistant/AssistantBrowserDownloadsButton'
 import { AssistantBrowserDeviceToolbar } from '../../src/renderer/src/pages/assistant/AssistantBrowserDeviceToolbar'
 import { AssistantDatePicker } from '../../src/renderer/src/pages/assistant/AssistantDatePicker'
 import { FileActionsMenu } from '../../src/renderer/src/components/ui/FileActionsMenu'
+import { AssistantInspectorDeveloperToast, useAssistantInspectorDeveloperToast } from '../../src/renderer/src/pages/assistant/AssistantInspectorDeveloperToast'
+import { useEffect } from 'react'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 const check = (value: unknown, message: string) => { if (!value) throw new Error(message) }
@@ -24,19 +27,23 @@ iframe.style.cssText = 'position:absolute;left:0;top:0;width:840px;height:640px;
 document.body.append(iframe)
 const child = iframe.contentWindow!
 const childDocument = iframe.contentDocument!
+const passiveIframe = iframe.cloneNode() as HTMLIFrameElement
+document.body.append(passiveIframe)
+const passiveChild = passiveIframe.contentWindow!
+const passiveDocument = passiveIframe.contentDocument!
 let prepared!: () => void
 const preparation = new Promise<void>(resolve => { prepared = resolve })
 const visibility: boolean[] = []
 let nativeBounds: { x: number; y: number; width: number; height: number } | null = null
 const focusRequests: Array<boolean | undefined> = []
 Object.assign(window, { devscope: {
-    prepareNativeOverlay: async () => { await preparation; return { success: true, frameName: 'synthetic-native-caller' } },
+    prepareNativeOverlay: async ({ kind }: { kind: string }) => { await preparation; return { success: true, frameName: `synthetic-native-${kind}` } },
     setNativeOverlayVisible: async ({ visible, focus, bounds }: { visible: boolean; focus?: boolean; bounds?: typeof nativeBounds }) => { nativeBounds = bounds ?? null; visibility.push(visible); if (visible) focusRequests.push(focus); return { success: true, bounds: nativeBounds } },
     onNativeOverlayDismiss: () => () => {}
 } })
 // The real native host/portal is exercised across documents; window ownership and IPC
 // are covered by test-native-overlay, so this fixture controls only window.open.
-window.open = () => child
+window.open = (_url, frameName) => frameName?.includes('passive') ? passiveChild : child
 const host = document.createElement('div')
 host.style.cssText = 'position:relative;width:840px;height:640px'
 document.body.append(host)
@@ -45,6 +52,20 @@ ownerInput.setAttribute('aria-label', 'Owner address input')
 document.body.append(ownerInput)
 const root = createRoot(host)
 const results: string[] = []
+async function checkWorkspaceOverlayVisibility() {
+    const scoped = (visible: boolean) => <NativeOverlayVisibilityScope visible={visible}>
+        <NativeOverlayPortal><div data-scoped-browser-overlay>Browser menu</div></NativeOverlayPortal>
+        <NativeOverlayPortal passive><div data-scoped-browser-progress>Loading</div></NativeOverlayPortal>
+    </NativeOverlayVisibilityScope>
+    await act(async () => root.render(scoped(true)))
+    await settle(() => Boolean(childDocument.querySelector('[data-scoped-browser-overlay]')) && Boolean(passiveDocument.querySelector('[data-scoped-browser-progress]')), 'visible browser owns native interactive and passive overlays')
+    await act(async () => root.render(scoped(false)))
+    await settle(() => !childDocument.querySelector('[data-scoped-browser-overlay]') && !passiveDocument.querySelector('[data-scoped-browser-progress]'), 'hidden browser removes both native overlays across documents')
+    await settle(() => visibility.at(-1) === false, 'hidden browser releases native input interception')
+    await act(async () => root.render(scoped(true)))
+    await settle(() => Boolean(passiveDocument.querySelector('[data-scoped-browser-progress]')), 'returning to the browser restores its overlays')
+    results.push('hidden browser visibility scope removes passive and interactive native overlays and releases input')
+}
 const click = async (element: Element | null) => {
     check(element, 'expected an interactive control')
     const target = element!
@@ -74,7 +95,18 @@ function PreviewChromeFixture() {
         onPanelWidthCommit: commitResize })
     return <div ref={chrome.previewSurfaceRef}><button data-preview-resize-side="left">Resize preview</button><output data-preview-width>{chrome.leftPanelWidth}</output></div>
 }
+function ToastFixture() {
+    const { developerToast, showDeveloperToast, dismissDeveloperToast } = useAssistantInspectorDeveloperToast()
+    useEffect(() => { showDeveloperToast({ message: 'Page appearance is light.' }) }, [showDeveloperToast])
+    return <AssistantInspectorDeveloperToast toast={developerToast} onDismiss={dismissDeveloperToast} />
+}
 Object.assign(window, { nativeOverlayCallerCheck: (async () => {
+    if ((globalThis as any).nativeOverlayVisibilityOnly) {
+        prepared()
+        await checkWorkspaceOverlayVisibility()
+        await act(async () => root.unmount())
+        return results
+    }
     let active = true, scopeKey = 'workspace:tab-a'
     const renderDownloads = async () => act(async () => root.render(<AssistantBrowserDownloadsButton api={api} active={active} scopeKey={scopeKey} />))
     const trigger = () => host.querySelector('[aria-label="Downloads"]')
@@ -144,13 +176,16 @@ Object.assign(window, { nativeOverlayCallerCheck: (async () => {
     results.push('actual date picker: child-document Tab wrap and Escape')
 
     const noop = () => {}
-    for (const kind of ['backgrounds', 'history']) {
+    for (const kind of ['backgrounds', 'history', 'bookmarks']) {
         let closed = 0
         const onClose = () => { closed++ }
-        await act(async () => root.render(kind === 'history'
+        const view = () => kind === 'history'
             ? <AssistantBrowserHistoryPanel entries={[]} loading={false} query="" onQueryChange={noop} onClose={onClose} onNavigate={noop} onOpenInNewTab={noop} onClear={noop} onImport={noop} />
-            : <AssistantBrowserBackgroundPicker controller={{ mode: 'off', providerStatus: null, visibleBackgrounds: [], setMode: noop } as never} onClose={onClose} />))
-        const label = kind === 'history' ? 'Browser history' : 'New Tab backgrounds'
+            : kind === 'bookmarks'
+                ? <AssistantBrowserBookmarksPanel entries={[]} onClose={onClose} onNavigate={noop} onOpenInNewTab={noop} onRemove={noop} />
+                : <AssistantBrowserBackgroundPicker controller={{ mode: 'off', providerStatus: null, visibleBackgrounds: [], setMode: noop } as never} onClose={onClose} />
+        await act(async () => root.render(view()))
+        const label = kind === 'history' ? 'Browser history' : kind === 'bookmarks' ? 'Browser bookmarks' : 'New Tab backgrounds'
         await settle(() => Boolean(childDocument.querySelector(`[aria-label="${label}"]`)) && nativeBounds !== null, `${kind} mounts with scoped input bounds`)
         const browserDialog = childDocument.querySelector(`[aria-label="${label}"]`)!
         const rect = host.getBoundingClientRect()
@@ -158,15 +193,40 @@ Object.assign(window, { nativeOverlayCallerCheck: (async () => {
         check(browserDialog.getAttribute('aria-modal') === 'false', `${kind} does not mark unrelated app controls as inaccessible`)
         await click(browserDialog.parentElement)
         await act(async () => { await delay(260) })
-        check(closed === 0, `${kind} stays open when its backdrop is clicked`)
+        check(closed === (kind === 'backgrounds' ? 0 : 1), `${kind} backdrop dismissal matches its panel behavior`)
+        if (kind !== 'backgrounds') {
+            await act(async () => root.render(null))
+            await act(async () => root.render(view()))
+            await settle(() => Boolean(childDocument.querySelector(`[aria-label="${label}"]`)), `${kind} reopens after outside click`)
+        }
         await key(ownerInput, 'Escape')
         await act(async () => { await delay(260) })
-        check(closed === 0, `${kind} ignores keyboard events outside the browser dialog`)
-        await key(browserDialog, 'Escape')
-        await settle(() => closed === 1, `${kind} still closes with Escape inside its own dialog`)
+        check(closed === (kind === 'backgrounds' ? 0 : 1), `${kind} ignores keyboard events outside the browser dialog`)
+        await key(childDocument.querySelector(`[aria-label="${label}"]`)!, 'Escape')
+        await settle(() => closed === (kind === 'backgrounds' ? 1 : 2), `${kind} still closes with Escape inside its own dialog`)
         await act(async () => root.render(null))
     }
-    results.push('actual Backgrounds and History: browser-only bounds, non-modal app semantics and scoped Escape')
+    results.push('actual Backgrounds, History and Bookmarks: scoped bounds, outside dismissal and Escape')
+
+    await act(async () => root.render(<ToastFixture />))
+    await settle(() => Boolean(childDocument.querySelector('[role="status"]')) && nativeBounds !== null, 'Browser toast mounts in the native document')
+    check(nativeBounds!.width < 400 && nativeBounds!.height < 100, 'toast limits native input interception to the card instead of the Browser window')
+    check(Boolean(childDocument.querySelector('svg')), 'informational notice includes a visible icon')
+    await act(async () => ownerInput.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })))
+    await settle(() => !childDocument.querySelector('[role="status"]'), 'outside click dismisses toast without intercepting the owner control')
+    await act(async () => root.render(null))
+    await act(async () => root.render(<ToastFixture />))
+    await settle(() => Boolean(childDocument.querySelector('[role="status"]')), 'Browser toast reopens for swipe')
+    const toastCard = childDocument.querySelector<HTMLElement>('[role="status"]')!
+    toastCard.setPointerCapture = () => {}
+    toastCard.hasPointerCapture = () => true
+    toastCard.releasePointerCapture = () => {}
+    await act(async () => toastCard.dispatchEvent(new child.PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 200 })))
+    await act(async () => toastCard.dispatchEvent(new child.PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 100 })))
+    await act(async () => toastCard.dispatchEvent(new child.PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 100 })))
+    await settle(() => !childDocument.querySelector('[role="status"]'), 'swiping the text toast dismisses it')
+    await act(async () => root.render(null))
+    results.push('Browser toast: scoped input, icon, outside dismissal, and swipe')
 
     let selected = 0
     await act(async () => root.render(<FileActionsMenu title="Add fixture tab" items={[{ id: 'first', label: 'First action', onSelect: () => { selected++ } }]} />))
@@ -191,10 +251,11 @@ Object.assign(window, { nativeOverlayCallerCheck: (async () => {
     check(resizeCommits.join(',') === '264,304', 'preview keyboard and pointer commits each fire once')
     check(childDocument.body.style.cursor === '', 'preview drag releases its cursor')
     results.push('actual preview chrome hook: child-document separator keyboard, drag, width commits and cursor cleanup')
+    await checkWorkspaceOverlayVisibility()
     await act(async () => root.unmount())
     await act(async () => { await delay(50) })
     check(!childDocument.querySelector('[role="menu"]'), 'unmount leaves no stale menu')
     check(visibility.includes(true), 'real portal host presented committed content')
     results.push('actual shared FileActions: ArrowDown focus after mount, one action and clean unmount')
     return results
-})().finally(() => { host.remove(); ownerInput.remove(); iframe.remove() }) })
+})().finally(() => { host.remove(); ownerInput.remove(); iframe.remove(); passiveIframe.remove() }) })

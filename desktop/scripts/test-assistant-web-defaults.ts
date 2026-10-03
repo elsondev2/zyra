@@ -50,7 +50,7 @@ assert.equal(restored?.webFetch, true, 'web fetch policy must survive SQLite per
 db.close()
 
 const here = dirname(fileURLToPath(import.meta.url))
-const runtimeSource = readFileSync(resolve(here, '../src/main/assistant/zyra-pi-runtime.ts'), 'utf8')
+const runtimeSource = readFileSync(resolve(here, '../src/main/assistant/zyra-runtime.ts'), 'utf8')
 const serviceSource = readFileSync(resolve(here, '../src/main/assistant/service.ts'), 'utf8')
 const mainSource = readFileSync(resolve(here, '../src/main/index.ts'), 'utf8')
 const workerSource = readFileSync(resolve(here, '../src/main/assistant/zyra-agent-server-worker.ts'), 'utf8')

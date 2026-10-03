@@ -56,6 +56,13 @@ export class ForegroundControllerPersistence implements ForegroundControllerStor
         return this.mutate(() => this.store.initializeConversation(route))
     }
 
+    initializeConversations(routes: readonly ForegroundRoute[]): ForegroundRoute[] {
+        if (!routes.length) return []
+        // One rollback image and one durable atomic write for initial imports.
+        // Live route transitions and message operations still flush individually.
+        return this.mutate(() => routes.map(route => this.store.initializeConversation(route)))
+    }
+
     activeRoute(conversationId: string): ForegroundRoute | null {
         return this.store.activeRoute(conversationId)
     }

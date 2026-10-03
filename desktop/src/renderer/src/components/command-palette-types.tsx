@@ -7,6 +7,8 @@ export type CommandPaletteResult = {
     title: string
     subtitle?: string
     badge?: string
+    detail?: ReactNode
+    keepOpen?: boolean
     contentMatch?: {
         source: 'user' | 'assistant'
         snippet: string

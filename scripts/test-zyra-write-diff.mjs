@@ -12,7 +12,7 @@ import {
   generateUnifiedPatch,
   SessionManager,
   withFileMutationQueue,
-} from "@earendil-works/pi-coding-agent";
+} from "../src/runtime/engine/src/index.js";
 import {
   createZyraWriteTool,
   resolveZyraWritePath,
@@ -163,7 +163,7 @@ try {
       undefined,
       () => undefined,
     );
-    assert.equal(registeredResult.details?.source, "synthetic-snapshot", "the tool actually registered with Pi must return enriched details");
+    assert.equal(registeredResult.details?.source, "synthetic-snapshot", "the tool actually registered with Zyra must return enriched details");
     assert.match(registeredResult.details?.patch || "", /\+registered/);
   } finally {
     session.dispose();

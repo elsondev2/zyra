@@ -2,6 +2,8 @@
 
 Zyra is a local coding agent for the terminal and desktop. It works in your project directory, can inspect and edit files, runs checks, and keeps chats and project context local.
 
+The agent engine, provider transports, session handling, and terminal components are maintained as local [Zyra runtime source](src/runtime/README.md). Builds and installations do not use Pi packages.
+
 ## Install the TUI
 
 Release installs are self-contained. You do not need Node.js, Bun, npm, or Pi on the machine running Zyra.
@@ -54,7 +56,7 @@ zyra login subscription
 zyra login api
 ```
 
-API usage is billed separately by OpenAI. Credentials remain in Pi's local auth store at `~/.pi/agent/auth.json`; they are not copied into a project or release artifact.
+API usage is billed separately by OpenAI. Credentials remain in Zyra's own local auth store at `~/.zyra/credentials/auth.json`; they are not copied into a project or release artifact.
 
 Useful commands:
 
@@ -108,6 +110,13 @@ node scripts/build-tui-release.mjs --target=linux-x64
 ```
 
 Desktop development:
+
+`bun dev` in `desktop/` registers `zyra-dev` for the terminal. Run `zyra-dev`
+from any project folder to open a new chat against the development Desktop
+profile, or `zyra-dev resume` to pick an existing dev chat. It uses the current
+checkout's source and selects the dev namespace automatically. A suffixed dev
+profile uses the same `ZYRA_DEV_INSTANCE_SUFFIX` in both terminals.
+To register it without starting Desktop, run `bun run install:dev` at the repo root.
 
 ```bash
 npm --prefix desktop ci

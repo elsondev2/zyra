@@ -85,6 +85,7 @@ export class CanonicalChatIndex extends EventEmitter {
 
     for (const [chatId, chat] of Object.entries(this.record.chats)) {
       if (pathKey(chat.storageProject) !== pathKey(project)) continue;
+      if (chat.agentThread === true && existsSync(chat.sessionPath)) { files.push(chat.sessionPath); present.add(pathKey(chat.sessionPath)); }
       if (present.has(pathKey(chat.sessionPath))) continue;
       delete this.record.chats[chatId];
       changed = true;
@@ -100,6 +101,7 @@ export class CanonicalChatIndex extends EventEmitter {
         delete this.record.chats[current.canonicalChatId];
       }
       this.record.chats[next.canonicalChatId] = next;
+      if (current?.agentThread) next.agentThread = true;
       changed = true;
     }
 
@@ -110,6 +112,18 @@ export class CanonicalChatIndex extends EventEmitter {
   get(canonicalChatId) {
     const chat = this.record.chats[String(canonicalChatId || "").trim()];
     return chat ? cloneChat(chat) : null;
+  }
+
+  registerAgentThread(file, project) {
+    const root = path.resolve(project, '.zyra', 'agent-runs');
+    const relative = path.relative(root, path.resolve(file));
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Agent transcript must stay inside its project agent-runs directory.');
+    const record = scanSessionFile(file, project, this.findByPath(file), statSync(file));
+    if (!record?.canonicalChatId) throw new Error('Agent transcript is not durable yet.');
+    record.agentThread = true;
+    this.record.chats[record.canonicalChatId] = record;
+    this.persist();
+    return cloneChat(record);
   }
 
   findByPath(sessionPath) {

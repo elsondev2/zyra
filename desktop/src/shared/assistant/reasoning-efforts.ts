@@ -22,30 +22,33 @@ const KNOWN_REASONING_EFFORTS = new Set<AssistantReasoningEffort>([
     ...CHATGPT_REASONING_EFFORTS,
     'max'
 ])
-const SELECTABLE_CHATGPT_REASONING_EFFORTS = new Set<AssistantReasoningEffort>([
-    ...CHATGPT_REASONING_EFFORTS,
-    'max'
-])
 
+function isDirectOpenAiModel(id: string): boolean {
+    return id.startsWith('openai-codex/') || id.startsWith('openai/')
+        || (!id.includes('/') && /^(?:gpt-|codex-)/i.test(id))
+}
 export function isAssistantReasoningEffort(value: unknown): value is AssistantReasoningEffort {
     return typeof value === 'string' && KNOWN_REASONING_EFFORTS.has(value as AssistantReasoningEffort)
 }
 
 export function isGpt56AssistantModel(model: string | Pick<AssistantModelInfo, 'id' | 'label'> | null | undefined): boolean {
-    const value = typeof model === 'string' ? model : `${model?.id || ''} ${model?.label || ''}`
+    const id = typeof model === 'string' ? model : model?.id || ''
+    if (id.includes('/') && !id.startsWith('openai-codex/') && !id.startsWith('openai/')) return false
+    const value = typeof model === 'string' ? model : `${id} ${model?.label || ''}`
     return /(?:^|[/\s])gpt-5\.6(?:-|$)/i.test(value)
 }
 
 export function getAssistantModelReasoningEfforts(
     model: string | AssistantModelInfo | null | undefined
 ): AssistantReasoningEffort[] {
-    if (typeof model !== 'string' && model?.supportedEfforts?.length) {
+    if (typeof model !== 'string' && model?.supportedEfforts) {
         const supported = model.supportedEfforts.filter((effort) => (
-            isAssistantReasoningEffort(effort) && SELECTABLE_CHATGPT_REASONING_EFFORTS.has(effort)
+            isAssistantReasoningEffort(effort)
         ))
-        if (isGpt56AssistantModel(model) && !supported.includes('max')) supported.push('max')
-        if (supported.length > 0) return [...supported]
+        return [...supported]
     }
+    const id = typeof model === 'string' ? model : model?.id || ''
+    if (!isDirectOpenAiModel(id)) return []
     return [...(isGpt56AssistantModel(model) ? GPT_56_REASONING_EFFORTS : CHATGPT_REASONING_EFFORTS)]
 }
 
@@ -54,7 +57,13 @@ export function coerceAssistantReasoningEffortForModel(
     model: string | AssistantModelInfo | null | undefined
 ): AssistantReasoningEffort {
     const efforts = getAssistantModelReasoningEfforts(model)
+    if (efforts.length === 0) return 'off'
     const requested = isAssistantReasoningEffort(value) ? value : 'medium'
+    if (typeof model !== 'string' && model?.supportedEfforts) return efforts.includes(requested) ? requested : efforts.includes('medium') ? 'medium' : efforts[0]!
+    const id = typeof model === 'string' ? model : model?.id || ''
+    if (!isDirectOpenAiModel(id)) {
+        return efforts.includes(requested) ? requested : efforts[0]
+    }
 
     if (isGpt56AssistantModel(model)) {
         const compatible = requested === 'off' || requested === 'none' || requested === 'minimal' ? 'low' : requested

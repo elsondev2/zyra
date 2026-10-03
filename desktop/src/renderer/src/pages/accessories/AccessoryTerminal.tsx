@@ -1,11 +1,9 @@
 import { AssistantTerminalWorkspace } from '../assistant/AssistantTerminalWorkspace'
-import { AccessoryDirectoryBar } from './AccessoryDirectoryBar'
-import { useAccessoryDirectory } from './useAccessoryDirectory'
+import { AccessoryHeaderPortal } from './AccessoryHeaderContext'
 
-export function AccessoryTerminal({ workspaceId, rootPath, onError }: { workspaceId: string; rootPath: string; onError: (message: string) => void }) {
-    const directory = useAccessoryDirectory(rootPath, onError)
+export function AccessoryTerminal({ workspaceId, rootPath, onSidebarWidthChange }: { workspaceId: string; rootPath: string; onSidebarWidthChange: (width: number) => void }) {
     return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <AccessoryDirectoryBar path={directory.path} busy={directory.choosing} onChoose={() => void directory.choose()} />
-        <AssistantTerminalWorkspace key={directory.path} workspaceKey={`accessory:${workspaceId}:${directory.path}`} projectPath={directory.path} active terminalOwner={{ kind: 'accessory-window', workspaceId }} />
+        <AccessoryHeaderPortal draggable><span className="min-w-0 truncate px-3 text-[11px] text-sparkle-text-secondary" title={rootPath}>{rootPath}</span></AccessoryHeaderPortal>
+        <AssistantTerminalWorkspace workspaceKey={`accessory:${workspaceId}`} projectPath={rootPath} active terminalOwner={{ kind: 'accessory-window', workspaceId }} onSidebarWidthChange={onSidebarWidthChange} />
     </div>
 }

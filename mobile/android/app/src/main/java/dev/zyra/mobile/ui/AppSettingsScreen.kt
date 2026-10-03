@@ -1,11 +1,14 @@
 package dev.zyra.mobile.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.zyra.mobile.R
@@ -45,7 +48,8 @@ import dev.zyra.mobile.data.*
         items(state.machines, key = { it.id }) { machine ->
             var menu by remember { mutableStateOf(false) }
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-                ZyraSettingRow(R.drawable.ic_monitor, machine.name, connectionLabel(state.machineStatus[machine.id] ?: ConnectionState.Offline), click = { vm.selectMachineFilter(machine.id) }, trailing = {
+                val connection = state.machineStatus[machine.id] ?: ConnectionState.Offline
+                ZyraSettingRow(icon = null, title = machine.name, subtitle = connectionLabel(connection), click = { vm.selectMachineFilter(machine.id) }, leading = { MachineStatusIcon(connection) }, trailing = {
                     Box { IconButton(onClick = { menu = true }) { AppIcon(R.drawable.ic_ellipsis, "Computer options") }; DropdownMenu(menu, { menu = false }, shape = MaterialTheme.shapes.medium, containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
                         DropdownMenuItem(text = { Text("Forget this computer") }, leadingIcon = { AppIcon(R.drawable.ic_x) }, onClick = { forgetting = machine; menu = false })
                     } }
@@ -56,6 +60,18 @@ import dev.zyra.mobile.data.*
     }
     forgetting?.let { machine -> AlertDialog(onDismissRequest = { forgetting = null }, title = { Text("Forget " + machine.name + "?") }, text = { Text("Saved chats and drafts from this PC will be removed from this phone. Your work on the PC stays there.") }, confirmButton = { TextButton(onClick = { vm.forget(machine); forgetting = null }) { Text("Forget") } }, dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } }) }
 }
+@Composable fun MachineStatusIcon(connection: ConnectionState) {
+    val color = when (connection) {
+        ConnectionState.Connected -> MaterialTheme.colorScheme.primary
+        ConnectionState.Connecting, ConnectionState.Reconnecting -> MaterialTheme.colorScheme.tertiary
+        ConnectionState.Offline -> MaterialTheme.colorScheme.outline
+    }
+    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+        AppIcon(R.drawable.ic_monitor, modifier = Modifier.size(20.dp))
+        Box(Modifier.align(Alignment.BottomEnd).size(8.dp).background(color, CircleShape))
+    }
+}
+
 fun connectionLabel(value: ConnectionState) = when (value) { ConnectionState.Connected -> "Connected"; ConnectionState.Connecting -> "Connecting…"; ConnectionState.Reconnecting -> "Reconnecting…"; ConnectionState.Offline -> "Offline" }
 
 

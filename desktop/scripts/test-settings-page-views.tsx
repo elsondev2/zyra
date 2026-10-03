@@ -15,8 +15,9 @@ const source = (name: string) => readFileSync(new URL(`../src/renderer/src/${nam
 const app = source('App.tsx')
 const routes = new Set([...app.matchAll(/<Route path="([^"]+)"/g)].map(match => `/settings/${match[1]}`))
 const primary = SETTINGS_NAVIGATION_ITEMS.flatMap(group => getSettingsCategoryDestinations(group.id))
-assert.equal(primary.length, 16, 'usage is a separate Providers tab without growing the sidebar')
-assert.deepEqual(getSettingsCategoryDestinations('account').map(page => page.label), ['Providers', 'Devices'])
+assert.equal(primary.length, 19, 'Archived chats and Plugins are standalone destinations while provider views and usage remain nested')
+assert.deepEqual(getSettingsCategoryDestinations('assistant').map(page => page.label), ['Chats', 'Archived chats', 'Providers', 'Plugins', 'Skills', 'Voice', 'Context & memory'])
+assert.deepEqual(getSettingsCategoryDestinations('account').map(page => page.label), ['Devices'])
 assert.ok(primary.every(page => !/OpenAI|AI providers/.test(page.label)))
 for (const page of SETTINGS_DESTINATIONS) {
     assert.equal(findSettingsDestination(page.to)?.id, page.id, 'the most specific inner route wins over its parent')
@@ -37,17 +38,21 @@ for (const [family, views] of Object.entries(SETTINGS_PAGE_VIEWS)) for (const vi
 for (const [oldPage, section, label, destination] of [
     ['general', 'Interface', 'Chat rail', '/settings/app/appearance/layout'],
     ['assistant', 'Assistant defaults', 'Model', '/settings/providers/models'],
-    ['assistant', 'Assistant defaults', 'Permission mode', '/settings/assistant/defaults'],
+    ['assistant', 'Assistant defaults', 'Permission mode', '/settings/assistant/chat-defaults'],
     ['assistant', 'Output and history', 'Canonical diagnostics', '/settings/data/diagnostics'],
     ['assistant', 'Reasoning and context', 'Context limit', '/settings/assistant/memory'],
     ['appearance', 'Theme', 'UI font', '/settings/app/appearance/typography'],
     ['appearance', 'Theme', 'Accent primary', '/settings/app/appearance/colors'],
-    ['terminal-runtime', 'Terminal', 'Preview panel height', '/settings/workspace/files/run'],
     ['about', 'Terminal', 'zyra command', '/settings/workspace/terminal'],
     ['account', 'OpenAI connections', 'ChatGPT subscription', '/settings/providers']
 ]) assert.equal(resolveSettingsSearchLocation(oldPage, createSettingsRowTargetId(section, label))?.pathname, destination)
 
-const accents = renderToStaticMarkup(<AppearanceAccentPicker value={ACCENT_COLORS[0]} onChange={() => {}} />)
+assert.deepEqual(SETTINGS_PAGE_VIEWS.files.map(view => view.label), ['Preview', 'Editor'])
+assert.equal(resolveSettingsSearchLocation('files-editor', createSettingsRowTargetId('File preview', 'Python run target')), null)
+assert.equal(resolveSettingsSearchLocation('terminal-runtime', createSettingsRowTargetId('Terminal', 'Preview panel height')), null)
+assert.match(app, /path="workspace\/files\/run" element=\{<Navigate to="\/settings\/workspace\/files" replace \/>\}/)
+
+const accents = renderToStaticMarkup(<AppearanceAccentPicker value={ACCENT_COLORS[0]} background="#000000" onChange={() => {}} />)
 assert.equal((accents.match(/type="radio"/g) || []).length, ACCENT_COLORS.length, 'accent choices use native keyboard-operable radios')
 assert.equal((accents.match(/checked=""/g) || []).length, 1)
 assert.match(source('pages/settings/AppearanceSettings.tsx'), /useAppearanceSettingsController\(view === 'typography'\)/, 'theme and layout views do not fetch font-management data')
@@ -63,4 +68,4 @@ assert.match(source('pages/settings/SettingsShell.tsx'), /details\.open = true/,
 assert.equal(chatGptWritingTestModel('', '', 'anthropic/example'), undefined, 'a generic chat default cannot be sent to the ChatGPT-only test')
 assert.equal(chatGptWritingTestModel('legacy-model', '', 'anthropic/example'), 'legacy-model', 'explicit legacy writing choices remain authoritative')
 assert.equal(chatGptWritingTestModel('', '', 'openai-codex/example'), 'openai-codex/example')
-console.log('Settings views: 16 primary pages, routed inner views, parent selection, migrated search, scoped provider reads and writing-provider boundaries: ok')
+console.log('Settings views: 19 primary pages, routed inner views, parent selection, migrated search, scoped provider reads and writing-provider boundaries: ok')

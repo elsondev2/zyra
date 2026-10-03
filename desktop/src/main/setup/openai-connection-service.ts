@@ -3,6 +3,8 @@ import { pathToFileURL } from 'node:url'
 import type {
     OnboardingAuthMethod,
     OnboardingAuthStatus,
+    ChatGptDeviceCode,
+    ChatGptSignInMethod,
     OpenAIConnectionMethodStatus,
     OpenAIConnectionsStatus
 } from '../../shared/onboarding/contracts'
@@ -43,6 +45,7 @@ export type OpenAIConnectionServiceDependencies = {
     now?: () => Date
     getAssistantDefaultModel?: () => Promise<string>
     setAssistantDefaultModel?: (model: string) => Promise<void>
+    onCredentialChanged?: (provider: 'openai-codex' | 'openai') => Promise<void>
 }
 
 const CHATGPT_DEFAULT_MODEL = 'openai-codex/gpt-5.6-sol'
@@ -61,6 +64,29 @@ function loadAccountModule(): Promise<ChatGptAccountModule> {
 
 function errorMessage(error: unknown): string {
     return error instanceof Error && error.message.trim() ? error.message : 'OpenAI connection verification failed.'
+}
+
+function nonEmptyString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function normalizeChatGptDeviceCode(value: unknown): ChatGptDeviceCode | null {
+    if (!value || typeof value !== 'object') return null
+    const source = value as Record<string, unknown>
+    const verificationUrl = nonEmptyString(source.verificationUriComplete)
+        || nonEmptyString(source.verification_uri_complete)
+        || nonEmptyString(source.verificationUrl)
+        || nonEmptyString(source.verificationUri)
+        || nonEmptyString(source.verification_uri)
+        || nonEmptyString(source.url)
+    const userCode = nonEmptyString(source.userCode) || nonEmptyString(source.user_code) || nonEmptyString(source.code)
+    if (!verificationUrl || !userCode) return null
+    try {
+        if (new URL(verificationUrl).protocol !== 'https:') return null
+    } catch {
+        return null
+    }
+    return { verificationUrl, userCode, expiresAt: nonEmptyString(source.expiresAt) || nonEmptyString(source.expires_at) }
 }
 
 function verifiedApiModel(verification: ApiVerificationResult): string | null {
@@ -97,6 +123,8 @@ export class OpenAIConnectionService {
     private readonly loadAccount: () => Promise<ChatGptAccountModule>
     private readonly now: () => Date
     private lastVerifiedApiModel: string | null = null
+    private chatGptDeviceCode: ChatGptDeviceCode | null = null
+    private chatGptLoginController: AbortController | null = null
 
     constructor(private readonly dependencies: OpenAIConnectionServiceDependencies) {
         this.loadSdk = dependencies.loadSdk || loadSdkModule
@@ -125,6 +153,10 @@ export class OpenAIConnectionService {
         if (this.operation) await this.operation.catch(() => undefined)
         if (this.disconnectOperation) await this.disconnectOperation.catch(() => undefined)
         return this.readConnectionsStatus()
+    }
+
+    getChatGptDeviceCode(): ChatGptDeviceCode | null {
+        return this.chatGptDeviceCode ? { ...this.chatGptDeviceCode } : null
     }
 
     disconnect(method: OnboardingAuthMethod): Promise<OpenAIConnectionsStatus> {
@@ -157,6 +189,7 @@ export class OpenAIConnectionService {
             if (ownsDefault) await this.dependencies.setAssistantDefaultModel?.(currentDefault).catch(() => undefined)
             throw error
         }
+        await this.dependencies.onCredentialChanged?.(method === 'chatgpt' ? 'openai-codex' : 'openai')
         return this.readConnectionsStatus()
     }
 
@@ -168,27 +201,60 @@ export class OpenAIConnectionService {
         return { chatgpt, apiKey, checkedAt: this.now().toISOString() }
     }
 
-    connectChatGpt(): Promise<OnboardingAuthStatus> {
+    connectChatGpt(signInMethod: ChatGptSignInMethod = 'browser'): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
         if (this.disconnectOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
+        const controller = new AbortController()
+        this.chatGptLoginController = controller
         return this.track((async () => {
-            const sdk = await this.loadSdk()
-            await sdk.loginZyraAuth('openai-codex', {
-                onMessage: () => undefined,
-                onProgress: () => undefined,
-                onAuth: (info: unknown) => {
-                    const url = info && typeof info === 'object' && typeof (info as { url?: unknown }).url === 'string'
-                        ? (info as { url: string }).url
-                        : ''
-                    if (!url) throw new Error('OpenAI did not provide a sign-in URL.')
-                    void Promise.resolve(this.dependencies.openExternal(url))
-                },
-                onPrompt: async () => {
-                    throw new Error('This OpenAI sign-in requires a browser callback that Desktop could not complete. Try again or use an API key.')
-                }
-            })
-            return this.verifyChatGptConnection()
+            try {
+                this.chatGptDeviceCode = null
+                const sdk = await this.loadSdk()
+                if (controller.signal.aborted) throw controller.signal.reason
+                await sdk.loginZyraAuth('openai-codex', {
+                    signInMethod,
+                    signal: controller.signal,
+                    onMessage: () => undefined,
+                    onProgress: () => undefined,
+                    onAuth: async (info: unknown) => {
+                        if (controller.signal.aborted) return
+                        const url = info && typeof info === 'object' && typeof (info as { url?: unknown }).url === 'string'
+                            ? (info as { url: string }).url
+                            : ''
+                        if (!url) throw new Error('OpenAI did not provide a sign-in URL.')
+                        await this.dependencies.openExternal(url)
+                    },
+                    onDeviceCode: async (info: unknown) => {
+                        if (controller.signal.aborted) return
+                        const deviceCode = normalizeChatGptDeviceCode(info)
+                        if (!deviceCode) throw new Error('OpenAI did not provide a usable device code.')
+                        this.chatGptDeviceCode = deviceCode
+                        await this.dependencies.openExternal(deviceCode.verificationUrl)
+                    }
+                })
+                this.chatGptLoginController = null
+                await this.dependencies.onCredentialChanged?.('openai-codex')
+                return await this.verifyChatGptConnection()
+            } finally {
+                if (this.chatGptLoginController === controller) this.chatGptLoginController = null
+                this.chatGptDeviceCode = null
+            }
         })())
+    }
+
+    async cancelChatGpt(): Promise<boolean> {
+        const controller = this.chatGptLoginController
+        if (!controller || controller.signal.aborted) return false
+        const operation = this.operation
+        const error = Object.assign(new Error('ChatGPT sign-in was cancelled.'), { code: 'ZYRA_OAUTH_CANCELLED' })
+        controller.abort(error)
+        try {
+            await operation
+            return false
+        } catch (failure) {
+            if (failure && typeof failure === 'object' && (failure as { code?: unknown }).code === 'ZYRA_OAUTH_CANCELLED') return true
+            throw failure
+        }
     }
 
     connectApiKey(apiKey: string): Promise<OnboardingAuthStatus> {
@@ -199,6 +265,7 @@ export class OpenAIConnectionService {
             if (!key || /\s/.test(key) || key.length > 4_096) throw new Error('Enter a valid OpenAI API key.')
             const sdk = await this.loadSdk()
             const verification = await sdk.configureZyraOpenAIApiKey(key)
+            await this.dependencies.onCredentialChanged?.('openai')
             const model = verifiedApiModel(verification)
             if (!model) throw new Error('The API key is valid, but no supported GPT-5.6 API model is available to this account.')
             this.lastVerifiedApiModel = model

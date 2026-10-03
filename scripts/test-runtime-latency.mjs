@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { createRuntimeLatencyTrace } from '../src/runtime-latency.mjs';
+const metrics = [];
+const trace = createRuntimeLatencyTrace('session-startup', value => metrics.push(value));
+trace('ready', { elapsed: 12, reused: true, prompt: 'private prompt', password: 'private password', path: 'private path', invalid: Infinity });
+assert.equal(metrics.length, 1);
+assert.equal(metrics[0].elapsed, 12); assert.equal(metrics[0].reused, true);
+assert.equal(JSON.stringify(metrics).includes('private'), false);
+assert.equal('invalid' in metrics[0], false);
+assert.doesNotThrow(() => createRuntimeLatencyTrace('test', () => { throw Error('Listener failure'); })('ready'));
+console.log('Latency metrics retain finite timings/counts and booleans; private strings and listener failures are excluded.');

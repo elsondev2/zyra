@@ -5,7 +5,20 @@ import {
   ZyraPluginValidationError,
   assertPluginName,
   normalizeZyraPluginManifest,
+  normalizePluginRelativePath,
 } from './plugin-contract.mjs'
+import { normalizeZyraPluginConnectionPins } from './plugin-connection-sources.mjs'
+
+function connectionMetadata(value) {
+  const pins = normalizeZyraPluginConnectionPins(value.mcpServerPins)
+  const result = pins === undefined ? {} : { mcpServerPins: pins }
+  if (value.appMcpPath !== undefined && value.appMcpPath !== null) {
+    const appMcpPath = normalizePluginRelativePath(value.appMcpPath, 'apps')
+    if (!appMcpPath || pins === undefined) throw new ZyraPluginValidationError('PLUGIN_SCOPE_INVALID', 'Additional app MCP paths require a valid path and reviewed descriptor pins.')
+    result.appMcpPath = appMcpPath
+  } else if (value.appMcpPath === null) result.appMcpPath = null
+  return result
+}
 
 function bounded(value, limit = 256) {
   return typeof value === 'string' ? value.replace(/\s+/gu, ' ').trim().slice(0, limit) : ''
@@ -63,6 +76,7 @@ export function createEmptyZyraPluginState() {
     releases: [],
     pluginSets: [createEmptyPluginSet()],
     chatScopes: [],
+    appViews: { enabled: false, displayMode: 'manual', pluginIds: [] },
   }
 }
 
@@ -122,6 +136,7 @@ function normalizeRelease(value, installationRoot) {
     totalBytes: Math.max(0, Math.min(ZYRA_PLUGIN_LIMITS.maxPackageBytes, Number(value.totalBytes) || 0)),
     containsExecutableFiles: value.containsExecutableFiles === true,
     skills,
+    ...connectionMetadata(value),
     installedAt: normalizedDate(value.installedAt),
   }
 }
@@ -180,6 +195,8 @@ function normalizeScopePlugin(value) {
     version,
     contentDigest,
     skillsPath: bounded(value.skillsPath, ZYRA_PLUGIN_LIMITS.maxPathCharacters) || null,
+    mcpPath: bounded(value.mcpPath, ZYRA_PLUGIN_LIMITS.maxPathCharacters) || null,
+    ...connectionMetadata(value),
     capabilityCeiling: uniqueStrings(value.capabilityCeiling, 32),
   }
 }
@@ -266,6 +283,12 @@ export function normalizeZyraPluginState(value, options = {}) {
     'PLUGIN_SCOPE_LIMIT',
     'Chat Plugin scope state',
   ).map(normalizeChatScope).filter(Boolean)
+  const appViewsInput = input.appViews && typeof input.appViews === 'object' && !Array.isArray(input.appViews) ? input.appViews : {}
+  const appViews = {
+    enabled: appViewsInput.enabled === true,
+    displayMode: appViewsInput.displayMode === 'automatic' ? 'automatic' : 'manual',
+    pluginIds: uniqueStrings(appViewsInput.pluginIds, ZYRA_PLUGIN_LIMITS.maxPlugins).filter((pluginId) => pluginIds.has(pluginId)),
+  }
   return {
     version: ZYRA_PLUGIN_STATE_VERSION,
     revision: Math.max(1, Number(input.revision) || 1),
@@ -274,5 +297,6 @@ export function normalizeZyraPluginState(value, options = {}) {
     releases,
     pluginSets,
     chatScopes,
+    appViews,
   }
 }

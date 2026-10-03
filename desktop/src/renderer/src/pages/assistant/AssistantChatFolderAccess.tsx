@@ -33,7 +33,7 @@ export function AssistantChatFolderAccess({ sessionId }: { sessionId: string }) 
     }
     return <section className="space-y-2 border-t border-white/5 pt-3 text-xs" aria-label="Folder access">
         <div className="font-medium text-sparkle-text">Folder access</div>
-        <p className="text-sparkle-text-secondary">{reviewing ? 'Review the folders this chat will use.' : 'Full access changes approvals, not these folder limits.'}</p>
+        <p className="text-sparkle-text-secondary">{reviewing ? 'Review the folders this chat will use.' : 'These folders define this chat’s project context. Full access can use other folders too.'}</p>
         <ul className="space-y-1.5">
             {roots.map(root => <li key={root.path} className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-sparkle-text-secondary" title={root.path}>{root.path}</span>

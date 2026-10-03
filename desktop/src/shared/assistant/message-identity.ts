@@ -1,17 +1,21 @@
 import type { AssistantMessage } from './contracts'
+export { normalizeCanonicalMessageSourceId } from '../../../../src/message-identity.mjs'
 
-const PI_ASSISTANT_MESSAGE_ID_PREFIX = 'pi-message:assistant:'
+const ZYRA_ASSISTANT_MESSAGE_ID_PREFIX = 'zyra-message:assistant:'
+const LEGACY_PI_ASSISTANT_MESSAGE_ID_PREFIX = 'pi-message:assistant:'
 const DESKTOP_ASSISTANT_MESSAGE_ID_PREFIX = 'assistant-message-'
 
+
 /**
- * Canonical presence reports Pi provider item IDs, while the Desktop read model
- * stores assistant messages under its domain ID. Keep both live and persisted
- * references in the Desktop namespace before comparing them.
+ * Canonical presence reports stable assistant message IDs, while the Desktop
+ * read model stores assistant messages under its domain ID.
  */
 export function normalizeAssistantMessageReferenceId(reference: string | null | undefined): string | null {
     const normalized = String(reference || '').trim()
+        .replace(/^(assistant-message-(?:user-)?)?pi-message:(assistant|user):(\d+)$/, '$1zyra-message:$2:$3')
     if (!normalized) return null
-    if (normalized.startsWith(PI_ASSISTANT_MESSAGE_ID_PREFIX)) {
+    if (normalized.startsWith(ZYRA_ASSISTANT_MESSAGE_ID_PREFIX)
+        || normalized.startsWith(LEGACY_PI_ASSISTANT_MESSAGE_ID_PREFIX)) {
         return `${DESKTOP_ASSISTANT_MESSAGE_ID_PREFIX}${normalized}`
     }
     return normalized
@@ -28,8 +32,8 @@ export function resolveAssistantMessageReferenceId(
         message.role === 'assistant'
         && (
             message.id === rawReference
-            || message.id === normalizedReference
-            || message.providerItemId === rawReference
+            || normalizeAssistantMessageReferenceId(message.id) === normalizedReference
+            || normalizeAssistantMessageReferenceId(message.providerItemId) === normalizedReference
         )
     ))
     return match?.id || null

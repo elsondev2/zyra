@@ -22,9 +22,13 @@ try {
         '@/lib/use-theme-revision': 'export const useThemeRevision=()=>0'
     }
     const bundle = await build({
-        entryPoints: [join(desktop, 'scripts/fixtures/native-overlay-callers.tsx')], bundle: true, write: false, format: 'iife', jsx: 'automatic', platform: 'browser', define: { 'import.meta.hot': 'undefined' },
+        entryPoints: [join(desktop, 'scripts/fixtures/native-overlay-callers.tsx')], bundle: true, write: false, format: 'iife', jsx: 'automatic', platform: 'browser', define: { 'import.meta.hot': 'undefined', 'globalThis.nativeOverlayVisibilityOnly': String(process.argv.includes('--visibility-only')) },
         alias: { '@': join(desktop, 'src/renderer/src'), '@shared': join(desktop, 'src/shared') },
         plugins: [{ name: 'caller-cosmetic-leaves', setup(build) {
+            if (process.argv.includes('--baseline-portal')) build.onLoad({ filter: /native-overlay-portal\.tsx$/ }, async args => ({
+                contents: (await readFile(args.path, 'utf8')).replace(/export function NativeOverlayPortal\([\s\S]*?\nfunction PresentedNativeOverlayPortal\(/, 'export function NativeOverlayPortal('),
+                loader: 'tsx', resolveDir: dirname(args.path)
+            }))
             build.onResolve({ filter: /^@\// }, args => stubs[args.path] ? { path: args.path, namespace: 'fixture' } : undefined)
             build.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ contents: stubs[args.path], loader: 'js' }))
         } }]

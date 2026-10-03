@@ -50,6 +50,7 @@ import {
     applyAssistantThreadDetail,
     dematerializeAssistantHistories,
     getAssistantMaterializedThreadIds,
+    getAssistantEventHistoryThreadIds,
     formatAssistantHistoryLoadError,
     hasAssistantPersistedThreadContent,
     hasRenderableAssistantRetainedHistory,
@@ -210,6 +211,9 @@ export class AssistantStore {
                     if (shouldRestoreConnection) {
                         this.warmSessionConnection(selectedSessionId, activeThreadId, true)
                     }
+                }
+                if (typeof window.devscope.assistant.listModels === 'function') {
+                    void this.refreshModels(false)
                 }
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Failed to load assistant.'
@@ -516,6 +520,7 @@ export class AssistantStore {
                         if (!latest) return {}
                         const next = applyAssistantHistoryAnchorPage(current.snapshot, latest, result.page)
                         applied = next.history.messages.some((message) => message.id === normalizedMessageId)
+                            || next.history.activities.some((activity) => activity.kind === 'thread-message' && activity.id === normalizedMessageId)
                         return {
                             snapshot: next.snapshot,
                             historyByThreadId: {
@@ -530,8 +535,9 @@ export class AssistantStore {
                 // A route-triggered connection can begin one final detail hydration immediately
                 // after selection. Verify that it did not replace the anchor, and repair once if it did.
                 await new Promise((resolve) => window.setTimeout(resolve, 180))
-                const stillAnchored = this.state.historyByThreadId[normalizedThreadId]
-                    ?.messages.some((message) => message.id === normalizedMessageId) || false
+                const anchoredHistory = this.state.historyByThreadId[normalizedThreadId]
+                const stillAnchored = Boolean(anchoredHistory?.messages.some((message) => message.id === normalizedMessageId)
+                    || anchoredHistory?.activities.some((activity) => activity.kind === 'thread-message' && activity.id === normalizedMessageId))
                 return stillAnchored || await applyAnchor()
             } catch (error) {
                 const message = formatAssistantHistoryLoadError(error)
@@ -688,7 +694,8 @@ export class AssistantStore {
     async setSessionProject(sessionId: string, input: AssistantSetSessionProjectInput) {
         const result = await this.runAction(
             () => window.devscope.assistant.setSessionProject(sessionId, input),
-            false
+            false,
+            { markCommandPending: false, reportError: false }
         )
         if (result.success) this.flushPendingAssistantEvents()
         return result
@@ -738,7 +745,6 @@ export class AssistantStore {
             const snapshot = warmSelection.snapshot
             return {
                 error: null,
-                commandPending: true,
                 selectionRequestId,
                 selectionRequestSessionId: input.sessionId,
                 selectionTransitionKey: transitionKey,
@@ -770,7 +776,6 @@ export class AssistantStore {
                 const snapshot = warmSelection.snapshot
                 return {
                     error: message,
-                    commandPending: false,
                     selectionTransitionKey: null,
                     selectionRequestSessionId: null,
                     snapshot,
@@ -832,7 +837,6 @@ export class AssistantStore {
             return { success: false as const, error: message }
         } finally {
             this.setState((current) => current.selectionRequestId === selectionRequestId ? {
-                commandPending: false,
                 selectionTransitionKey: null,
                 selectionRequestSessionId: null
             } : {})
@@ -1154,9 +1158,10 @@ export class AssistantStore {
             // against their retained windows before synchronizing history, then
             // release those display rows again in the same store transaction.
             const materializedThreadIds = getAssistantMaterializedThreadIds(current.snapshot)
+            const affectedHistoryThreadIds = getAssistantEventHistoryThreadIds(current.snapshot, queuedEvents)
             let eventSnapshot = current.snapshot
             for (const [threadId, history] of Object.entries(current.historyByThreadId)) {
-                if (!materializedThreadIds.has(threadId)) {
+                if (affectedHistoryThreadIds.has(threadId) && !materializedThreadIds.has(threadId)) {
                     eventSnapshot = replaceAssistantVisibleHistory(eventSnapshot, threadId, history)
                 }
             }
@@ -1167,7 +1172,17 @@ export class AssistantStore {
                 current.selectionRequestSessionId
             )
             let historyByThreadId = current.historyByThreadId
+            const nextMaterializedThreadIds = getAssistantMaterializedThreadIds(snapshot)
+            // Deleting the selected chat or replacing a session's active thread
+            // can reveal a different cached shell without a thread event.
+            for (const threadId of nextMaterializedThreadIds) {
+                const history = historyByThreadId[threadId]
+                if (history && !materializedThreadIds.has(threadId) && !affectedHistoryThreadIds.has(threadId)) {
+                    snapshot = replaceAssistantVisibleHistory(snapshot, threadId, history)
+                }
+            }
             for (const [threadId, history] of Object.entries(current.historyByThreadId)) {
+                if (!affectedHistoryThreadIds.has(threadId)) continue
                 const canonicalBackfillChanged = queuedEvents.some((event) => (
                     shouldRehydrateAssistantHistoryAfterCanonicalEvent(event, threadId)
                 ))
@@ -1186,7 +1201,7 @@ export class AssistantStore {
                     snapshot = replaceAssistantVisibleHistory(snapshot, threadId, synchronizedHistory)
                 }
             }
-            snapshot = dematerializeAssistantHistories(snapshot, getAssistantMaterializedThreadIds(snapshot))
+            snapshot = dematerializeAssistantHistories(snapshot, nextMaterializedThreadIds)
             nextSelectedSessionId = snapshot.selectedSessionId
             return {
                 snapshot,
@@ -1449,9 +1464,10 @@ export class AssistantStore {
 
     private async runAction<T = Record<string, unknown>>(
         work: () => Promise<DevScopeResult<T>>,
-        refreshStatusAfter: boolean
+        refreshStatusAfter: boolean,
+        options?: { markCommandPending?: boolean; reportError?: boolean }
     ): Promise<DevScopeResult<T>> {
-        const result = await runAssistantStoreAction(this.setState, work)
+        const result = await runAssistantStoreAction(this.setState, work, options)
         if (refreshStatusAfter) {
             try {
                 const status = await window.devscope.assistant.getStatus()

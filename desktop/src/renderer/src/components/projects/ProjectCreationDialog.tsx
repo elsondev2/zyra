@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState, type DragEvent } from 'react'
 import { NativeOverlayPortal, addOverlayEventListener } from '@/components/ui/native-overlay-portal'
-import { FolderOpen, Loader2, Plus, X } from 'lucide-react'
+import { FolderOpen, Loader2, X } from 'lucide-react'
 import type { AssistantProject } from '@shared/assistant/contracts'
 import type { ProjectCreationOptions } from '@/lib/projects/project-creation-draft'
+import { resolveDroppedProjectFolders } from '@/lib/projects/project-creation-drop'
 import { useProjectCreationForm } from '@/lib/projects/useProjectCreationForm'
 import './project-creation.css'
 
@@ -15,8 +16,8 @@ export function ProjectCreationDialog({ options, onCreated, onClose }: {
     const nameRef = useRef<HTMLInputElement>(null)
     const titleId = useId()
     const nameId = useId()
-    const folderId = useId()
     const errorId = useId()
+    const [dragActive, setDragActive] = useState(false)
     const form = useProjectCreationForm(options, onCreated)
     const busy = form.busy !== null
 
@@ -27,6 +28,22 @@ export function ProjectCreationDialog({ options, onCreated, onClose }: {
         event.preventDefault()
         onClose()
     }, true), [busy, onClose])
+
+    const handleFolderDrop = async (event: DragEvent<HTMLDivElement>) => {
+        event.preventDefault()
+        setDragActive(false)
+        if (busy) return
+        form.setError(null)
+        try {
+            const folders = await resolveDroppedProjectFolders(
+                Array.from(event.dataTransfer.items),
+                file => window.devscope.assistant.getPathForFile(file)
+            )
+            form.addFolders(folders)
+        } catch (error) {
+            form.setError(error instanceof Error ? error.message : 'Could not add that folder.')
+        }
+    }
 
     return <NativeOverlayPortal autoFocus={false} onReady={() => { readyDialogRef.current = dialogRef.current; if (dialogRef.current && !dialogRef.current.open) dialogRef.current.showModal(); nameRef.current?.focus(); nameRef.current?.select() }}><dialog
             ref={dialogRef}
@@ -43,13 +60,37 @@ export function ProjectCreationDialog({ options, onCreated, onClose }: {
         >
             <form onSubmit={(event) => { event.preventDefault(); void form.submit() }}>
                 <header className="project-creation-header">
-                    <h2 id={titleId}>New project</h2>
+                    <h2 id={titleId}>Create a project</h2>
                     <button type="button" className="project-creation-icon" onClick={onClose} disabled={busy} aria-label="Close project setup"><X size={18} /></button>
                 </header>
                 <div className="project-creation-body custom-scrollbar">
                     <label htmlFor={nameId}>Project name</label>
                     <input ref={nameRef} id={nameId} autoFocus value={form.name} onChange={(event) => form.setName(event.target.value)} maxLength={120} disabled={busy} placeholder="Name your project" autoComplete="off" />
-                    <div className="project-creation-folder-heading"><h3>Folders involved</h3><span>Optional</span></div>
+                    <div className="project-creation-folder-heading"><h3>Project folders</h3><span>Optional</span></div>
+                    <div
+                        className={`project-creation-dropzone${dragActive ? ' is-drag-active' : ''}`}
+                        role="button"
+                        tabIndex={busy ? -1 : 0}
+                        aria-label="Choose or drop project folders"
+                        aria-disabled={busy}
+                        onClick={() => { if (!busy) void form.browse() }}
+                        onKeyDown={(event) => {
+                            if ((event.key === 'Enter' || event.key === ' ') && !busy) {
+                                event.preventDefault()
+                                void form.browse()
+                            }
+                        }}
+                        onDragEnter={(event) => { event.preventDefault(); setDragActive(true) }}
+                        onDragOver={(event) => { event.preventDefault(); setDragActive(true) }}
+                        onDragLeave={(event) => {
+                            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false)
+                        }}
+                        onDrop={(event) => void handleFolderDrop(event)}
+                    >
+                        {form.busy === 'browse' ? <Loader2 size={21} className="animate-spin" aria-hidden="true" /> : <FolderOpen size={22} aria-hidden="true" />}
+                        <strong>Drop folders here</strong>
+                        <span>or click to choose from your computer</span>
+                    </div>
                     {form.folders.length > 0 ? (
                         <ul className="project-creation-folders custom-scrollbar" aria-label="Included folders">
                             {form.folders.map((path) => (
@@ -61,14 +102,6 @@ export function ProjectCreationDialog({ options, onCreated, onClose }: {
                             ))}
                         </ul>
                     ) : null}
-                    <label htmlFor={folderId} className="sr-only">Folder path</label>
-                    <div className="project-creation-folder-input">
-                        <input id={folderId} value={form.folderDraft} onChange={(event) => form.setFolderDraft(event.target.value)} disabled={busy} placeholder="Paste a folder path" autoComplete="off" onKeyDown={(event) => {
-                            if (event.key === 'Enter') { event.preventDefault(); if (!busy && form.folderDraft.trim()) form.addFolder(form.folderDraft) }
-                        }} />
-                        <button type="button" className="project-creation-secondary" disabled={busy || !form.folderDraft.trim()} onClick={() => form.addFolder(form.folderDraft)}><Plus size={14} />Add</button>
-                        <button type="button" className="project-creation-secondary" disabled={busy} onClick={() => void form.browse()}>{form.busy === 'browse' ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}Browse</button>
-                    </div>
                     {form.error ? <p id={errorId} role="alert" className="project-creation-error">{form.error}</p> : null}
                 </div>
                 <footer className="project-creation-footer">

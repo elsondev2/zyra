@@ -1,11 +1,12 @@
 import { defaultThemeTokens } from '@shared/preferences/default-theme-tokens'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { FileDiff, PatchDiff } from '@pierre/diffs/react'
 import type { FileDiffMetadata } from '@pierre/diffs/react'
 import { resolveDiffThemeName, resolveDiffThemeType } from '@/lib/diffRendering'
 import { useSettings } from '@/lib/settings'
 import { DiffWorkerPoolProvider } from './DiffWorkerPoolProvider'
+import { ensureDiffContainerStyles } from './ensureDiffContainerStyles'
 
 type DiffRenderMode = 'stacked' | 'split'
 
@@ -188,8 +189,7 @@ ${hideHeaderStats ? `
 function hasRenderedDiffContent(container: HTMLDivElement | null): boolean {
     if (!container) return false
 
-    const diffElements = [...container.querySelectorAll('diffs-container')]
-        .filter((element): element is HTMLElement => element instanceof HTMLElement)
+    const diffElements = [...container.querySelectorAll<HTMLElement>('diffs-container')]
     if (diffElements.length === 0) return false
 
     return diffElements.every((diffElement) => Boolean(
@@ -253,6 +253,10 @@ export default function PatchDiffViewer({
         unsafeCSS
     }), [diffStyle, diffThemeName, diffThemeType, unsafeCSS])
 
+    useLayoutEffect(() => {
+        ensureDiffContainerStyles(containerRef.current)
+    }, [renderToken, fileDiffs.length])
+
     useEffect(() => {
         onRenderingChange?.(isRendering && !isIncrementalFileDiffAppend)
     }, [isIncrementalFileDiffAppend, isRendering, onRenderingChange])
@@ -287,6 +291,7 @@ export default function PatchDiffViewer({
         let timeoutId = 0
 
         const settleIfReady = () => {
+            ensureDiffContainerStyles(containerRef.current)
             if (hasRenderedDiffContent(containerRef.current)) {
                 settledFileDiffStateRef.current = !fileDiff && !patch && fileDiffKeys.length > 0
                     ? { keys: fileDiffKeys, presentationToken }

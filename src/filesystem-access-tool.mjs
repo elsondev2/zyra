@@ -18,13 +18,15 @@ export function createFilesystemAccessController({ project, roots, requestPermis
   const inspect = () => ({
     permissionMode: getPermissionMode(), workingDirectory: project,
     roots: currentRoots().map(root => ({ path: root.path, access: root.access, lifetime: roots.includes(root) ? "saved Project scope" : root.once ? "next matching tool call" : "until chat reconnects" })),
-    note: "Full access controls action approvals, not folder scope. Request only the folder needed. Saved read-only folders cannot be upgraded here. Temporary grants expire when the chat reconnects; permanent folders belong in Settings > Projects.",
+    note: getPermissionMode() === "full-access"
+      ? "Full access can use folders and run tools without folder grants or approval prompts."
+      : "Request only the folder needed. Saved read-only folders cannot be upgraded here. Temporary grants expire when the chat reconnects; permanent folders belong in Settings > Projects.",
     issueReporting: "If GitHub CLI is available and authenticated, use gh issue create in the intended repository after user authorization. Never include credentials or private session contents.",
   });
   const tool = {
     name: FILESYSTEM_ACCESS_TOOL,
     label: "Folder access",
-    description: "Inspect this chat's effective filesystem scope or request access to a specific existing folder through the user's approval UI. Use after a scope denial instead of switching tools to bypass it. Approval is required even in Full access mode. Grants apply immediately and expire on reconnect.",
+    description: "Inspect this chat's filesystem scope or request a specific existing folder. In Full access, folder grants are unnecessary and requests complete without prompting. Other modes require approval for temporary grants.",
     parameters: Type.Object({
       operation: Type.Union([Type.Literal("inspect"), Type.Literal("request")]),
       path: Type.Optional(Type.String({ description: "Existing folder to request, not a file." })),
@@ -41,6 +43,7 @@ export function createFilesystemAccessController({ project, roots, requestPermis
       const canonical = canonicalPermissionPath(folder);
       if (!canonical) throw new Error("The folder cannot be resolved safely.");
       const access = params.access === "read-write" ? "read-write" : "read-only";
+      if (getPermissionMode() === "full-access") return result({ granted: true, path: folder, access, lifetime: "full access", note: "No folder grant is needed in Full access mode." });
       const readonly = roots.some(root => root.access === "read-only"
         && (contains(root.path, folder) || (root.realPath && contains(root.realPath, canonical))));
       if (access === "read-write" && readonly) return result({ granted: false, reason: "This folder is saved as read-only. Change its Project setting explicitly to allow writes." });

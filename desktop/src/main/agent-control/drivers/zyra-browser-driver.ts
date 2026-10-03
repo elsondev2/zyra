@@ -5,6 +5,7 @@ import { nativeImage, type NativeImage, type WebContents } from 'electron'
 import type { ControlAction, ControlElement, ControlObservation } from '../../../shared/agent-control/contracts'
 import { CONTROL_BOUNDS, normalizedOrigin } from '../../../shared/agent-control/policy'
 import { browserCdpKeyDescriptor, buildBrowserPointerPath } from '../browser-input'
+import { getManagedBrowserControlViewport, subscribeManagedBrowserControlViewport } from '../../browser-view-presentation'
 import { AgentControlError } from '../control-errors'
 import type { RegisteredControlTarget } from '../target-registry'
 import type { AgentControlDriver, DriverActionContext, DriverObservationOptions } from './driver'
@@ -19,6 +20,9 @@ export const ZYRA_BROWSER_CDP_ALLOWLIST = new Set([
     'Page.captureScreenshot',
     'Page.getLayoutMetrics',
     'Page.navigate',
+    'Emulation.setDeviceMetricsOverride',
+    'Emulation.clearDeviceMetricsOverride',
+    'Emulation.setFocusEmulationEnabled',
     'Input.dispatchMouseEvent',
     'Input.dispatchKeyEvent',
     'Input.insertText'
@@ -43,6 +47,10 @@ export class ZyraBrowserDriver implements AgentControlDriver {
     private readonly pointerByTarget = new Map<string, { x: number; y: number }>()
     private readonly inputFocusByTarget = new Set<string>()
     private readonly attached = new Set<number>()
+    private readonly attachedGuests = new Map<number, WebContents>()
+    private readonly controlPresentations = new Map<number, string>()
+    private readonly presentationTasks = new Map<number, Promise<void>>()
+    private readonly presentationSubscriptions = new Map<number, () => void>()
     private readonly artifacts = new Map<string, string>()
     private lastDisconnectReason: string | undefined
 
@@ -157,7 +165,11 @@ export class ZyraBrowserDriver implements AgentControlDriver {
             case 'navigate':
                 this.releaseInputFocus(target)
                 await this.command(guest, 'Page.navigate', { url: action.url })
-                await this.waitForReady(guest, context.signal)
+                try { await this.waitForReady(guest, context.signal) }
+                catch (error) {
+                    if (context.signal?.aborted && !guest.isDestroyed()) guest.stop()
+                    throw error
+                }
                 return { changed: true }
             case 'focus':
                 throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Integrated Browser control never takes physical keyboard focus. Click or focus an observed page element instead.')
@@ -184,7 +196,7 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                     await delay(70, context.signal)
                     completed = true
                 } finally {
-                    await this.inputCommand(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount }, context)
+                    await this.inputCommand(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount }, context, true)
                     context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
                 }
                 if (completed) this.inputFocusByTarget.add(targetId)
@@ -216,7 +228,7 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                     point = await this.elementPoint(guest, targetId, context.revision, action.elementRef)
                     await this.movePointer(guest, targetId, point, 160, context)
                     const reference = this.element(targetId, context.revision, action.elementRef)
-                    await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                    await this.inputCommand(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId }, context)
                     this.inputFocusByTarget.add(targetId)
                 } else if (action.x !== undefined && action.y !== undefined) {
                     point = { x: action.x, y: action.y }
@@ -226,7 +238,7 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                         context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 0 })
                         await delay(70, context.signal)
                     } finally {
-                        await this.inputCommand(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 }, context)
+                        await this.inputCommand(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 }, context, true)
                         context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
                     }
                     this.inputFocusByTarget.add(targetId)
@@ -266,7 +278,7 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                 const point = await this.elementPoint(guest, targetId, context.revision, action.elementRef)
                 await this.movePointer(guest, targetId, point, 160, context)
                 const reference = this.element(targetId, context.revision, action.elementRef)
-                await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                await this.inputCommand(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId }, context)
                 this.inputFocusByTarget.add(targetId)
                 await this.dispatchKey(guest, 'Home', [], context)
                 for (const value of action.values) {
@@ -301,15 +313,33 @@ export class ZyraBrowserDriver implements AgentControlDriver {
         this.pointerByTarget.delete(target.target.targetId)
         this.releaseInputFocus(target)
         if (!guest || guest.isDestroyed() || !this.attached.has(guest.id)) return
+        this.presentationSubscriptions.get(guest.id)?.()
+        this.presentationSubscriptions.delete(guest.id)
+        await this.presentationTasks.get(guest.id)?.catch(() => undefined)
         try {
+            await this.resetControlPresentation(guest)
             guest.debugger.detach()
         } catch {
             // Already detached is an expected lifecycle state.
         }
         this.attached.delete(guest.id)
+        this.attachedGuests.delete(guest.id)
+        this.controlPresentations.delete(guest.id)
     }
 
     async emergencyStop(): Promise<void> {
+        for (const unsubscribe of this.presentationSubscriptions.values()) unsubscribe()
+        this.presentationSubscriptions.clear()
+        await Promise.allSettled([...this.presentationTasks.values()])
+        await Promise.allSettled([...this.attachedGuests.values()].map(async guest => {
+            if (!guest.isDestroyed() && guest.debugger.isAttached()) {
+                await this.resetControlPresentation(guest)
+                guest.debugger.detach()
+            }
+        }))
+        this.attached.clear()
+        this.attachedGuests.clear()
+        this.controlPresentations.clear()
         for (const file of this.artifacts.values()) { try { unlinkSync(file) } catch {} }
         this.artifacts.clear()
         this.pointerByTarget.clear()
@@ -333,22 +363,68 @@ export class ZyraBrowserDriver implements AgentControlDriver {
 
     private async ensureAttached(guest: WebContents): Promise<void> {
         if (guest.isDestroyed()) throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The Browser tab was closed.')
-        if (this.attached.has(guest.id) && guest.debugger.isAttached()) return
+        if (this.attached.has(guest.id) && guest.debugger.isAttached()) {
+            await this.syncControlPresentation(guest)
+            return
+        }
         try {
             if (!guest.debugger.isAttached()) guest.debugger.attach('1.3')
             this.attached.add(guest.id)
+            this.attachedGuests.set(guest.id, guest)
+            this.presentationSubscriptions.set(guest.id, subscribeManagedBrowserControlViewport(guest, () => {
+                void this.syncControlPresentation(guest).catch(error => { this.lastDisconnectReason = String(error?.message || error) })
+            }))
             guest.debugger.once('detach', (_event, reason) => {
                 this.attached.delete(guest.id)
+                this.attachedGuests.delete(guest.id)
+                this.controlPresentations.delete(guest.id)
+                this.presentationSubscriptions.get(guest.id)?.()
+                this.presentationSubscriptions.delete(guest.id)
                 this.lastDisconnectReason = String(reason || 'debugger-detached')
             })
             await this.command(guest, 'Accessibility.enable')
             await this.command(guest, 'DOM.enable')
             await this.command(guest, 'Page.enable')
+            // Target-local focus emulation delivers CDP input to hidden pages
+            // without activating a native window or moving OS keyboard focus.
+            await this.command(guest, 'Emulation.setFocusEmulationEnabled', { enabled: true })
+            await this.syncControlPresentation(guest)
             this.lastDisconnectReason = undefined
         } catch (error) {
             this.attached.delete(guest.id)
+            this.attachedGuests.delete(guest.id)
+            this.controlPresentations.delete(guest.id)
+            this.presentationSubscriptions.get(guest.id)?.()
+            this.presentationSubscriptions.delete(guest.id)
             throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', `Browser control could not attach: ${error instanceof Error ? error.message : String(error)}`, { retryable: true })
         }
+    }
+
+    private async syncControlPresentation(guest: WebContents): Promise<void> {
+        const previous = this.presentationTasks.get(guest.id) || Promise.resolve()
+        const task = previous.catch(() => undefined).then(() => this.applyControlPresentation(guest))
+        this.presentationTasks.set(guest.id, task)
+        try { await task }
+        finally { if (this.presentationTasks.get(guest.id) === task) this.presentationTasks.delete(guest.id) }
+    }
+
+    private async applyControlPresentation(guest: WebContents): Promise<void> {
+        const viewport = getManagedBrowserControlViewport(guest)
+        const key = !viewport || viewport.visible ? 'native' : `${viewport.width}:${viewport.height}`
+        if (this.controlPresentations.get(guest.id) === key) return
+        if (viewport && !viewport.visible) {
+            await this.command(guest, 'Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false })
+        } else if (this.controlPresentations.has(guest.id)) {
+            await this.command(guest, 'Emulation.clearDeviceMetricsOverride')
+        }
+        this.controlPresentations.set(guest.id, key)
+    }
+
+    private async resetControlPresentation(guest: WebContents): Promise<void> {
+        await Promise.allSettled([
+            this.command(guest, 'Emulation.setFocusEmulationEnabled', { enabled: false }),
+            this.command(guest, 'Emulation.clearDeviceMetricsOverride')
+        ])
     }
 
     private command(
@@ -366,6 +442,18 @@ export class ZyraBrowserDriver implements AgentControlDriver {
     }
 
     private async captureRenderedPage(guest: WebContents): Promise<NativeImage> {
+        const viewport = getManagedBrowserControlViewport(guest)
+        if (viewport && !viewport.visible) {
+            // CDP can return the occluded parent's blank surface. Electron's
+            // owned-page capture wakes this widget without revealing its view.
+            await withTimeout(guest.capturePage(undefined, { stayHidden: false, stayAwake: true }), 4_000, 'Hidden Browser wake timed out.')
+            // The wake can return the preceding surface. Two animation frames
+            // let the pending DOM/canvas paint commit before the owned readback.
+            await withTimeout(guest.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'), 4_000, 'Hidden Browser paint timed out.')
+            const image = await withTimeout(guest.capturePage(undefined, { stayHidden: false, stayAwake: true }), 4_000, 'Hidden Browser capturePage timed out.')
+            if (!image.isEmpty()) return image
+            throw new AgentControlError('CONTROL_TIMEOUT', 'The hidden Browser page did not produce a painted frame.', { retryable: true })
+        }
         const errors: string[] = []
         for (const fromSurface of [true, false]) {
             try {
@@ -454,7 +542,7 @@ export class ZyraBrowserDriver implements AgentControlDriver {
             }
             completed = true
         } finally {
-            await this.inputCommand(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...current, button, clickCount: 1 }, context)
+            await this.inputCommand(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...current, button, clickCount: 1 }, context, true)
             this.pointerByTarget.set(targetId, current)
             context.updateCursor?.({ ...current, phase: 'idle', visible: true, durationMs: 0 })
         }
@@ -480,22 +568,28 @@ export class ZyraBrowserDriver implements AgentControlDriver {
 
     private async inputCommand(
         guest: WebContents,
-        method: 'Input.dispatchMouseEvent' | 'Input.dispatchKeyEvent' | 'Input.insertText',
+        method: 'Input.dispatchMouseEvent' | 'Input.dispatchKeyEvent' | 'Input.insertText' | 'DOM.focus',
         params: Record<string, unknown>,
-        context: DriverActionContext
+        context: DriverActionContext,
+        cleanup = false
     ): Promise<unknown> {
-        const operation = () => this.command(guest, method, params)
+        const operation = () => {
+            if (!cleanup && context.signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Browser action was cancelled.')
+            return this.command(guest, method, params)
+        }
         return context.runAgentInput ? context.runAgentInput(operation) : operation()
     }
 
     private async dispatchKey(guest: WebContents, key: string, modifiers: string[] = [], context?: DriverActionContext): Promise<void> {
         const modifierMask = modifiers.reduce((mask, modifier) => mask | ({ alt: 1, control: 2, ctrl: 2, meta: 4, shift: 8 }[modifier.toLowerCase()] || 0), 0)
         const descriptor = browserCdpKeyDescriptor(key)
-        const dispatch = (params: Record<string, unknown>) => context
-            ? this.inputCommand(guest, 'Input.dispatchKeyEvent', params, context)
+        const dispatch = (params: Record<string, unknown>, cleanup = false) => context
+            ? this.inputCommand(guest, 'Input.dispatchKeyEvent', params, context, cleanup)
             : this.command(guest, 'Input.dispatchKeyEvent', params)
         await dispatch({ type: 'keyDown', ...descriptor, modifiers: modifierMask })
-        await dispatch({ type: 'keyUp', ...descriptor, modifiers: modifierMask })
+        try {
+            if (context?.signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Browser action was cancelled.')
+        } finally { await dispatch({ type: 'keyUp', ...descriptor, modifiers: modifierMask }, true) }
     }
 
     private async waitForReady(guest: WebContents, signal?: AbortSignal): Promise<void> {

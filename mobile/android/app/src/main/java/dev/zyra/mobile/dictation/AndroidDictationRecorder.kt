@@ -7,6 +7,7 @@ import android.media.MediaRecorder
 import dev.zyra.mobile.voice.VoicePcm
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 /** Foreground-only, two-minute mono capture. Raw audio never touches phone storage. */
@@ -45,7 +46,10 @@ class AndroidDictationRecorder : DictationRecorder {
                 if (size - lastLevel >= 2400) {
                     var square = 0.0
                     for (i in chunk.indices step 2) { val sample = ((chunk[i].toInt() and 255) or (chunk[i + 1].toInt() shl 8)).toShort().toDouble() / 32768; square += sample * sample }
-                    level(size / 48, (sqrt(square / maxOf(1, chunk.size / 2)) * 4).toFloat().coerceIn(0f, 1f)); lastLevel = size
+                    val rms = sqrt(square / maxOf(1, chunk.size / 2))
+                    // Preserve quiet speech, then use a gentle curve so spoken peaks read clearly instead of flattening.
+                    val visualLevel = ((rms - .006) / (.14 - .006)).coerceAtLeast(0.0).pow(.48).coerceIn(0.0, 1.0).toFloat()
+                    level(size / 48, visualLevel); lastLevel = size
                 }
             }
             currentCoroutineContext().ensureActive()

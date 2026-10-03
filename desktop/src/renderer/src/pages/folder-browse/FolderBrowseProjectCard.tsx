@@ -72,7 +72,7 @@ export function FolderBrowseProjectCard({
                         />
                         {project.type === 'electron' && (
                             <div className="absolute -bottom-1 -right-1 rounded border border-white/10 bg-sparkle-bg p-1 shadow-lg">
-                                <ProjectIcon projectType="electron" size={12} />
+                                <ProjectIcon projectType="electron" size={12} mode="technology" />
                             </div>
                         )}
                     </div>
