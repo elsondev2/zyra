@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-const assets = process.env.ZYRA_ROOT
+const assets = process.env.ZYRA_STANDALONE === '1' && process.env.ZYRA_ROOT
   ? join(process.env.ZYRA_ROOT, 'src', 'auth-assets')
   : fileURLToPath(new URL('./auth-assets/', import.meta.url));
 const escape = value => String(value).replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
