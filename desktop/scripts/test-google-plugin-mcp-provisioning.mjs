@@ -15,11 +15,16 @@ async function run(profile, mode) {
     return new Promise((resolve, reject) => {
         const child = spawn(electron, [join(desktop, 'scripts/fixtures/plugin-credential-profile-electron.cjs')], { cwd: desktop, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
         let output = ''
+        let diagnosticOutput = ''
         child.stdout.on('data', chunk => { output += chunk })
-        child.stderr.resume()
+        child.stderr.on('data', chunk => { diagnosticOutput = (diagnosticOutput + chunk).slice(-4_000) })
         const timer = setTimeout(() => { child.kill(); reject(new Error('Credential profile fixture timed out.')) }, 20_000)
         child.once('error', error => { clearTimeout(timer); reject(error) })
-        child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve(output.trim()) : reject(new Error(`Credential profile fixture exited ${code}.`)) })
+        child.once('exit', code => {
+            clearTimeout(timer)
+            const diagnostic = diagnosticOutput.match(/Synthetic credential profile fixture failed\.[^\r\n]*/)?.[0] || ''
+            code === 0 ? resolve(output.trim()) : reject(new Error(`Credential profile fixture exited ${code}. ${diagnostic}`))
+        })
     })
 }
 try {

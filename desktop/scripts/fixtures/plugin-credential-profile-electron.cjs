@@ -21,4 +21,10 @@ app.whenReady().then(() => {
         }
     }
     app.quit()
-}).catch(() => { console.error('Synthetic credential profile fixture failed.'); app.exit(1) })
+}).catch(() => {
+    console.error('Synthetic credential profile fixture failed.', JSON.stringify({
+        encryptionAvailable: safeStorage.isEncryptionAvailable(),
+        storageBackend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : process.platform
+    }))
+    app.exit(1)
+})
