@@ -2,6 +2,8 @@
 
 Zyra is pre-1.0. Release versions still describe meaningful product and compatibility boundaries.
 
+Maintainer checkout: local release-cycle details are indexed in `docs.local/README.md`, with the operating workflow at `docs.local/runbooks/manual-publishing-workflow.md` and version handoffs under `docs.local/releases/`. These ignored local documents are available only in the maintainer's checkout.
+
 ## Lockstep version policy
 
 The CLI/runtime and Desktop ship as one Zyra product version. These four values must always match exactly:

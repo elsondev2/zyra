@@ -22,6 +22,7 @@ Status words used below:
 
 ## Release planning
 
+- Maintainer-local release-cycle context: `docs.local/README.md`, `docs.local/runbooks/manual-publishing-workflow.md`, and version handoffs under `docs.local/releases/` (repository-relative, ignored; available in the maintainer's checkout).
 - [Public roadmap](roadmap.md) — **Draft targets, maintained backlog.** Upcoming stabilization fixes, update-process improvements, issue intake, and verification criteria. Planned work is not an implemented contract.
 
 ## Architecture

@@ -4,6 +4,8 @@
 
 Preserve the release gates. A focused unit test proves its own behavior; add the relevant integration check when a change crosses a real boundary, and report any unverified path.
 
+Maintainer-local release-cycle details: `docs.local/README.md`, `docs.local/runbooks/manual-publishing-workflow.md`, and version handoffs under `docs.local/releases/` (repository-relative, ignored; available in the maintainer's checkout).
+
 ## Command map
 
 Run these from the repository root unless the command says otherwise.

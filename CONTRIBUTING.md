@@ -57,6 +57,8 @@ Changes that widen tools, permissions, retention, network exposure, control auth
 
 ## Branch flow
 
+Maintainer-local release-cycle details live in `docs.local/runbooks/manual-publishing-workflow.md`, indexed by `docs.local/README.md`; version-specific handoffs are under `docs.local/releases/`. These ignored files are available in the maintainer's checkout.
+
 - `master` is the stable integration and release line. It only accepts a tested patch, a release-ready minor/major batch, or an approved emergency fix.
 - `dev` is the ongoing integration branch for normal iteration. Short-lived `feat/*`, `fix/*`, and `perf/*` branches target `dev` first.
 - Release candidates may use `release/vX.Y.Z` while native packaging, signing, and publication gates are being completed.
