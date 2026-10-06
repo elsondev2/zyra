@@ -47,6 +47,7 @@ import type { PluginMcpConnections } from './plugin-mcp-connections'
 import {
     emptyAssistantContentParts,
     extractAssistantEventContentParts,
+    extractAssistantEventMessagePhase,
     hasAssistantContentText,
     hasAssistantThinkingText
 } from './assistant-message-content'
@@ -175,6 +176,7 @@ type ZyraSessionContext = {
     commandActivityIdByJobId: Map<string, string>
     runningManagedCommandJobIds: Set<string>
     assistantTextByItemId: Map<string, string>
+    assistantPhaseByItemId?: Map<string, 'commentary' | 'final_answer'>
     assistantCompletedItemIds: Set<string>
     internalTextByItemId: Map<string, string>
     internalCompletedItemIds: Set<string>
@@ -1995,6 +1997,7 @@ export class ZyraRuntime extends EventEmitter {
         context.toolArgsByCallId.clear()
         context.toolStartedAtByCallId.clear()
         context.assistantTextByItemId.clear()
+        context.assistantPhaseByItemId?.clear()
         context.assistantCompletedItemIds.clear()
         context.internalTextByItemId.clear()
         context.internalCompletedItemIds.clear()
@@ -2366,6 +2369,7 @@ export class ZyraRuntime extends EventEmitter {
     }
 
     private releaseSessionContext(context: ZyraSessionContext): void {
+        context.assistantPhaseByItemId?.clear()
         void context.mcpPool?.close()
         void context.mcpPoolPromise?.then((pool) => pool.close()).catch(() => undefined)
         this.navigationBackgroundedThreadIds.delete(context.localThreadId)
@@ -2991,6 +2995,7 @@ export class ZyraRuntime extends EventEmitter {
             context.toolArgsByCallId.clear()
             context.toolStartedAtByCallId.clear()
             context.assistantTextByItemId.clear()
+            context.assistantPhaseByItemId?.clear()
             context.assistantCompletedItemIds.clear()
             context.internalTextByItemId.clear()
             context.internalCompletedItemIds.clear()
@@ -3218,6 +3223,7 @@ export class ZyraRuntime extends EventEmitter {
                 hasThinkingBlock: context.internalTextByItemId.has(itemId)
             }
             const content = extractAssistantEventContentParts(event, currentContent, type)
+            const messagePhase = extractAssistantEventMessagePhase(event)
             const messageUsage = type === 'message_end' ? readUsage(message?.['usage']) : null
             const usageMessageId = resolveAssistantUsageMessageIdentity(message, turnId, itemId)
             const usageAccountedMessageIds = getUsageAccountedAssistantMessageIds(context)
@@ -3255,8 +3261,8 @@ export class ZyraRuntime extends EventEmitter {
             if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
                 this.streamInternalText(context, turnId, content.thinking || content.text, itemId)
             }
-            if ((hasAssistantContentText(content) || currentContent.text) && !isReasoningOnlyAssistantEvent(event)) {
-                this.streamAssistantText(context, turnId, content.text, itemId)
+            if ((hasAssistantContentText(content) || currentContent.text || messagePhase) && !isReasoningOnlyAssistantEvent(event)) {
+                this.streamAssistantText(context, turnId, content.text, itemId, messagePhase)
             }
             if (type === 'message_end') {
                 if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
@@ -3480,13 +3486,16 @@ export class ZyraRuntime extends EventEmitter {
         }
     }
 
-    private streamAssistantText(context: ZyraSessionContext, turnId: string, text: string, itemId = `zyra-assistant-${turnId}`): void {
+    private streamAssistantText(context: ZyraSessionContext, turnId: string, text: string, itemId = `zyra-assistant-${turnId}`, phase?: 'commentary' | 'final_answer'): void {
         const previousText = context.assistantTextByItemId.get(itemId) || ''
         const nextText = text
         const update = assistantTextUpdate(previousText, nextText)
+        const phases = context.assistantPhaseByItemId ||= new Map()
+        const phaseChanged = phase !== undefined && phases.get(itemId) !== phase
+        if (phaseChanged) phases.set(itemId, phase)
         context.lastAssistantItemId = itemId
         context.assistantTextByItemId.set(itemId, nextText)
-        if (!update) return
+        if (!update && !phaseChanged) return
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'content.delta',
@@ -3497,7 +3506,8 @@ export class ZyraRuntime extends EventEmitter {
             itemId,
             payload: {
                 streamKind: 'assistant_text',
-                ...update
+                ...(update || { delta: '' }),
+                ...(phaseChanged ? { phase } : {})
             }
         })
     }

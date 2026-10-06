@@ -1078,6 +1078,15 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         if (deps.isAssistantTextSuppressed(eventThreadId, resolvedTurnId)) return
         const messageId = `assistant-message-${event.itemId || event.turnId || event.eventId}`
         const key = assistantTextBufferKey(eventThreadId, messageId)
+        const phase = event.payload.phase
+        if (phase && eventThreadRecord?.thread.messages.find(message => message.id === messageId)?.phase !== phase) {
+            // Phase metadata must reach the renderer even before the first text
+            // delta. It changes disclosure only, never the turn's running state.
+            deps.flushAssistantTextDelta({ threadId: eventThreadId, messageId })
+            deps.appendEvent('thread.message.assistant.delta', event.createdAt, {
+                threadId: eventThreadId, messageId, delta: '', turnId: resolvedTurnId, phase
+            }, eventSession.id, eventThreadId)
+        }
         if (typeof event.payload.replaceText === 'string') {
             deps.flushAssistantTextDelta({ threadId: eventThreadId, messageId })
             deps.assistantTextBuffers.set(key, event.payload.replaceText)

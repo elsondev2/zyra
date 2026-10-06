@@ -86,11 +86,11 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     renderChildren: () => ReactNode
 }) {
     const { settings } = useSettings()
-    const activeCollapseLocked = running && !settings.assistantAllowCollapseWhileWorking
+    const activeCollapseLocked = running && !collapseForTerminalResponse && !settings.assistantAllowCollapseWhileWorking
     const visibleActionCount = settings.assistantShowActionStats ? actionCount : 0
     const initialExpandedRef = useRef<boolean | null>(null)
     if (initialExpandedRef.current === null) {
-        initialExpandedRef.current = running && (activeCollapseLocked || readWorkSummaryExpandedPreference())
+        initialExpandedRef.current = running && !collapseForTerminalResponse && (activeCollapseLocked || readWorkSummaryExpandedPreference())
     }
     const initialExpanded = initialExpandedRef.current
     const [expanded, setExpanded] = useState(initialExpanded)

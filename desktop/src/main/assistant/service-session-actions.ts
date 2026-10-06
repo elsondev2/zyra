@@ -43,6 +43,7 @@ import {
     requireSession
 } from './service-state'
 import { buildSessionHistoryMutationResult } from './session-mutation-utils'
+import { commitAssistantSessionTitle } from './session-title-updates'
 import { getAssistantCanonicalThreadId, matchesAssistantThreadId } from './thread-identity'
 import {
     queueGeneratedSessionTitle,
@@ -194,21 +195,23 @@ export async function selectAssistantThreadAction(deps: AssistantServiceActionDe
 
 export async function renameAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, title: string) {
     await deps.ensureReady()
-    const session = requireSession(deps.getSnapshot(), sessionId)
-    const nextTitle = title.trim() || session.title
-    const occurredAt = nowIso()
-    deps.appendEvent('session.updated', occurredAt, {
-        sessionId,
-        patch: {
-            title: nextTitle,
-            updatedAt: occurredAt
-        }
-    }, sessionId)
-    await Promise.allSettled(session.threads
-        .map((thread) => thread.providerThreadId)
-        .filter((threadId): threadId is string => Boolean(threadId))
-        .map((threadId) => deps.runtime.updateCanonicalChat(threadId, { title: nextTitle })))
-    return { success: true as const }
+    return commitAssistantSessionTitle(sessionId, async () => {
+        const session = requireSession(deps.getSnapshot(), sessionId)
+        const nextTitle = title.trim() || session.title
+        const occurredAt = nowIso()
+        deps.appendEvent('session.updated', occurredAt, {
+            sessionId,
+            patch: {
+                title: nextTitle,
+                updatedAt: occurredAt
+            }
+        }, sessionId)
+        await Promise.all(session.threads
+            .map((thread) => thread.providerThreadId)
+            .filter((threadId): threadId is string => Boolean(threadId))
+            .map((threadId) => deps.runtime.updateCanonicalChat(threadId, { title: nextTitle })))
+        return { success: true as const }
+    })
 }
 
 export async function archiveAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, archived = true) {

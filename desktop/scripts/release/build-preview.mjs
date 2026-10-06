@@ -6,9 +6,9 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export function previewVersion(version, runNumber) {
-    const core = String(version).match(/^(\d+\.\d+\.\d+)(?:-(?:alpha|beta)\.\d+)?$/)?.[1]
+    const core = String(version).match(/^(\d+\.\d+\.\d+)(?:-(?:alpha|beta|dev)\.\d+)?$/)?.[1]
     if (!core || !/^[1-9]\d*$/.test(String(runNumber)) || Number(runNumber) > 65535) throw new Error('Invalid preview version/run number')
-    return `${core}-alpha.${runNumber}`
+    return `${core}-dev.${runNumber}`
 }
 
 export function previewBuilderConfig(build, output) {
@@ -17,19 +17,33 @@ export function previewBuilderConfig(build, output) {
         appId: 'app.zyra.desktop.preview',
         productName: 'Zyra Preview',
         executableName: 'Zyra Preview',
+        icon: 'resources/icon-dev.png',
         fileAssociations: [],
         protocols: [],
         publish: null,
         directories: { ...build.directories, output },
-        win: { ...build.win, artifactName: 'Zyra-Preview-${version}-Windows-${arch}.${ext}' },
-        nsis: { ...build.nsis, include: 'build/preview-installer.nsh', differentialPackage: false, oneClick: true, perMachine: false, allowToChangeInstallationDirectory: false }
+        win: { ...build.win, icon: 'resources/icon-dev.ico', artifactName: 'Zyra-Preview-${version}-Windows-${arch}.${ext}' },
+        nsis: { ...build.nsis, installerIcon: 'resources/icon-dev.ico', uninstallerIcon: 'resources/icon-dev.ico', include: 'build/preview-installer.nsh', differentialPackage: false, oneClick: true, perMachine: false, allowToChangeInstallationDirectory: false }
     }
+}
+
+export function previewRequestIdentity(env) {
+    const target = env.ZYRA_BUILD_TARGET || 'windows-x64'
+    const sourcePr = env.ZYRA_BUILD_SOURCE_PR || ''
+    const requestId = env.ZYRA_BUILD_REQUEST_ID || ''
+    if (target !== 'windows-x64') throw new Error('Unsupported dev preview target')
+    if (sourcePr && !/^[1-9]\d*$/.test(sourcePr)) throw new Error('Invalid source PR number')
+    if (requestId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId)) throw new Error('Invalid explicit request identity')
+    if (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID || '')) throw new Error('Missing workflow run identity')
+    if (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ATTEMPT || '1')) throw new Error('Invalid workflow run attempt')
+    if (!/^[a-f0-9]{40}$/.test(env.GITHUB_SHA || '')) throw new Error('Missing exact workflow SHA')
+    return { channel: 'dev', target, sourcePr: sourcePr || null, requestId: requestId || null, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT || '1', workflowSha: env.GITHUB_SHA }
 }
 
 export async function preparePreview(root, env) {
     if (!/^[a-f0-9]{40}$/.test(env.ZYRA_BUILD_SOURCE_SHA || '')) throw new Error('Preview requires an exact source SHA')
     if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9_.-]+$/.test(env.ZYRA_BUILD_SOURCE_REPOSITORY || '')) throw new Error('Invalid source repository')
-    if (!/^\d+$/.test(env.GITHUB_RUN_ID || '')) throw new Error('Missing workflow run identity')
+    const identity = previewRequestIdentity(env)
     const actual = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
     if (actual !== env.ZYRA_BUILD_SOURCE_SHA) throw new Error('Checked-out source does not match requested SHA')
     if (execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).trim()) throw new Error('Preview preparation requires a clean source checkout')
@@ -44,7 +58,7 @@ export async function preparePreview(root, env) {
     await mkdir(path.join(root, '.release'), { recursive: true })
     const config = previewBuilderConfig(packages[2].build, path.join(output, 'raw'))
     await writeFile(path.join(root, '.release', 'preview-builder.json'), `${JSON.stringify(config, null, 2)}\n`)
-    await writeFile(path.join(root, '.release', 'preview-request.json'), JSON.stringify({ sourceSha: actual, sourceRepository: env.ZYRA_BUILD_SOURCE_REPOSITORY, sourceVersion, version }))
+    await writeFile(path.join(root, '.release', 'preview-request.json'), JSON.stringify({ ...identity, sourceSha: actual, sourceRepository: env.ZYRA_BUILD_SOURCE_REPOSITORY, sourceVersion, version }))
     return { version, sourceVersion, output }
 }
 
@@ -61,7 +75,8 @@ async function build(root, env) {
     const desktop = path.join(root, 'desktop')
     const version = JSON.parse(await readFile(path.join(desktop, 'package.json'), 'utf8')).version
     const request = JSON.parse(await readFile(path.join(root, '.release', 'preview-request.json'), 'utf8'))
-    if (!version.includes('-alpha.') || version !== request.version || request.sourceSha !== env.ZYRA_BUILD_SOURCE_SHA || request.sourceRepository !== env.ZYRA_BUILD_SOURCE_REPOSITORY) throw new Error('Preview request/version identity changed after preparation')
+    const identity = previewRequestIdentity(env)
+    if (version !== previewVersion(request.sourceVersion, env.GITHUB_RUN_NUMBER) || version !== request.version || request.sourceSha !== env.ZYRA_BUILD_SOURCE_SHA || request.sourceRepository !== env.ZYRA_BUILD_SOURCE_REPOSITORY || Object.entries(identity).some(([key, value]) => request[key] !== value)) throw new Error('Preview request/version identity changed after preparation')
     if (execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() !== request.sourceSha) throw new Error('Preview source checkout changed after preparation')
     const output = path.join(desktop, 'dist', 'previews', env.GITHUB_RUN_ID)
     const raw = path.join(output, 'raw')
@@ -80,9 +95,9 @@ async function build(root, env) {
     for await (const chunk of createReadStream(path.join(raw, installer))) hash.update(chunk)
     const sha256 = hash.digest('hex')
     const manifest = {
-        schemaVersion: 1, distribution: 'preview', signed: false, version,
-        source: { repository: env.ZYRA_BUILD_SOURCE_REPOSITORY, sha: env.ZYRA_BUILD_SOURCE_SHA, version: request.sourceVersion },
-        build: { repository: env.GITHUB_REPOSITORY, workflowSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT },
+        schemaVersion: 1, distribution: 'preview', channel: 'dev', target: request.target, signed: false, version,
+        source: { repository: env.ZYRA_BUILD_SOURCE_REPOSITORY, sha: env.ZYRA_BUILD_SOURCE_SHA, version: request.sourceVersion, pr: request.sourcePr },
+        build: { repository: env.GITHUB_REPOSITORY, workflowSha: request.workflowSha, requestId: request.requestId, runId: request.runId, runNumber: env.GITHUB_RUN_NUMBER, runAttempt: request.runAttempt },
         installer: { name: installer, size: (await stat(path.join(raw, installer))).size, sha256 },
         profile: 'Zyra Preview', automaticUpdates: false
     }

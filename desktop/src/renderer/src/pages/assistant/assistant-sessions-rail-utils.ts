@@ -1,4 +1,5 @@
 import type { AssistantPlaygroundState, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
+import { resolveAssistantSessionProjectPath } from '@shared/assistant/project-identity'
 import type { DevScopeResult } from '@shared/contracts/devscope-api'
 import { isGenericUserFolderPath } from '@shared/projects/project-path-classification'
 import { getAssistantThreadPhase, isAssistantThreadActivelyWorking } from '@/lib/assistant/selectors'
@@ -389,7 +390,7 @@ export function getProjectKey(path: string): string {
 }
 
 export function getProjectLabel(path: string): string {
-    if (!path) return 'Chats'
+    if (!path) return 'No project'
     const parts = path.split(/[\\/]/).filter(Boolean)
     return parts[parts.length - 1] || path
 }
@@ -558,7 +559,7 @@ const PROJECT_METADATA_LAST_ATTEMPT_MS = new Map<string, number>()
 
 export function resolveSessionProjectPath(session: AssistantSession): string {
     if (isDetachedPlaygroundChatSession(session)) return ''
-    const projectPath = normalizeProjectPath(session.projectPath || null)
+    const projectPath = normalizeProjectPath(resolveAssistantSessionProjectPath(session))
     return isLegacyPlaygroundProjectPath(projectPath) ? '' : projectPath
 }
 

@@ -103,7 +103,7 @@ const result = await sendAssistantPromptAction({
     sessionId: session.id
 })
 assert.equal(result.success, true)
-for (let attempt = 0; attempt < 20 && canonicalTitles.length === 0; attempt += 1) {
+for (let attempt = 0; attempt < 20 && snapshot.sessions[0]?.title !== 'First Send Layout Fix'; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 0))
 }
 assert.deepEqual(sentModels, ['openai-codex/gpt-5.6-sol'], 'the conversation keeps its selected Sol model')
@@ -121,9 +121,9 @@ const serviceSource = readFileSync(new URL('../src/main/assistant/service.ts', i
 const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-runtime.ts', import.meta.url), 'utf8')
 const promptTurnStart = runtimeSource.indexOf('private async runPromptTurn')
 const promptTurnSource = runtimeSource.slice(promptTurnStart, runtimeSource.indexOf('private async ensureConnected', promptTurnStart))
-const recoverySource = serviceSource.slice(serviceSource.indexOf('private async recoverSelectedSessionTitle'), serviceSource.indexOf('private async ensureReady'))
+const recoverySource = serviceSource.slice(serviceSource.indexOf('private async recoverSessionTitle'), serviceSource.indexOf('private async ensureReady'))
 assert.match(recoverySource, /getTitleGenerationModel/, 'startup title recovery must read the same title-model preference')
-assert.match(recoverySource, /preferredModel: titleModel/, 'startup title recovery must pass the configured utility model')
+assert.match(recoverySource, /preferredModel,\s*generateText/, 'startup title recovery must pass the configured utility model')
 assert.doesNotMatch(recoverySource, /preferredModel: thread\.model/, 'startup recovery cannot silently inherit the conversation model')
 assert.match(promptTurnSource, /skipTitleGeneration: true/, 'Desktop-owned prompts must disable the bridge worker\'s second hardcoded title request')
 

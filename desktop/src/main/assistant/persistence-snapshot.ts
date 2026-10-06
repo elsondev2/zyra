@@ -1,4 +1,5 @@
 import type { AssistantShellSnapshot, AssistantSnapshot, AssistantThread, AssistantThreadShell } from '../../shared/assistant/contracts'
+import { preserveAssistantMessagePhases } from '../../shared/assistant/message-phase'
 
 export type AssistantHydratedThreadData = Pick<
     AssistantThread,
@@ -119,7 +120,7 @@ export function hydrateSnapshotThreads(
             const details = detailsByThreadId.get(thread.id)
             if (!details) continue
             thread.activePlan = details.activePlan
-            thread.messages = details.messages
+            thread.messages = preserveAssistantMessagePhases(thread.messages, details.messages)
             thread.messageCount = details.messages.length
             thread.proposedPlans = details.proposedPlans
             thread.activities = details.activities

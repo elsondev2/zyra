@@ -64,6 +64,8 @@ export type OnboardingRecovery =
 
 export type OnboardingSnapshot = {
     hydrated: true
+    /** Main-resolved OS Documents/Zyra path. Older clients can omit it. */
+    defaultProjectsFolder?: string | null
     accessAllowed: boolean
     showOnboarding: boolean
     blockedReason: 'future-schema' | null

@@ -1,6 +1,7 @@
+import { canonicalFolderKey as canonicalAssistantFolderKey } from '../canonical-folder-key'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
-import { basename, join, normalize, parse, resolve, sep } from 'node:path'
+import { basename, join, normalize, resolve, sep } from 'node:path'
 import type { Database as SqlDatabase, SqlValue } from 'sql.js/dist/sql-asm.js'
 import type {
     AssistantChatScope,
@@ -55,11 +56,7 @@ function runTransaction<T>(db: SqlDatabase, work: () => T): T {
     }
 }
 
-export function canonicalAssistantFolderKey(value: string): string {
-    const resolved = normalize(resolve(String(value || '').trim()))
-    const absolute = resolved === parse(resolved).root ? resolved : resolved.replace(/[\\/]+$/, '')
-    return process.platform === 'win32' ? absolute.toLocaleLowerCase('en-US') : absolute
-}
+export { canonicalFolderKey as canonicalAssistantFolderKey } from '../canonical-folder-key'
 
 export function isAssistantPathInsideRoot(value: string, root: string): boolean {
     const candidateKey = canonicalAssistantFolderKey(value)

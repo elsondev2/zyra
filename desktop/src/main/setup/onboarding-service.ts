@@ -24,6 +24,7 @@ import { isDarkThemeId, isLightThemeId } from '../../shared/preferences/theme-co
 import type { DevicePreferencesService } from './device-preferences-service'
 import type { OpenAIConnectionService } from './openai-connection-service'
 import { RevisionConflictError, writeJsonAtomically } from './atomic-json'
+import { ensureDefaultChatWorkspace } from './default-chat-workspace'
 
 type HydratedOnboarding =
     | { kind: 'ready'; record: OnboardingRecord }
@@ -366,8 +367,10 @@ export class OnboardingService {
                 }
                 case 'projects': {
                     const requestedFolder = String(input.selection?.projectsFolder || '').trim().slice(0, 2_048)
-                    if (!requestedFolder) throw new Error('Choose a projects folder before continuing.')
-                    const projectsFolder = await this.validateProjectsFolder(requestedFolder)
+                    const selectedFolder = requestedFolder || this.preferences.getDefaultProjectsFolder()
+                    if (!selectedFolder) throw new Error('Choose a chat folder before continuing.')
+                    if (selectedFolder === this.preferences.getDefaultProjectsFolder()) await ensureDefaultChatWorkspace(selectedFolder)
+                    const projectsFolder = await this.validateProjectsFolder(selectedFolder)
                     await this.preferences.updateSharedFromMain({ projectsFolder })
                     next = withRevision(record, now, {
                         completedSteps: markStepCompleted(record, input.step),
@@ -469,6 +472,7 @@ export class OnboardingService {
             blockedReason: null,
             detectedSchemaVersion: null,
             recovery: this.recovery,
+            defaultProjectsFolder: this.preferences.getDefaultProjectsFolder(),
             record: structuredClone(record)
         }
     }

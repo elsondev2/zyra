@@ -54,6 +54,8 @@ import { useInstructorVoiceSession } from './useInstructorVoiceSession'
 import { useAssistantPageTimelineScroll } from './useAssistantPageTimelineScroll'
 import { useAssistantProjectCatalog } from './useAssistantProjectCatalog'
 import { resolveAssistantProjectLabel } from './assistant-project-label'
+import { resolveAssistantSessionProjectPath } from '@shared/assistant/project-identity'
+import { getAssistantNewChatGreeting } from './assistant-new-chat-greeting'
 import { buildAssistantProjectChoices, getAssistantProjectIconSourcePath } from './assistant-project-choices'
 import { getNewChatProjectUnavailableReason, getOptimisticProjectWorkingRoot, runLatestProjectSave } from './assistant-new-chat-project-selection'
 import { useAgentControlState } from './useAgentControlState'
@@ -240,14 +242,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             return next
         })
     }, [selectedProjectId, selectedSessionId, visiblePendingProjectSelection])
-    const pendingCreateProjectPath = pendingCreateSessionInput?.workingRoot?.trim()
-        || pendingCreateSessionInput?.projectPath?.trim()
-        || ''
+    const pendingCreateProjectPath = pendingCreateSessionInput ? resolveAssistantSessionProjectPath(pendingCreateSessionInput) : ''
     const pendingCreateProjectId = pendingCreateSessionInput?.projectId?.trim() || null
     const lastResolvedProjectPathBySessionRef = useRef<Record<string, string>>({})
     const selectedSessionMode = 'work' as const
     const displayProjectPath = isCreatingFreshChat ? pendingCreateProjectPath : visiblePendingProjectSelection?.projectPath ?? (selectedProjectPath || (
-        (controller.commandPending || controller.loading) && selectedSessionId
+        (controller.commandPending || controller.loading) && selectedSessionId && !controller.selectedSession
             ? lastResolvedProjectPathBySessionRef.current[selectedSessionId] || ''
             : ''
     ))
@@ -261,7 +261,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const selectedProjectTooltip = displayProjectPath || (
         'Select a project when this chat needs files.'
     )
-    const latestProjectLabel = resolveAssistantProjectLabel(displayProjectName, displayProjectId, displayProjectPath) || 'select project'
+    const latestProjectLabel = resolveAssistantProjectLabel(displayProjectName, displayProjectId, displayProjectPath) || 'No project'
     const newChatProjectChoices = useMemo(() => buildAssistantProjectChoices(projectCatalogState.catalog.projects), [projectCatalogState.catalog.projects])
     const projectIconSourcePath = getAssistantProjectIconSourcePath(selectedProjectRecord)
     const composerProjectRoots = useMemo<AssistantChatScopeRoot[]>(() => {
@@ -502,24 +502,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         ? `${selectedSessionId || 'pending'}:${pendingCreateProjectPath || 'chat'}`
         : null
     const emptyComposerProjectLabel = resolveAssistantProjectLabel(displayProjectName, displayProjectId, displayProjectPath)
-    const emptyComposerPrompt = useMemo(() => {
-        const hour = new Date().getHours()
-        const timeGreeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
-        const projectPrompts = emptyComposerProjectLabel ? [
-            `${timeGreeting}. What are we shaping in ${emptyComposerProjectLabel}?`,
-            `Ready to open up ${emptyComposerProjectLabel}?`,
-            `What needs attention in ${emptyComposerProjectLabel}?`,
-            `Where should we start in ${emptyComposerProjectLabel}?`,
-            `What are we making better in ${emptyComposerProjectLabel}?`
-        ] : [
-            `${timeGreeting}. What are we working on?`,
-            'What are we opening up first?',
-            'Bring me the bug, the idea, or the messy bit.',
-            'What are we figuring out today?',
-            'Tell me what changed, broke, or needs building.'
-        ]
-        return projectPrompts[Math.floor(Math.random() * projectPrompts.length)]
-    }, [emptyComposerProjectLabel])
+    const emptyComposerPrompt = useMemo(() => getAssistantNewChatGreeting(emptyComposerProjectLabel), [emptyComposerProjectLabel])
 
     const getDistanceFromBottom = useCallback((element: HTMLDivElement) => {
         return Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight)

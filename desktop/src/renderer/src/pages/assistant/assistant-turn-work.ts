@@ -325,7 +325,8 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         && Boolean(activeFinalRow.message.text.trim())
         ? activeFinalRowIndex
         : -1
-    let terminalResponseVisible = false
+    const activeFinalMessage = activeFinalMessageId ? messageById.get(activeFinalMessageId) : null
+    let terminalResponseVisible = activeFinalMessage?.phase === 'final_answer'
     if (settledFinalIndex >= 0) {
         for (let index = settledFinalIndex + 1; index < rows.length; index += 1) {
             const row = rows[index]
@@ -370,8 +371,11 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             const nextBoundaryIndex = nextUserIndexByRow[userIndex] ?? rows.length
             const endIndex = nextBoundaryIndex < rows.length ? nextBoundaryIndex - 1 : rows.length - 1
 
+            // A phase arrives before the first text delta. The empty message
+            // is not rendered yet, but its metadata already closes Work.
+            const terminalResponseIndex = activeFinalRowIndex >= 0 ? activeFinalRowIndex : rows.length
             const activeEndIndex = terminalResponseVisible
-                ? Math.min(endIndex, settledFinalIndex - 1)
+                ? Math.min(endIndex, terminalResponseIndex - 1)
                 : endIndex
             const activeRows = rows.slice(userIndex + 1, activeEndIndex + 1)
             const projectedTerminalOutcome = getProjectedTerminalOutcomeFromRows(activeRows)
