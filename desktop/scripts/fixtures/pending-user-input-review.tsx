@@ -16,34 +16,11 @@ let questionId = 'choices',
     required = true,
     choice = true
 let extraQuestions: any[] = []
+let multiple = false
 const responses: any[] = [],
     saved: any[] = []
 let clipText = 'My own pasted explanation',
     clipImage = false
-Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: {
-        read: async () => [
-            {
-                types: [clipImage ? 'image/png' : 'text/plain'],
-                getType: async (type: string) =>
-                    new Blob(
-                        [
-                            type === 'text/plain'
-                                ? clipText
-                                : Uint8Array.from(
-                                      atob(
-                                          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=',
-                                      ),
-                                      (c) => c.charCodeAt(0),
-                                  ),
-                        ],
-                        { type },
-                    ),
-            },
-        ],
-    },
-})
 ;(window as any).devscope = {
     assistant: {
         getVoiceTranscriptionState: async () => ({
@@ -99,7 +76,11 @@ const render = (empty = false) =>
                                           id: 'answer',
                                           header: 'Test',
                                           question: 'Choose or explain',
-                                          type: choice ? 'single_select' : 'text',
+                                          type: choice
+                                              ? multiple
+                                                  ? 'multi_select'
+                                                  : 'single_select'
+                                              : 'text',
                                           options: choice
                                               ? [
                                                     { label: 'Passed', description: '' },
@@ -107,6 +88,9 @@ const render = (empty = false) =>
                                                 ]
                                               : [],
                                           required,
+                                          ...(multiple
+                                              ? { minSelections: 2, maxSelections: 2 }
+                                              : {}),
                                           allowOther: false,
                                           placeholder: 'Type another answer',
                                       },
@@ -124,27 +108,94 @@ const button = (label: string) =>
     )!
 const input = () =>
     document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Your answer"]')!
+const typeAnswer = (value: string) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    setter.call(input(), value)
+    input().dispatchEvent(new Event('input', { bubbles: true }))
+}
+const option = (label: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="radio"], [role="checkbox"]')).find(
+        (node) => node.textContent?.includes(label),
+    )!
+const paste = () => {
+    const data = new DataTransfer()
+    if (clipImage) {
+        data.items.add(
+            new File(
+                [
+                    Uint8Array.from(
+                        atob(
+                            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=',
+                        ),
+                        (c) => c.charCodeAt(0),
+                    ),
+                ],
+                'pasted-image.png',
+                { type: 'image/png' },
+            ),
+        )
+    } else data.setData('text/plain', clipText)
+    input().dispatchEvent(
+        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }),
+    )
+}
 ;(window as any).sidebarContinuityCheck = (async () => {
     render()
     await sleep()
     await sleep()
+    check(input(), 'Custom answer is visible immediately even with allowOther false')
     check(
-        button('Type another answer'),
-        'Choice questions retain a third editable option even with allowOther false',
+        !button('Type another answer') && !button('Paste'),
+        'There is no third option or paste icon',
     )
+    check(
+        input().placeholder === 'Type another answer',
+        'The supplied placeholder appears in the editor',
+    )
+    check(document.querySelectorAll('[role="radio"]').length === 2, 'Only supplied choices render')
     check(
         button('Attach files') && !button('Attach files').disabled,
         'Attachments are available alongside suggested choices',
     )
     check(button('Continue').disabled, 'Required choice is not silently skipped')
-    button('Type another answer').click()
-    await wait(() => Boolean(input()), 'Custom choice opens an editable answer')
-    button('Paste').click()
+    option('Passed').click()
+    await sleep()
+    check(option('Passed').getAttribute('aria-checked') === 'true', 'Fixed choice selects normally')
+    input().focus()
+    await sleep()
+    check(
+        option('Passed').getAttribute('aria-checked') === 'true',
+        'Focusing the empty editor does not clear a fixed choice',
+    )
+    typeAnswer('Another approach')
+    await sleep()
+    check(
+        Array.from(document.querySelectorAll('[role="radio"]')).every(
+            (node) => node.getAttribute('aria-checked') === 'false',
+        ),
+        'Typing replaces the single selected choice',
+    )
+    option('Fix it').click()
+    await sleep()
+    check(
+        input().value === '' && option('Fix it').getAttribute('aria-checked') === 'true',
+        'Choosing a fixed answer replaces custom text without hiding the editor',
+    )
+    paste()
     await wait(
         () => input().value === clipText,
         'Paste inserts clipboard text into a custom answer',
     )
     check(!button('Continue').disabled, 'Typed custom answer is complete')
+    input().setSelectionRange(0, 2)
+    const expectedPastedAnswer = clipText + clipText.slice(2)
+    paste()
+    await wait(
+        () => input().value === expectedPastedAnswer,
+        'Short paste replaces the current selection at the caret',
+    )
+    typeAnswer(clipText)
+    await sleep()
     button('Continue').click()
     await wait(() => Boolean(button('Submit')), 'Custom answer reaches review')
     button('Submit').click()
@@ -213,10 +264,34 @@ const input = () =>
         'A selected file appears on the attachment shelf',
     )
     clipImage = true
-    button('Paste').click()
+    paste()
     await wait(
         () => Boolean(document.querySelector('[aria-label="Open preview for pasted-image.png"]')),
         'Clipboard image becomes an attachment',
+    )
+    const pills = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-composer-attachment-pill]'),
+    )
+    check(
+        pills.length === 2 &&
+            pills.every(
+                (pill) => pill.getBoundingClientRect().height <= 30 && !pill.querySelector('pre'),
+            ),
+        'Files and images use small single-row pills, not full previews',
+    )
+    check(
+        pills.every((pill) => pill.getBoundingClientRect().width <= 226),
+        'Attachment pills remain bounded',
+    )
+    button('Open preview for notes.txt').click()
+    await wait(
+        () => (window as any).fixtureAttachmentPreview?.content === 'Complete supporting notes',
+        'Text pill opens the full existing attachment preview',
+    )
+    button('Open preview for pasted-image.png').click()
+    await wait(
+        () => (window as any).fixtureAttachmentPreview?.kind === 'image',
+        'Image pill opens the existing preview without dropping its image path',
     )
     check(
         saved.some((x) => x.dataUrl?.startsWith('data:image/png;base64,')),
@@ -249,7 +324,7 @@ const input = () =>
     })
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
     await wait(() => document.body.textContent!.includes('notes.txt'), 'Evidence can be restored')
-    button('Paste').click()
+    paste()
     await wait(
         () => Boolean(document.querySelector('[aria-label="Open preview for pasted-image.png"]')),
         'Image evidence can be restored',
@@ -308,13 +383,54 @@ const input = () =>
     )
     results.push('Optional questions remain skippable after another answer attaches evidence')
     extraQuestions = []
+    questionId = 'multiple-custom'
+    choice = true
+    multiple = true
+    render()
+    await sleep()
+    await sleep()
+    check(input(), 'Multi-select has an immediately available editor')
+    option('Passed').click()
+    await sleep()
+    check(button('Continue').disabled, 'Minimum selection count still applies')
+    typeAnswer('My addition')
+    await sleep()
+    check(
+        option('Passed').getAttribute('aria-checked') === 'true' && !button('Continue').disabled,
+        'Typing adds to multi-select instead of replacing selected options',
+    )
+    typeAnswer('')
+    await sleep()
+    check(button('Continue').disabled, 'Clearing custom text removes only that selection')
+    option('Fix it').click()
+    await sleep()
+    typeAnswer('Too many')
+    await sleep()
+    check(button('Continue').disabled, 'Custom text cannot bypass maximum selections')
+    option('Fix it').click()
+    await sleep()
+    check(
+        !button('Continue').disabled,
+        'Removing one fixed option restores the valid custom combination',
+    )
+    button('Continue').click()
+    await wait(() => Boolean(button('Submit')), 'Multi-select combination reaches review')
+    button('Submit').click()
+    await wait(() => responses.length === 5, 'Multi-select combination submits')
+    check(
+        JSON.stringify(responses[4].answers.answer) === JSON.stringify(['Passed', 'Too many']),
+        'Fixed and custom multi-select answers submit together',
+    )
+    results.push('Direct multi-select typing preserves choices and min/max constraints')
     questionId = 'long-paste'
+    multiple = false
+    choice = false
     render()
     await sleep()
     await sleep()
     clipImage = false
     clipText = 'Evidence line\n'.repeat(150)
-    button('Paste').click()
+    paste()
     await wait(
         () => Boolean(document.querySelector('[data-composer-attachment-item]')),
         'Long clipboard text becomes a readable attachment',
@@ -326,5 +442,30 @@ const input = () =>
     await sleep()
     check(input(), 'Empty pending state restores without a hooks-order error')
     results.push('Long text paste and empty-prompt lifecycle')
+    questionId = 'visual-direct-entry'
+    choice = true
+    render()
+    await sleep()
+    await sleep()
+    const visibleFiles = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(visibleFiles, 'files', { configurable: true, value: files.files })
+    visibleFiles.dispatchEvent(new Event('change', { bubbles: true }))
+    clipImage = true
+    paste()
+    await wait(
+        () => document.querySelectorAll('[data-composer-attachment-pill]').length === 2,
+        'Both attachment types render as pills',
+    )
+    typeAnswer('Use my own approach')
+    await new Promise((resolve) => setTimeout(resolve, 750))
+    check(
+        input().getBoundingClientRect().bottom <=
+            document.querySelector('[data-composer-attachment-pill]')!.getBoundingClientRect().top,
+        'Pills stay below the answer in the existing shelf position',
+    )
+    check(
+        document.documentElement.scrollWidth <= window.innerWidth,
+        'The question form has no horizontal overflow',
+    )
     return results
 })()

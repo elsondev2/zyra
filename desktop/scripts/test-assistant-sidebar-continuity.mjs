@@ -28,13 +28,13 @@ try {
             // This fixture opens no attachment editors. Keep Vite-only Monaco
             // workers out while exercising the actual message/footer renderer.
             builder.onResolve({ filter: /AssistantAttachmentPreviewModal$/ }, () => ({ path: 'attachment-preview', namespace: 'test-unused' }))
-            builder.onLoad({ filter: /.*/, namespace: 'test-unused' }, () => ({ contents: 'export default function UnusedPreview(){return null}', loader: 'js' }))
+            builder.onLoad({ filter: /.*/, namespace: 'test-unused' }, () => ({ contents: userInputForm ? 'export default function UnusedPreview(props){window.fixtureAttachmentPreview=props.file;return null}' : 'export default function UnusedPreview(){return null}', loader: 'js' }))
             builder.onResolve({ filter: /monaco\/runtime$/ }, () => ({ path: 'editor-runtime', namespace: 'test-editor-runtime' }))
             builder.onLoad({ filter: /.*/, namespace: 'test-editor-runtime' }, () => ({ contents: 'export const monaco = {}; export function ensureMonacoRuntime(){throw new Error("Unexpected editor in agent message fixture")}', loader: 'js' }))
         } }], logLevel: 'silent' })
     // Compile the actual app styles, but keep test fonts/assets entirely local.
     const source = (await readFile(join(desktop, 'src/renderer/src/index.css'), 'utf8')).replace(/^@import[^\n]+\n/gm, '')
-    const css = await postcss([tailwind({ ...tailwindConfig, content: userInputForm ? [join(desktop, 'src/renderer/src/pages/assistant/AssistantPendingUserInput*.tsx'), join(desktop, 'src/renderer/src/pages/assistant/AssistantComposerSections.tsx'), join(desktop, 'src/renderer/src/pages/assistant/ComposerSendButton.tsx')] : voiceRecorderInput ? [join(desktop, 'src/renderer/src/pages/assistant/AssistantVoiceRecorderBar.tsx'), join(desktop, 'src/renderer/src/pages/assistant/assistant-composer-focus.ts'), join(desktop, 'scripts/fixtures/voice-recorder-input.tsx')] : [join(desktop, 'src/renderer/**/*.{ts,tsx}'), join(desktop, 'scripts/fixtures/*.tsx')] })]).process(source, { from: undefined })
+    const css = await postcss([tailwind({ ...tailwindConfig, content: userInputForm ? [join(desktop, 'src/renderer/src/pages/assistant/AssistantPendingUserInput*.tsx'), join(desktop, 'src/renderer/src/pages/assistant/AssistantComposerSections.tsx'), join(desktop, 'src/renderer/src/pages/assistant/ComposerSendButton.tsx'), join(desktop, 'src/renderer/src/pages/assistant/AssistantAttachmentCards.tsx')] : voiceRecorderInput ? [join(desktop, 'src/renderer/src/pages/assistant/AssistantVoiceRecorderBar.tsx'), join(desktop, 'src/renderer/src/pages/assistant/assistant-composer-focus.ts'), join(desktop, 'scripts/fixtures/voice-recorder-input.tsx')] : [join(desktop, 'src/renderer/**/*.{ts,tsx}'), join(desktop, 'scripts/fixtures/*.tsx')] })]).process(source, { from: undefined })
     const html = join(directory, 'index.html')
     await writeFile(join(directory, 'fixture.js'), bundle.outputFiles[0].text)
     await writeFile(html, `<!doctype html><html><head><meta charset="utf-8"><style>${css.css}
@@ -46,7 +46,7 @@ try {
     await writeFile(harness, `const {app,BrowserWindow}=require('electron');
         app.setPath('userData',${JSON.stringify(join(directory, 'profile'))});
         const timeout=setTimeout(()=>{console.error('Sidebar check timed out');app.exit(1)},30000);
-        app.whenReady().then(async()=>{const window=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{backgroundThrottling:false,offscreen:true,sandbox:true,contextIsolation:true,nodeIntegration:false}});
+        app.whenReady().then(async()=>{const window=new BrowserWindow({show:false,width:${Number(process.env.ZYRA_QA_WIDTH) || 1000},height:800,webPreferences:{backgroundThrottling:false,offscreen:true,sandbox:true,contextIsolation:true,nodeIntegration:false}});
         window.webContents.on('console-message',(event,level,message)=>{if(level>=2)console.error(message)});
         await window.loadFile(${JSON.stringify(html)},${JSON.stringify(process.argv.includes('--settlement-navigation') ? { query: { settlementNavigation: '1' } } : process.argv.includes('--thread-messages') ? { query: { threadMessages: '1' } } : process.argv.includes('--unread-completion') ? { query: { unreadCompletion: '1' } } : process.argv.includes('--agent-colors') ? { query: { agentColors: '1' } } : process.argv.includes('--row-hover-actions') ? { query: { rowHoverActions: '1' } } : process.argv.includes('--voice-recorder-input') ? { query: { voiceRecorderInput: '1' } } : process.argv.includes('--conversation-markers') ? { query: { conversationMarkers: '1' } } : {})});
         let debuggerDocument=null;

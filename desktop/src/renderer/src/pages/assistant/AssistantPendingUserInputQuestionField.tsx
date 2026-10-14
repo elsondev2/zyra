@@ -9,14 +9,12 @@ import {
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ArrowDown, ArrowUp, CircleHelp, FileText, GripVertical, SquarePen } from 'lucide-react'
+import { ArrowDown, ArrowUp, CircleHelp, FileText, GripVertical } from 'lucide-react'
 import type { AssistantUserInputAnswer, AssistantUserInputQuestion } from '@shared/assistant/contracts'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { AssistantCheckbox } from './AssistantCheckbox'
 import { reorderAssistantUserInputRanking } from './assistant-pending-user-input'
-
-const CUSTOM_ANSWER_LABEL = 'Write my own answer'
 
 function getOptions(question: AssistantUserInputQuestion) {
     if (question.type === 'confirm' && question.options.length < 2) {
@@ -131,11 +129,9 @@ export function AssistantPendingUserInputQuestionField(props: {
     answer: AssistantUserInputAnswer | null
     responding: boolean
     expandedOptionKey: string | null
-    showCustomComposer: boolean
     setExpandedOptionKey: (value: string | null | ((current: string | null) => string | null)) => void
     onSelectOption: (questionId: string, optionLabel: string) => void
     onToggleOption: (questionId: string, optionLabel: string) => void
-    onSelectCustom: (questionId: string) => void
     onScalarChange: (questionId: string, value: string) => void
     onRankingChange: (questionId: string, value: string[]) => void
 }) {
@@ -144,11 +140,9 @@ export function AssistantPendingUserInputQuestionField(props: {
         answer,
         responding,
         expandedOptionKey,
-        showCustomComposer,
         setExpandedOptionKey,
         onSelectOption,
         onToggleOption,
-        onSelectCustom,
         onScalarChange,
         onRankingChange
     } = props
@@ -259,19 +253,6 @@ export function AssistantPendingUserInputQuestionField(props: {
                 )
             })}
 
-            {(question.allowOther || question.type === 'single_select' || question.type === 'multi_select') ? (
-                <button
-                    data-guided-animate
-                    type="button"
-                    disabled={responding}
-                    onClick={() => onSelectCustom(question.id)}
-                    className={cn('flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left text-[12px] transition-colors', showCustomComposer ? 'bg-sky-500/[0.08] text-sparkle-text' : 'bg-white/[0.02] text-sparkle-text-secondary hover:bg-white/[0.04] hover:text-sparkle-text')}
-                    aria-pressed={showCustomComposer}
-                >
-                    <span className={cn('inline-flex size-5 items-center justify-center rounded-full', showCustomComposer ? 'bg-sky-500/18 text-sky-200' : 'bg-white/[0.08]')}><SquarePen size={10} /></span>
-                    <span className="font-medium">{question.placeholder || CUSTOM_ANSWER_LABEL}</span>
-                </button>
-            ) : null}
         </div>
     )
 }

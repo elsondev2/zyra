@@ -27,7 +27,6 @@ export function AssistantPendingUserInputStage(props: {
     responding: boolean
     returnToReview: boolean
     expandedOptionKey: string | null
-    showCustomComposer: boolean
     customTextareaRef: RefObject<HTMLTextAreaElement | null>
     composerCapabilities: { attachDisabled: boolean; inputDisabled: boolean; placeholder: string }
     setQuestionIndex: (value: number | ((current: number) => number)) => void
@@ -36,7 +35,6 @@ export function AssistantPendingUserInputStage(props: {
     onToggleQuestionShellMinimized: () => void
     handleSelectOption: (questionId: string, optionLabel: string) => void
     handleToggleOption: (questionId: string, optionLabel: string) => void
-    handleSelectCustom: (questionId: string) => void
     handleCustomAnswerChange: (questionId: string, value: string) => void
     handleRankingChange: (questionId: string, value: string[]) => void
     handleCustomTextareaKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void
@@ -54,14 +52,12 @@ export function AssistantPendingUserInputStage(props: {
         responding,
         returnToReview,
         expandedOptionKey,
-        showCustomComposer,
         setQuestionIndex,
         setReturnToReview,
         setExpandedOptionKey,
         onToggleQuestionShellMinimized,
         handleSelectOption,
         handleToggleOption,
-        handleSelectCustom,
         handleCustomAnswerChange,
         handleRankingChange
     } = props
@@ -114,11 +110,9 @@ export function AssistantPendingUserInputStage(props: {
                             answer={progress.selectedAnswer}
                             responding={responding}
                             expandedOptionKey={expandedOptionKey}
-                            showCustomComposer={showCustomComposer}
                             setExpandedOptionKey={setExpandedOptionKey}
                             onSelectOption={handleSelectOption}
                             onToggleOption={handleToggleOption}
-                            onSelectCustom={handleSelectCustom}
                             onScalarChange={handleCustomAnswerChange}
                             onRankingChange={handleRankingChange}
                         />

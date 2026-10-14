@@ -6,9 +6,10 @@ import {
     useMemo,
     useRef,
     useState,
+    type ClipboardEvent as ReactClipboardEvent,
     type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
-import { ClipboardPaste, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import {
     buildTextAttachmentFromPaste,
@@ -297,45 +298,6 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         [activePrompt],
     )
 
-    const handleSelectCustom = useCallback(
-        (questionId: string) => {
-            if (!activePrompt) return
-            const question =
-                activePrompt.questions.find((candidate) => candidate.id === questionId) || null
-            if (!question) return
-            setCustomQuestionIdByRequestId((current) => ({
-                ...current,
-                [activePrompt.requestId]: questionId,
-            }))
-            setDraftAnswersByRequestId((current) => {
-                const currentAnswers = current[activePrompt.requestId] || {}
-                const currentAnswer = currentAnswers[questionId]
-                const nextAnswer = isAssistantUserInputMultiValueQuestion(question)
-                    ? Array.isArray(currentAnswer)
-                        ? currentAnswer
-                        : []
-                    : question?.options.some((option) => option.label === currentAnswer)
-                      ? ''
-                      : String(currentAnswer || '')
-                return {
-                    ...current,
-                    [activePrompt.requestId]: {
-                        ...currentAnswers,
-                        [questionId]: nextAnswer,
-                    },
-                }
-            })
-            window.requestAnimationFrame(() => {
-                const textarea = customTextareaRef.current
-                if (!textarea) return
-                textarea.focus()
-                const cursor = textarea.value.length
-                textarea.setSelectionRange(cursor, cursor)
-            })
-        },
-        [activePrompt],
-    )
-
     const handleCustomAnswerChange = useCallback(
         (questionId: string, value: string) => {
             if (!activePrompt) return
@@ -575,12 +537,12 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     const activeCustomQuestionId = activePrompt
         ? customQuestionIdByRequestId[activePrompt.requestId] || null
         : null
-    const showCustomComposer = Boolean(
+    const showAnswerComposer = Boolean(
         activeQuestion &&
-        activeQuestion.allowOther &&
-        (activeCustomQuestionId === activeQuestion.id || progress?.isCustomAnswer),
+        (activeQuestion.type === 'text' ||
+            (activeQuestion.allowOther &&
+                !['number', 'date', 'ranking'].includes(activeQuestion.type))),
     )
-    const showAnswerComposer = Boolean(activeQuestion?.type === 'text' || showCustomComposer)
     const customAnswerValue =
         activeQuestion && Array.isArray(progress?.selectedAnswer)
             ? progress.selectedAnswer.find(
@@ -690,6 +652,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         setAttaching((count) => count + 1)
         try {
             await composerController.attachFile(file, source)
+        } catch {
+            setPasteError('Could not attach this file. Try again.')
         } finally {
             setAttaching((count) => count - 1)
         }
@@ -713,6 +677,28 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                     start + value.length,
                 )
             })
+        }
+    }
+
+    const handleAnswerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+        if (composerCapabilities.inputDisabled || composerCapabilities.attachDisabled) {
+            event.preventDefault()
+            return
+        }
+        setPasteError(null)
+        const files = Array.from(event.clipboardData.items).filter((item) => item.kind === 'file')
+        if (files.length > 0) {
+            event.preventDefault()
+            for (const item of files) {
+                const file = item.getAsFile()
+                if (file) void attachQuestionFile(file, 'paste')
+            }
+            return
+        }
+        const text = event.clipboardData.getData('text/plain')
+        if (text) {
+            event.preventDefault()
+            pasteAnswerText(text)
         }
     }
 
@@ -745,7 +731,6 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                             responding={responding}
                             returnToReview={returnToReview}
                             expandedOptionKey={expandedOptionKey}
-                            showCustomComposer={showCustomComposer}
                             customTextareaRef={customTextareaRef}
                             composerCapabilities={composerCapabilities}
                             setQuestionIndex={setQuestionIndex}
@@ -756,15 +741,12 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                             }
                             handleSelectOption={handleSelectOption}
                             handleToggleOption={handleToggleOption}
-                            handleSelectCustom={handleSelectCustom}
                             handleCustomAnswerChange={handleCustomAnswerChange}
                             handleRankingChange={handleRankingChange}
                             handleCustomTextareaKeyDown={handleCustomTextareaKeyDown}
                         />
 
-                        {showAnswerComposer ||
-                        activeQuestion?.type === 'single_select' ||
-                        activeQuestion?.type === 'multi_select' ? (
+                        {showAnswerComposer ? (
                             <div data-guided-animate className="flex min-h-10 items-start gap-2">
                                 <button
                                     type="button"
@@ -783,100 +765,39 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                                 >
                                     <Plus size={18} />
                                 </button>
-                                <button
-                                    type="button"
-                                    aria-label="Paste"
-                                    title="Paste text or an image"
-                                    disabled={composerCapabilities.attachDisabled}
-                                    onClick={async () => {
-                                        setPasteError(null)
-                                        try {
-                                            if (navigator.clipboard.read) {
-                                                const items = await navigator.clipboard.read()
-                                                for (const item of items) {
-                                                    const imageType = item.types.find((type) =>
-                                                        type.startsWith('image/'),
-                                                    )
-                                                    if (imageType)
-                                                        await attachQuestionFile(
-                                                            new File(
-                                                                [await item.getType(imageType)],
-                                                                'pasted-image.png',
-                                                                { type: imageType },
-                                                            ),
-                                                            'paste',
-                                                        )
-                                                    else if (
-                                                        item.types.includes('text/plain') &&
-                                                        activeQuestion
-                                                    )
-                                                        pasteAnswerText(
-                                                            await (
-                                                                await item.getType('text/plain')
-                                                            ).text(),
-                                                        )
-                                                }
-                                            } else if (activeQuestion)
-                                                pasteAnswerText(
-                                                    await navigator.clipboard.readText(),
-                                                )
-                                        } catch {
-                                            setPasteError(
-                                                'Could not read the clipboard. Use Ctrl+V in the answer field.',
-                                            )
-                                        }
-                                    }}
-                                    className="mt-0.5 rounded-full p-1 text-sparkle-text-muted hover:text-sparkle-text disabled:opacity-35"
-                                >
-                                    <ClipboardPaste size={18} />
-                                </button>
                                 <div className="relative min-w-0 flex-1">
-                                    {showAnswerComposer ? (
-                                        <textarea
-                                            key={activeQuestion?.id}
-                                            ref={customTextareaRef}
-                                            autoFocus
-                                            rows={1}
-                                            value={customAnswerValue}
-                                            onFocus={() => {
-                                                if (
-                                                    activeQuestion?.allowOther &&
-                                                    activeQuestion.type !== 'text' &&
-                                                    activeCustomQuestionId !== activeQuestion.id
-                                                )
-                                                    handleSelectCustom(activeQuestion.id)
-                                            }}
-                                            onChange={(event) => {
-                                                if (!activeQuestion) return
-                                                handleCustomAnswerChange(
-                                                    activeQuestion.id,
-                                                    event.target.value,
-                                                )
-                                            }}
-                                            onKeyDownCapture={(event) => {
-                                                event.stopPropagation()
-                                                if (
-                                                    'nativeEvent' in event &&
-                                                    'stopImmediatePropagation' in event.nativeEvent
-                                                ) {
-                                                    event.nativeEvent.stopImmediatePropagation()
-                                                }
-                                            }}
-                                            onKeyDown={handleCustomTextareaKeyDown}
-                                            onPaste={composerController.handlePaste}
-                                            aria-label="Your answer"
-                                            className="relative min-h-10 w-full resize-none overflow-y-auto bg-transparent pl-[3px] pr-2 text-[14px] leading-[1.45rem] text-sparkle-text outline-none placeholder:text-sparkle-text/20 selection:bg-white/15"
-                                            placeholder={
-                                                activeQuestion?.placeholder ||
-                                                composerCapabilities.placeholder
+                                    <textarea
+                                        key={activeQuestion?.id}
+                                        ref={customTextareaRef}
+                                        autoFocus={activeQuestion?.type === 'text'}
+                                        rows={1}
+                                        value={customAnswerValue}
+                                        onChange={(event) => {
+                                            if (!activeQuestion) return
+                                            handleCustomAnswerChange(
+                                                activeQuestion.id,
+                                                event.target.value,
+                                            )
+                                        }}
+                                        onKeyDownCapture={(event) => {
+                                            event.stopPropagation()
+                                            if (
+                                                'nativeEvent' in event &&
+                                                'stopImmediatePropagation' in event.nativeEvent
+                                            ) {
+                                                event.nativeEvent.stopImmediatePropagation()
                                             }
-                                            disabled={composerCapabilities.inputDisabled}
-                                        />
-                                    ) : (
-                                        <span className="block py-2 text-xs text-sparkle-text-muted">
-                                            Paste a response or attach files
-                                        </span>
-                                    )}
+                                        }}
+                                        onKeyDown={handleCustomTextareaKeyDown}
+                                        onPaste={handleAnswerPaste}
+                                        aria-label="Your answer"
+                                        className="relative min-h-10 w-full resize-none overflow-y-auto bg-transparent pl-[3px] pr-2 text-[14px] leading-[1.45rem] text-sparkle-text outline-none placeholder:text-sparkle-text/20 selection:bg-white/15"
+                                        placeholder={
+                                            activeQuestion?.placeholder ||
+                                            composerCapabilities.placeholder
+                                        }
+                                        disabled={composerCapabilities.inputDisabled}
+                                    />
                                 </div>
                             </div>
                         ) : null}
@@ -899,6 +820,7 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                         />
                         <ComposerAttachmentsShelf
                             contextFiles={composerController.contextFiles}
+                            presentation="compact-pills"
                             compact
                             removingAttachmentIds={composerController.removingAttachmentIds}
                             onPreview={(file) => composerController.setPreviewAttachment(file)}
