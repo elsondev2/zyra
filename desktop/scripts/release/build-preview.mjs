@@ -128,6 +128,20 @@ export async function validatePreviewWorktree(root, env) {
         || execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() !== env.ZYRA_BUILD_SOURCE_SHA) {
         throw new Error('Preview source checkout does not match requested SHA')
     }
+    // Ignored files can still be build inputs (notably Vite .env.production).
+    // Ask Git for collapsed ignored directories so dependency trees stay bounded.
+    const ignored = execFileSync('git', ['status', '--porcelain=v1', '-z', '--ignored=matching', '--untracked-files=normal'], {cwd:root, maxBuffer:50 * 1024 * 1024}).toString('utf8').split('\0').filter(entry => entry.startsWith('!! '))
+    const derivedDirectories = new Set([
+        '.release/', 'desktop/.release/', 'desktop/out/', 'desktop/dist/', 'desktop/release/',
+        'dist/', 'output/', 'desktop/output/', 'src/runtime/.declarations/',
+        'extensions/zyra-browser-control/dist/'
+    ])
+    for (const entry of ignored) {
+        const file = entry.slice(3)
+        const dependencyDirectory = /(?:^|\/)node_modules\/$/.test(file)
+        const nativeOutput = /^native\/zyra-computer-use\/(?:[^/]+\/)*(?:bin|obj)\/$/.test(file)
+        if (!derivedDirectories.has(file) && !dependencyDirectory && !nativeOutput) throw new Error(`Preview source has an ignored build input: ${file}`)
+    }
     const tree = committedTree(root)
     const sourceVersion = JSON.parse(committedBlob(root, tree, 'package.json').toString('utf8')).version
     const version = previewVersion(sourceVersion, env.GITHUB_RUN_NUMBER)
