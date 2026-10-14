@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { ZyraAgentServer } from '../src/agent-server/server.mjs';
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 // Real attachSession branch, empty post-restart owner map; only provider connect is simulated.
 const calls = [];
@@ -37,4 +41,31 @@ assert.deepEqual(calls,[],'Supporting workers are not silently promoted/restored
 child.agentConversationKind='thread';parent.deleted=true;
 await assert.rejects(server.attachSession(client,{project:'/fixture',session:'child-session'}),/Open the owning chat/);
 assert.deepEqual(calls,[],'Deleted owner cannot be restored');
+// Exercise real session/client lifecycle with short timers and no live worker/profile.
+const temporary = mkdtempSync(path.join(tmpdir(), 'zyra-owner-lease-'));
+const leaseServer = Object.assign(Object.create(ZyraAgentServer.prototype), {
+  sessions:new Map(),root:temporary,paths:{journalDirectory:path.join(temporary,'journals')},idleTimeoutMs:25,
+  broadcastCatalogChanged(){},removeSession(session){this.sessions.delete(session.sessionKey);}
+});
+const seedWorker = Object.assign(new EventEmitter(),{isAlive:()=>true});
+const seedOwner = {worker:seedWorker,scheduleIdleStop(){}};
+const rootSession = leaseServer.ensureAgentView(seedOwner,{providerSessionId:'parent-lease',agentRunId:'seed',cwd:temporary});
+rootSession.parentOwner = null;
+const childSession = leaseServer.ensureAgentView(rootSession,{providerSessionId:'child-lease',agentRunId:'child',cwd:temporary});
+const leaseClient = {clientId:'lease-client',surface:'desktop',attachedSessionIds:new Set()};
+try {
+  rootSession.scheduleIdleStop();
+  childSession.attach(leaseClient);
+  await new Promise(resolve=>setTimeout(resolve,70));
+  assert.equal(rootSession.disposed,false,'An attached completed child must retain its restored owner past the idle deadline');
+  assert.equal(childSession.disposed,false);
+  assert.equal(rootSession.hasBackgroundAgentWork(),false,'Attached completed child does not pretend to be running background work');
+  childSession.detach(leaseClient);
+  assert.ok(rootSession.idleTimer,'Last child detach rearms owner cleanup');
+  await new Promise(resolve=>setTimeout(resolve,70));
+  assert.equal(rootSession.disposed,true,'Owner can be reclaimed after all child clients detach');
+} finally {
+  childSession.dispose('fixture cleanup');rootSession.dispose('fixture cleanup');
+  rmSync(temporary,{recursive:true,force:true,maxRetries:5,retryDelay:100});
+}
 console.log('Actual independent conversation attach: post-restart owner restore, client detach, original read-only scope, child routing, worker/deleted-owner rejection: passed');

@@ -1136,6 +1136,10 @@ class ServerOwnedSession {
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.clients.add(client);
+    if (this.parentOwner) {
+      clearTimeout(this.parentOwner.idleTimer);
+      this.parentOwner.idleTimer = null;
+    }
     if (client.surface === 'tui' && (!this.foregroundTuiClient || !this.clients.has(this.foregroundTuiClient))) this.foregroundTuiClient = client;
     client.attachedSessionIds.add(this.sessionKey);
     this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
@@ -1157,6 +1161,7 @@ class ServerOwnedSession {
     }
     this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     this.scheduleIdleStop();
+    this.parentOwner?.scheduleIdleStop();
   }
 
   async appendCanonicalMessage(input) {
@@ -1560,11 +1565,15 @@ class ServerOwnedSession {
     };
   }
 
+  hasAttachedChildClients() {
+    return !this.parentOwner && [...this.server.sessions.values()].some(view => view.parentOwner === this && !view.disposed && view.clients.size > 0);
+  }
+
   scheduleIdleStop() {
-    if (this.disposed || this.clients.size > 0 || this.activeRequests > 0 || this.hasBackgroundWork() || this.idleTimer) return;
+    if (this.disposed || this.clients.size > 0 || this.hasAttachedChildClients() || this.activeRequests > 0 || this.hasBackgroundWork() || this.idleTimer) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null;
-      if (this.clients.size > 0 || this.activeRequests > 0 || this.hasBackgroundWork()) return;
+      if (this.clients.size > 0 || this.hasAttachedChildClients() || this.activeRequests > 0 || this.hasBackgroundWork()) return;
       this.dispose("Detached session reached its idle timeout.");
       this.server.removeSession(this);
     }, this.idleTimeoutMs);

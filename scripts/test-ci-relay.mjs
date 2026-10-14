@@ -113,6 +113,17 @@ function fixture() {
         failNext(route, method = 'GET') { failures.set(`${method} ${route}`, 1) }, loseNextCommentResponse() { loseCommentResponse = true } }
 }
 const event = { kind: 'request', mode: 'preview', pr: 3, sha, requestId: 'delivery1' }
+const alarmRecovery = fixture()
+let alarmCalls = 0
+const scheduleAlarm = alarmRecovery.storage.setAlarm.bind(alarmRecovery.storage)
+alarmRecovery.storage.setAlarm = async at => { if (++alarmCalls === 1) throw new Error('Transient alarm outage'); await scheduleAlarm(at) }
+const retryAlarmDelivery = () => alarmRecovery.coordinator.fetch(new Request('https://relay.internal', {method:'POST',body:JSON.stringify({delivery:'alarm-retry',event})}))
+await assert.rejects(retryAlarmDelivery(), /Transient alarm outage/)
+assert.ok(await alarmRecovery.storage.get('queue:alarm-retry'), 'Failed scheduling leaves its request durable')
+assert.equal((await (await retryAlarmDelivery()).json()).queued, false)
+assert.equal(alarmCalls,2,'Duplicate durable deliveries re-arm an alarm after scheduling failed')
+await alarmRecovery.coordinator.alarm()
+assert.equal(alarmRecovery.calls.filter(call=>call.route.endsWith('/dispatches')).length,1)
 const f = fixture()
 const enqueue = delivery => f.coordinator.fetch(new Request('https://relay.internal', { method: 'POST', body: JSON.stringify({ delivery, event }) }))
 assert.equal((await (await enqueue('delivery1')).json()).queued, true)

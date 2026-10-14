@@ -90,7 +90,8 @@ export class RelayCoordinator {
                 ? { ...event, requestId: delivery, ...(event.retry ? { attempt: delivery } : {}) } : event)
             return true
         })
-        if (queued) await this.state.storage.setAlarm(Date.now() + 1)
+        // A durable duplicate may be retrying a failed post-commit alarm write.
+        if (queued || await this.state.storage.get(`queue:${delivery}`)) await this.state.storage.setAlarm(Date.now() + 1)
         return response({ queued }, 202)
     }
     async saveRecord(key, record) {
