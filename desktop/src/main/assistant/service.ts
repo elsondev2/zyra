@@ -1,3 +1,6 @@
+import { findSupersededRuntimeCompactionIds } from './compaction-reconciliation'
+import { VisualizationLibrary, resolveVisualizationLibraryContext } from './visualization-library'
+import type { GetVisualizationInput, ListVisualizationsInput } from '../../shared/visualization-resources'
 import { usageProjectionFallback } from '../../shared/assistant/usage-ownership'
 import { ensureCanonicalChatAvailability } from './canonical-chat-availability'
 import { projectThreadMessage } from '../../shared/assistant/thread-message'
@@ -1793,7 +1796,7 @@ export class AssistantService {
         return respondAssistantApprovalAction(this.actionDeps, input)
     }
 
-    async respondUserInput(input: { requestId: string; answers: Record<string, string | string[]> }) {
+    async respondUserInput(input: import('../../shared/assistant/contracts').AssistantUserInputResponseInput) {
         return respondAssistantUserInputAction(this.actionDeps, input)
     }
 
@@ -3682,6 +3685,54 @@ export class AssistantService {
         }
     }
 
+    private readonly visualizationLibrary = new VisualizationLibrary()
+
+    async listVisualizations(input: ListVisualizationsInput) {
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, String(input?.threadId || ''))
+        if (!record) throw new Error('Select a known chat to view its visualizations.')
+        const canonicalChatId = record.thread.providerThreadId
+        if (input.indexOlder === true && canonicalChatId) {
+            if (!this.canonicalHistoryState.has(canonicalChatId)) {
+                await this.loadCanonicalHistoryPage({
+                    canonicalChatId, project: this.getSessionRuntimeCwd(record.session, record.thread),
+                    key: createHash('sha256').update(canonicalChatId).digest('hex').slice(0, 24),
+                    sessionId: record.session.id, threadId: record.thread.id,
+                    before: null, fallbackCreatedAt: record.thread.createdAt
+                })
+            } else await this.loadOlderCanonicalHistory(canonicalChatId)
+        }
+        const context = await this.getVisualizationContext(record.session, record.thread)
+        const resources = await this.visualizationLibrary.list(context,
+            (after, limit) => this.persistence.readVisualizationCandidates(record.thread.id, after, limit),
+            input.scope === 'project' ? 'project' : 'thread')
+        const status = this.visualizationLibrary.status(context)
+        return { success: true as const, resources, ...status,
+            indexingOlder: status.indexingOlder || Boolean(canonicalChatId && (this.canonicalHistoryState.get(canonicalChatId)?.hasOlder ?? true))
+        }
+    }
+
+    async getVisualization(input: GetVisualizationInput) {
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, String(input?.threadId || ''))
+        if (!record) throw new Error('This visualization does not belong to a known chat workspace.')
+        const context = await this.getVisualizationContext(record.session, record.thread)
+        const resource = await this.visualizationLibrary.get(context, input.id, input.version)
+        return { success: true as const, resource }
+    }
+
+    private getVisualizationContext(session: AssistantSession, thread: AssistantThread) {
+        const workingRoot = this.getSessionRuntimeCwd(session, thread)
+        const home = session.chatScope?.roots.find(root => root.kind === 'project-home')?.path
+        return resolveVisualizationLibraryContext({
+            cwd: home || workingRoot,
+            threadId: thread.providerThreadId || thread.id,
+            roots: session.chatScope?.roots,
+            readRoots: home ? [workingRoot, ...(thread.cwd ? [thread.cwd] : []),
+                ...(session.chatScope?.roots.filter(root => root.kind === 'associated-folder').map(root => root.path) || [])] : []
+        })
+    }
+
     private getSessionRuntimeCwd(
         session: AssistantSession,
         thread: AssistantThread
@@ -3707,6 +3758,13 @@ export class AssistantService {
         this.state.snapshot = applyDomainEvent(this.state.snapshot, event)
         this.persistence.appendEvent(event, this.state.snapshot)
         this.queueBroadcastEvent(event)
+        if (type === 'thread.message.assistant.completed' && threadId) {
+            const record = findThreadRecord(this.state.snapshot, threadId)
+            const message = record?.thread.messages.find(entry => entry.id === payload['messageId'])
+            if (record && message && !message.streaming) {
+                void this.getVisualizationContext(record.session, record.thread).then(context => this.visualizationLibrary.importMessage(context, message)).catch(error => log.warn('[Visualizations] Could not save completed visualizations', error))
+            }
+        }
     }
 
     private queueBroadcastEvent(event: AssistantDomainEvent): void {
@@ -3771,7 +3829,7 @@ export class AssistantService {
             })
         } else if (event.type === 'activity' && event.payload.kind === 'context.compaction') {
             const status = String(event.payload.data?.['status'] || '')
-            if (status && status !== 'running') {
+            if (status && status !== 'running' && event.payload.data?.['replay'] !== true) {
                 this.captureAnalytics({
                     event: 'zyra_v1_chat',
                     properties: {
@@ -4416,6 +4474,7 @@ export function findSupersededCanonicalActivityIds(
 ): string[] {
     const canonicalIds = new Set(canonical.map((activity) => activity.id))
     const legacyIdSet = new Set(legacyIds)
+    const supersededCompactions = new Set(findSupersededRuntimeCompactionIds(existing, canonical))
     const canonicalBySignature = new Map<string, number[]>()
     const canonicalByDetail = new Map<string, number[]>()
     for (const activity of canonical) {
@@ -4426,7 +4485,7 @@ export function findSupersededCanonicalActivityIds(
     }
     return existing.flatMap((activity) => {
         if (canonicalIds.has(activity.id)) return []
-        if (legacyIdSet.has(activity.id)) return [activity.id]
+        if (legacyIdSet.has(activity.id) || supersededCompactions.has(activity.id)) return [activity.id]
         if (!activity.id.startsWith('assistant-internal-') && !activity.id.startsWith('assistant-activity-')) return []
         const timestamp = Date.parse(activity.createdAt)
         const candidates = [

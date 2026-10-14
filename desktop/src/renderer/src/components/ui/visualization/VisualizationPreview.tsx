@@ -8,7 +8,7 @@ import { copyTextToClipboard } from '@/lib/copy-text'
 import { APPEARANCE_FONT_FACES_CHANGED_EVENT, getAppearanceFontResource } from '@/lib/appearance-font-faces'
 import { ArtifactCreationState } from '../ArtifactCreationState'
 
-export const VisualizationPreview = memo(function VisualizationPreview({ block, streaming, timestamp }: { block: VisualizationBlock; streaming: boolean; timestamp?: ReactNode }) {
+export const VisualizationPreview = memo(function VisualizationPreview({ block, streaming, timestamp, hideHeader = false, fill = false }: { block: VisualizationBlock; streaming: boolean; timestamp?: ReactNode; hideHeader?: boolean; fill?: boolean }) {
     const root = useRef<HTMLElement>(null)
     const frame = useRef<HTMLIFrameElement>(null)
     const [channel] = useState(() => crypto.randomUUID())
@@ -81,20 +81,21 @@ export const VisualizationPreview = memo(function VisualizationPreview({ block, 
         anchor.click()
         window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     }
-    if (pending) return <figure ref={root} className="my-3 min-w-0" data-visualization-state={block.state} aria-busy><ArtifactCreationState kind="visualization" phase="creating"/></figure>
-    return <figure ref={root} className="my-3 min-w-0" data-visualization-state={block.state}>
-        <header className="mb-2 flex min-h-6 items-center gap-2 text-[12px] text-sparkle-text">
+    const surfaceClass = fill ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'my-3 min-w-0'
+    const reduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    return <figure ref={root} className={surfaceClass} data-visualization-state={block.state} aria-busy={pending || undefined}>
+        {!hideHeader && <header className="mb-2 flex min-h-6 items-center gap-2 text-[12px] text-sparkle-text">
             <span className="min-w-0 break-words font-medium">{block.title}</span>
             <span className="ml-auto flex shrink-0 items-center gap-1">
                 {block.state === 'complete' && timestamp ? <span className="whitespace-nowrap text-[11px] font-normal text-sparkle-text-muted">{timestamp}</span> : null}
                 {block.state === 'complete' && source ? <VisualizationInfo title={block.title} onCopy={copy} onDownload={save} /> : null}
             </span>
-        </header>
+        </header>}
         {notice ? <p role="status" className="mb-1 text-[11px] text-sparkle-text-muted">{notice}</p> : null}
-        {block.state === 'complete' ? source ? <div className="relative">
-            <iframe key={source} ref={frame} title={block.title} aria-description={block.summary || undefined} aria-hidden={measurement?.source !== source || undefined} src="./visualization-frame.html" onLoad={initializeFrame} data-visualization-ready={measurement?.source === source || undefined} sandbox="allow-scripts" referrerPolicy="no-referrer" loading="lazy" className="block w-full border-0 bg-transparent" style={{ height: previewHeight, colorScheme: 'normal', opacity: measurement?.source === source ? 1 : 0 }} />
-            {measurement?.source !== source ? <div className="absolute inset-0"><ArtifactCreationState kind="visualization" phase="loading" className="h-full"/></div> : null}
-        </div> : <div style={{ height: previewHeight }}><ArtifactCreationState kind="visualization" phase="loading" className="h-full"/></div>
+        {pending ? <div className={fill ? 'min-h-0 flex-1' : undefined} style={fill ? undefined : { height: block.height }}><ArtifactCreationState kind="visualization" phase="creating" className="h-full !min-h-0 !rounded-none !border-0"/></div> : block.state === 'complete' ? source ? <div className={fill ? 'relative min-h-0 flex-1' : 'relative'} style={fill ? undefined : { height: previewHeight, transition: reduced ? 'none' : 'height 240ms cubic-bezier(.16,1,.3,1)' }}>
+            <iframe key={source} ref={frame} title={block.title} aria-description={block.summary || undefined} aria-hidden={measurement?.source !== source || undefined} src="./visualization-frame.html" onLoad={initializeFrame} data-visualization-ready={measurement?.source === source || undefined} sandbox="allow-scripts" referrerPolicy="no-referrer" loading="lazy" className="block w-full border-0 bg-transparent" style={{ height: fill ? '100%' : previewHeight, colorScheme: 'normal', opacity: measurement?.source === source ? 1 : 0, transition: reduced ? 'none' : 'opacity 220ms ease-out' }} />
+            {measurement?.source !== source ? <div className="absolute inset-0"><ArtifactCreationState kind="visualization" phase="loading" className="h-full !min-h-0 !rounded-none !border-0"/></div> : null}
+        </div> : <div className={fill ? 'min-h-0 flex-1' : undefined} style={fill ? undefined : { height: block.height }}><ArtifactCreationState kind="visualization" phase="loading" className="h-full !min-h-0 !rounded-none !border-0"/></div>
             : <p role="status" className="text-[12px] text-sparkle-text-muted">{block.state === 'too-large' ? 'Visualization exceeds the preview size limit.' : 'Visualization incomplete.'}</p>}
     </figure>
 })

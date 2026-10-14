@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { AssistantCheckbox } from './AssistantCheckbox'
 import { reorderAssistantUserInputRanking } from './assistant-pending-user-input'
 
-const CUSTOM_ANSWER_LABEL = 'Something else'
+const CUSTOM_ANSWER_LABEL = 'Write my own answer'
 
 function getOptions(question: AssistantUserInputQuestion) {
     if (question.type === 'confirm' && question.options.length < 2) {
@@ -259,7 +259,7 @@ export function AssistantPendingUserInputQuestionField(props: {
                 )
             })}
 
-            {question.allowOther ? (
+            {(question.allowOther || question.type === 'single_select' || question.type === 'multi_select') ? (
                 <button
                     data-guided-animate
                     type="button"
@@ -269,7 +269,7 @@ export function AssistantPendingUserInputQuestionField(props: {
                     aria-pressed={showCustomComposer}
                 >
                     <span className={cn('inline-flex size-5 items-center justify-center rounded-full', showCustomComposer ? 'bg-sky-500/18 text-sky-200' : 'bg-white/[0.08]')}><SquarePen size={10} /></span>
-                    <span className="font-medium">{CUSTOM_ANSWER_LABEL}</span>
+                    <span className="font-medium">{question.placeholder || CUSTOM_ANSWER_LABEL}</span>
                 </button>
             ) : null}
         </div>

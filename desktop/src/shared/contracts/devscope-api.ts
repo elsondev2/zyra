@@ -693,6 +693,8 @@ export interface DevScopeAssistantApi {
     getHistoryAroundMessage: (input: AssistantGetHistoryAroundMessageInput) => Promise<DevScopeResult<AssistantHistoryAroundMessageResultPayload>>
     hydrateHistoryBody: (input: AssistantHydrateHistoryBodyInput) => Promise<DevScopeResult<AssistantHistoryBodyResultPayload>>
     getReviewIndex: (input: AssistantGetReviewIndexInput) => Promise<DevScopeResult<AssistantReviewIndexResultPayload>>
+    listVisualizations?: (input: import('../visualization-resources').ListVisualizationsInput) => Promise<DevScopeResult<{ resources: import('../visualization-resources').VisualizationResource[]; skippedCount?: number; indexingOlder?: boolean; readOnly?: boolean }>>
+    getVisualization?: (input: import('../visualization-resources').GetVisualizationInput) => Promise<DevScopeResult<{ resource: import('../visualization-resources').VisualizationResource }>>
     getTurnDetail: (input: AssistantGetTurnDetailInput) => Promise<DevScopeResult<AssistantTurnDetailResultPayload>>
     searchChats: (input: AssistantSearchChatsInput) => Promise<DevScopeResult<AssistantSearchChatsResultPayload>>
     searchTurns: (input: AssistantSearchTurnsInput) => Promise<DevScopeResult<AssistantSearchTurnsResultPayload>>
@@ -737,6 +739,7 @@ export interface DevScopeAssistantApi {
     onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
     getVoiceTranscriptionState: () => Promise<DevScopeResult<{ state: AssistantVoiceTranscriptionState }>>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<DevScopeResult<{ text: string }>>
+    cancelVoiceTranscription?: (requestId: string) => Promise<DevScopeResult<{ cancelled: boolean }>>
     saveVoiceHistory: (input: AssistantSaveVoiceHistoryInput) => Promise<DevScopeResult>
     listVoiceHistory: () => Promise<DevScopeResult<{ entries: AssistantVoiceHistoryEntry[] }>>
     getFailedVoiceRecording: (id: string) => Promise<DevScopeResult<{ audioBase64: string | null }>>

@@ -377,6 +377,21 @@ export class AssistantPersistence {
         return this.enqueue(() => readAssistantHistoryPage(this.requireDb(), input))
     }
 
+    async readVisualizationCandidates(threadId: string, after = 0, limit = 80) {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => {
+            const rows = this.requireDb().exec(`
+                SELECT rowid, id, text, created_at, turn_id FROM assistant_messages
+                WHERE thread_id = ? AND role = 'assistant' AND streaming = 0 AND rowid > ?
+                    AND (instr(text, '<visualization') > 0 OR instr(text, 'mermaid') > 0)
+                ORDER BY rowid ASC LIMIT ?
+            `, [threadId, Math.max(0, after), Math.min(80, Math.max(1, limit))])[0]?.values || []
+            return rows.map(row => ({ cursor: Number(row[0]), id: String(row[1]), text: String(row[2]), createdAt: String(row[3]), turnId: row[4] ? String(row[4]) : null }))
+        })
+    }
+
     async readHistoryAroundMessage(input: AssistantGetHistoryAroundMessageInput): Promise<AssistantHistoryAroundMessageResult> {
         await this.ensureInitialized()
         this.clearPendingEventTimer()

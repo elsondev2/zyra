@@ -677,13 +677,13 @@ assert.equal(
 
 const handleEvent = (
     event: unknown,
-    metadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
+    metadata?: { turnId?: string; localThreadId?: string; replay?: boolean; sequence?: number; occurredAt?: string }
 ): void => {
     const handleZyraEvent = runtime as unknown as {
         handleZyraEvent: (
             targetContext: typeof context,
             eventValue: unknown,
-            eventMetadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
+            eventMetadata?: { turnId?: string; localThreadId?: string; replay?: boolean; sequence?: number; occurredAt?: string }
         ) => void
     }
     handleZyraEvent.handleZyraEvent(context, event, metadata)
@@ -843,7 +843,7 @@ const internalCompletion = runtimeEvents.findLast((event) => (
 assert.equal(internalCompletion?.type === 'content.completed' ? internalCompletion.payload.text : null, thoughtMarkdown)
 assert.equal(context.activeAssistantItemId, null, 'message_end must clear the active assistant lifecycle')
 
-handleEvent({ type: 'compaction_start', reason: 'threshold' })
+handleEvent({ type: 'compaction_start', reason: 'threshold' }, { sequence: 199 })
 const runningCompactionEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.payload.kind === 'context.compaction')
 assert.equal(runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.summary : null, 'AUTO-COMPACTING')
 assert.equal(runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.data?.['status'] : null, 'running')
@@ -859,7 +859,7 @@ handleEvent({
     },
     aborted: false,
     willRetry: false
-})
+}, { sequence: 200 })
 const completedCompactionEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.payload.kind === 'context.compaction')
 assert.equal(completedCompactionEvent?.type === 'activity' ? completedCompactionEvent.payload.summary : null, 'AUTO-COMPACTED')
 assert.equal(completedCompactionEvent?.type === 'activity' ? completedCompactionEvent.payload.data?.['status'] : null, 'completed')
@@ -1788,6 +1788,43 @@ assert.equal(projectedCompactionActivities.length, 1, 'start, replay, and end mu
 assert.equal(projectedCompactionActivities[0]?.payload?.['status'], 'completed')
 assert.equal(projectedCompactionActivities[0]?.payload?.['startedAt'], runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.data?.['startedAt'] : null)
 assert.equal(typeof projectedCompactionActivities[0]?.payload?.['completedAt'], 'string')
+
+if (completedCompactionEvent?.type === 'activity') {
+    const completion = completedCompactionEvent.payload.data || {}
+    const usageBeforeReplays = runtimeEvents.filter(event => event.type === 'thread.token-usage.updated').length
+    for (let visit = 0; visit < 4; visit++) {
+        const offset = runtimeEvents.length
+        handleEvent({ type: 'compaction_start', reason: 'threshold' }, { replay: true, sequence: 199, occurredAt: runningCompactionEvent!.createdAt, turnId: `revisit-alias-${visit}` })
+        handleEvent({ type: 'compaction_end', reason: 'threshold', result: {
+            firstKeptEntryId: completion.firstKeptEntryId,
+            tokensBefore: completion.tokensBefore,
+            estimatedTokensAfter: completion.estimatedTokensAfter
+        } }, { replay: true, sequence: 200, occurredAt: completedCompactionEvent.createdAt, turnId: `revisit-alias-${visit}` })
+        for (const replay of runtimeEvents.slice(offset).filter(event => event.type === 'activity')) handleAssistantRuntimeEvent(replay, projectedDeps)
+    }
+    const rows = findProjectedRecord(context.localThreadId)?.thread.activities.filter(activity => activity.kind === 'context.compaction') || []
+    assert.equal(rows.length, 1, 'four completed-compaction replays on revisiting a chat must retain one row')
+    assert.equal(rows[0].payload?.status, 'completed', 'replayed starts cannot reopen settled compaction')
+    assert.equal(runtimeEvents.filter(event => event.type === 'thread.token-usage.updated').length, usageBeforeReplays, 'historical compaction replay cannot reset current context usage')
+    assert.equal(rows[0].id, projectedCompactionActivities[0].id, 'reopening retains the original compaction identity')
+    assert.equal(rows[0].turnId, projectedCompactionActivities[0].turnId, 'provider replay aliases cannot move the compaction to another turn')
+    const canonicalCompaction: AssistantThread['activities'][number] = {
+        id: 'shared-activity:compaction-replay-fixture', kind: 'context-compaction', tone: 'info', summary: 'Context compacted', createdAt: rows[0].createdAt,
+        payload: { canonicalEntry: { type: 'compaction', firstKeptEntryId: completion.firstKeptEntryId, tokensBefore: completion.tokensBefore } }
+    }
+    const oldCopies = [rows[0], { ...rows[0], id: 'zyra-context-compaction-old-copy' }]
+    assert.deepEqual(findSupersededCanonicalActivityIds(oldCopies, [canonicalCompaction], []), oldCopies.map(activity => activity.id), 'canonical reopening cleans previously accumulated runtime compaction copies')
+    assert.deepEqual(findSupersededCanonicalActivityIds([canonicalCompaction, { ...canonicalCompaction, id: 'shared-activity:distinct-compaction' }], [canonicalCompaction], []), [], 'cleanup leaves separate canonical compactions intact')
+    const offset = runtimeEvents.length
+    handleEvent({ type: 'compaction_start', reason: 'manual' })
+    handleEvent({ type: 'compaction_end', reason: 'manual', result: {
+        firstKeptEntryId: completion.firstKeptEntryId,
+        tokensBefore: completion.tokensBefore,
+        estimatedTokensAfter: completion.estimatedTokensAfter
+    } })
+    for (const live of runtimeEvents.slice(offset).filter(event => event.type === 'activity')) handleAssistantRuntimeEvent(live, projectedDeps)
+    assert.equal(findProjectedRecord(context.localThreadId)?.thread.activities.filter(activity => activity.kind === 'context.compaction').length, 2, 'a genuine new compaction remains separate even with equal metrics')
+}
 
 handleAssistantRuntimeEvent(observedRunningCommand, projectedDeps)
 const runningProjectedActivity = findProjectedRecord(context.localThreadId)?.thread.activities.find((activity) => activity.id === 'zyra-tool-tool-observed-command')

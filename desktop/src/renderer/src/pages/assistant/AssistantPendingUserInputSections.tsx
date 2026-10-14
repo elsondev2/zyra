@@ -137,13 +137,11 @@ export function AssistantPendingUserInputFooter(props: {
     isReviewStep: boolean
     returnToReview: boolean
     canAdvance: boolean
-    canSkip: boolean
     actionLabel: string
     onBack: () => void
-    onSkip: () => void
     onAdvance: () => void
 }) {
-    const { composerController, composerCapabilities, responding, progressQuestionIndex, isReviewStep, returnToReview, canAdvance, canSkip, actionLabel, onBack, onSkip, onAdvance } = props
+    const { composerController, composerCapabilities, responding, progressQuestionIndex, isReviewStep, returnToReview, canAdvance, actionLabel, onBack, onAdvance } = props
     return (
         <div className={cn(
             'flex min-w-0 items-center justify-between px-1.5 pb-1.5 [container-type:inline-size] sm:px-2 sm:pb-2',
@@ -188,7 +186,6 @@ export function AssistantPendingUserInputFooter(props: {
             />
             <div className={cn('flex shrink-0 items-center', isReviewStep ? 'gap-1.5' : 'gap-2')}>
                 {(progressQuestionIndex > 0 || isReviewStep) ? <button type="button" disabled={responding} onClick={onBack} className={cn('inline-flex items-center justify-center gap-1 rounded-full bg-white/[0.04] py-2 text-[12px] font-medium text-sparkle-text-secondary transition-colors hover:bg-white/[0.06] hover:text-sparkle-text disabled:opacity-50', isReviewStep ? 'min-w-[80px] px-3' : 'min-w-[92px] px-3.5')}><ArrowLeft size={12} />{returnToReview ? 'Review' : 'Back'}</button> : null}
-                {canSkip ? <button type="button" disabled={responding} onClick={onSkip} className="rounded-full px-3 py-2 text-[12px] font-medium text-sparkle-text-muted transition-colors hover:bg-white/[0.04] hover:text-sparkle-text">Skip</button> : null}
                 <ComposerSendButton disabled={composerCapabilities.sendDisabled} isConnected={composerController.isConnected} isThinking={false} canSend={canAdvance} label={actionLabel} onSend={() => void onAdvance()} />
             </div>
         </div>

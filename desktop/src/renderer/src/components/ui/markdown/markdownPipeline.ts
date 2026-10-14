@@ -63,6 +63,24 @@ const MARKDOWN_SANITIZE_SCHEMA = {
 
 const RAW_HTML_TAG_REGEX = /<\/?[A-Za-z][^>\n]*>/
 
+/** Drive letters are filesystem roots, not arbitrary URL protocols. Normalize
+ * them before the sanitizer checks schemes; leave its protocol allowlist intact. */
+function rehypeWindowsFileUrls() {
+    return (tree: Root) => {
+        const visit = (node: Root['children'][number]) => {
+            if (node.type !== 'element') return
+            for (const key of ['href', 'src']) {
+                const value = node.properties[key]
+                if (typeof value === 'string' && /^[a-z]:[\\/]/i.test(value)) {
+                    node.properties[key] = `file:///${value.replace(/\\/g, '/')}`
+                }
+            }
+            for (const child of node.children) visit(child as Root['children'][number])
+        }
+        for (const child of tree.children) visit(child)
+    }
+}
+
 function createMarkdownProcessor(hasRawHtml: boolean) {
     const processor = unified()
         .use(remarkParse)
@@ -72,7 +90,7 @@ function createMarkdownProcessor(hasRawHtml: boolean) {
         .use(remarkPreserveCodeMeta)
         .use(remarkRehype, { allowDangerousHtml: hasRawHtml })
     if (hasRawHtml) processor.use(rehypeRaw)
-    return processor.use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA).use(rehypeSafeMath).freeze()
+    return processor.use(rehypeWindowsFileUrls).use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA).use(rehypeSafeMath).freeze()
 }
 
 const standardMarkdownProcessor = createMarkdownProcessor(false)

@@ -70,7 +70,7 @@ const markdown = (text: string) => text.trim() ? <p>{text}</p> : null
 const renderRow = (row: TimelineDisplayRow) => row.kind === 'message' ? <VisualizationMessage content={row.message.text} streaming={false} renderMarkdown={markdown} /> : null
 const render = (data: TimelineDisplayRow[]) => flushSync(() => root.render(<AssistantVirtualTimeline
     rows={data} windowKey="visual-scroll" listRef={listRef} scrollContainerRef={scrollRef}
-    contentInsetEndAdjustment={0} isWorking={false} selectionHydrating={false}
+    contentInsetEndAdjustment={0} isWorking={data.some(row => row.id === 'new-prompt')} selectionHydrating={false}
     hasOlder={false} hasNewer={false} loadingOlder={false} loadingNewer={false}
     loadOlderError={null} loadNewerError={null} renderRow={renderRow}
 />))

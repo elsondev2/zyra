@@ -135,6 +135,9 @@ const service = {
     }
 } as unknown as AssistantService
 
+let transcriptionStarted!: () => void
+const transcriptionPending = new Promise<void>(resolve => { transcriptionStarted = resolve })
+const transcriptionRequestId = '11111111-1111-4111-8111-111111111111'
 const bridge = new BrowserAssistantBridge({
     service,
     allowedOrigins: new Set([allowedOrigin]),
@@ -160,7 +163,13 @@ const bridge = new BrowserAssistantBridge({
         signedIn: true,
         message: null
     }),
-    transcribeVoice: async () => 'transcript'
+    transcribeVoice: async (input, signal) => {
+        if (input.requestId !== transcriptionRequestId) return 'transcript'
+        return new Promise((_resolve, reject) => {
+            signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+            transcriptionStarted()
+        })
+    }
 })
 
 const address = await bridge.start()
@@ -449,6 +458,17 @@ try {
         })
     }).then((response) => response.json()) as any
     assert.equal(sendAfterReconnect.value.success, true, 'a brief Voice event-stream reconnect must preserve tab ownership')
+    const pendingTranscription = fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST', headers, body: JSON.stringify({ method: 'transcribeVoice', clientId: voiceClientId, args: [{ requestId: transcriptionRequestId, audioBase64: 'fixture', mimeType: 'audio/wav', sampleRateHz: 24000, durationMs: 1000 }] })
+    })
+    await transcriptionPending
+    const cancelFor = async (clientId: string) => (await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST', headers, body: JSON.stringify({ method: 'cancelVoiceTranscription', clientId, args: [transcriptionRequestId] })
+    })).json()
+    assert.equal((await cancelFor('browser-voice-client-0002')).value.cancelled, false, 'another browser client cannot cancel a dictation upload')
+    assert.equal((await cancelFor(voiceClientId)).value.cancelled, true, 'the owning browser client can cancel a long transcription')
+    assert.match((await (await pendingTranscription).json()).value.error, /cancelled/)
+
     const stopVoice = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
         method: 'POST',
         headers,

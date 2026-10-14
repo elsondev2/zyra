@@ -17,6 +17,7 @@ import {
 } from './assistant-composer-session-state'
 import type { AssistantComposerPreferenceEffort } from './assistant-composer-preferences'
 import type { ComposerContextFile } from './assistant-composer-types'
+import { subscribeCodeContext } from './assistant-code-context'
 import type { InlineMentionTag } from './assistant-composer-inline-mentions'
 
 function isLegacyFallbackModel(model: string | null | undefined): boolean {
@@ -155,6 +156,11 @@ export function useAssistantComposerControllerEffects(input: {
         setMentionCanScrollDown,
         setIsCompactFooter
     } = input
+
+    useEffect(() => {
+        if (!sessionId || loadedSessionId !== sessionId) return
+        return subscribeCodeContext(sessionId, file => setContextFiles(current => current.some(item => item.id === file.id) ? current : [...current, file]))
+    }, [sessionId, loadedSessionId, setContextFiles])
 
     useLayoutEffect(() => {
         const initializationKey = `${sessionId || 'no-session'}:${resetStateToken || 'stable'}`

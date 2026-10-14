@@ -1,14 +1,37 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Plus } from 'lucide-react'
-import type { AssistantPendingUserInput, AssistantRuntimeMode, AssistantUserInputAnswer } from '@shared/assistant/contracts'
+import {
+    memo,
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+    type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
+import { ClipboardPaste, Plus } from 'lucide-react'
+import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
+import {
+    buildTextAttachmentFromPaste,
+    getContextFileMeta,
+    isLargeTextPaste,
+    toKbLabel,
+} from './assistant-composer-utils'
+import { ComposerAttachmentsShelf } from './AssistantComposerSections'
+import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
+import { isAssistantUserInputAnswerComplete } from './assistant-pending-user-input'
+import type {
+    AssistantPendingUserInput,
+    AssistantRuntimeMode,
+    AssistantUserInputAnswer,
+} from '@shared/assistant/contracts'
 import { cn } from '@/lib/utils'
 import {
     AssistantPendingUserInputFooter,
-    AssistantPendingUserInputStage
+    AssistantPendingUserInputStage,
 } from './AssistantPendingUserInputSections'
 import {
     deriveAssistantComposerCapabilities,
-    deriveAssistantComposerDisabledReason
+    deriveAssistantComposerDisabledReason,
 } from './assistant-composer-capabilities'
 import { useAssistantComposerController } from './useAssistantComposerController'
 import type { AssistantComposerSendOptions, ComposerContextFile } from './assistant-composer-types'
@@ -18,18 +41,22 @@ import {
     findFirstUnansweredAssistantPendingUserInputQuestionIndex,
     formatAssistantUserInputAnswer,
     isAssistantUserInputMultiValueQuestion,
-    type AssistantPendingUserInputDraftAnswers
+    type AssistantPendingUserInputDraftAnswers,
 } from './assistant-pending-user-input'
 import {
     clearAssistantPendingUserInputDraft,
     readAssistantPendingUserInputDraft,
-    writeAssistantPendingUserInputDraft
+    writeAssistantPendingUserInputDraft,
 } from './assistant-pending-user-input-drafts'
 
 export const AssistantPendingUserInputPanel = memo(function AssistantPendingUserInputPanel(props: {
     pendingUserInputs: AssistantPendingUserInput[]
     responding: boolean
-    onRespond: (requestId: string, answers: Record<string, AssistantUserInputAnswer>) => Promise<void> | void
+    onRespond: (
+        requestId: string,
+        answers: Record<string, AssistantUserInputAnswer>,
+        files?: ComposerContextFile[],
+    ) => Promise<void> | void
     sessionId: string | null
     assistantAvailable: boolean
     assistantConnected: boolean
@@ -44,13 +71,38 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     isConnecting?: boolean
 }) {
     const { pendingUserInputs, responding, onRespond } = props
-    const activePrompt = pendingUserInputs[0] || null
+    const activePrompt = useMemo(() => {
+        const prompt = pendingUserInputs[0]
+        return prompt
+            ? {
+                  ...prompt,
+                  questions: prompt.questions.map((question) => ({
+                      ...question,
+                      allowOther:
+                          question.allowOther ||
+                          question.type === 'single_select' ||
+                          question.type === 'multi_select',
+                  })),
+              }
+            : null
+    }, [pendingUserInputs])
+    const questionComposerSessionId = activePrompt
+        ? `question:${props.sessionId}:${activePrompt.requestId}`
+        : null
+    const submittedComposerSessionIdRef = useRef<string | null>(null)
+    const submittingRef = useRef(false)
+    const [pasteError, setPasteError] = useState<string | null>(null)
+    const [attaching, setAttaching] = useState(0)
     const composerDisabledReason = deriveAssistantComposerDisabledReason({
-        sessionId: props.sessionId
+        sessionId: props.sessionId,
     })
-    const [draftAnswersByRequestId, setDraftAnswersByRequestId] = useState<Record<string, AssistantPendingUserInputDraftAnswers>>({})
+    const [draftAnswersByRequestId, setDraftAnswersByRequestId] = useState<
+        Record<string, AssistantPendingUserInputDraftAnswers>
+    >({})
     const [questionIndex, setQuestionIndex] = useState(0)
-    const [customQuestionIdByRequestId, setCustomQuestionIdByRequestId] = useState<Record<string, string | null>>({})
+    const [customQuestionIdByRequestId, setCustomQuestionIdByRequestId] = useState<
+        Record<string, string | null>
+    >({})
     const [questionShellOpen, setQuestionShellOpen] = useState(false)
     const [questionShellMinimized, setQuestionShellMinimized] = useState(false)
     const [returnToReview, setReturnToReview] = useState(false)
@@ -60,8 +112,12 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     const suppressDraftPersistenceRequestIdRef = useRef<string | null>(null)
 
     const composerController = useAssistantComposerController({
-        sessionId: props.sessionId,
-        onSend: async (_prompt: string, _contextFiles: ComposerContextFile[], _options: AssistantComposerSendOptions) => false,
+        sessionId: questionComposerSessionId,
+        onSend: async (
+            _prompt: string,
+            _contextFiles: ComposerContextFile[],
+            _options: AssistantComposerSendOptions,
+        ) => false,
         disabled: Boolean(composerDisabledReason),
         disabledReason: composerDisabledReason,
         allowEmptySubmit: true,
@@ -79,18 +135,21 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         interactionMode: props.interactionMode,
         projectPath: props.selectedProjectPath,
         acceptBrowserAnnotations: false,
-        submitLabel: 'Continue'
+        onBlockedSend: (message) => setPasteError(message),
+        submitLabel: 'Continue',
     })
 
     const activeDraftAnswers = useMemo(() => {
         if (!activePrompt) return {}
-        return draftAnswersByRequestId[activePrompt.requestId]
-            || readAssistantPendingUserInputDraft(activePrompt.requestId)?.answers
-            || {}
+        return (
+            draftAnswersByRequestId[activePrompt.requestId] ||
+            readAssistantPendingUserInputDraft(activePrompt.requestId)?.answers ||
+            {}
+        )
     }, [activePrompt, draftAnswersByRequestId])
     const progress = useMemo(
         () => deriveAssistantPendingUserInputProgress(activePrompt, activeDraftAnswers, questionIndex),
-        [activeDraftAnswers, activePrompt, questionIndex]
+        [activeDraftAnswers, activePrompt, questionIndex],
     )
 
     useLayoutEffect(() => {
@@ -102,15 +161,20 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             return
         }
         const persistedDraft = readAssistantPendingUserInputDraft(activePrompt.requestId)
-        const restoredAnswers = draftAnswersByRequestId[activePrompt.requestId] || persistedDraft?.answers || {}
+        const restoredAnswers =
+            draftAnswersByRequestId[activePrompt.requestId] || persistedDraft?.answers || {}
         const restoredQuestionIndex = persistedDraft
             ? Math.min(persistedDraft.questionIndex, activePrompt.questions.length)
-            : findFirstUnansweredAssistantPendingUserInputQuestionIndex(activePrompt.questions, restoredAnswers)
+            : findFirstUnansweredAssistantPendingUserInputQuestionIndex(
+                  activePrompt.questions,
+                  restoredAnswers,
+              )
         suppressDraftPersistenceRequestIdRef.current = activePrompt.requestId
         setDraftAnswersByRequestId((current) => ({ ...current, [activePrompt.requestId]: restoredAnswers }))
         setCustomQuestionIdByRequestId((current) => ({
             ...current,
-            [activePrompt.requestId]: persistedDraft?.customQuestionId ?? current[activePrompt.requestId] ?? null
+            [activePrompt.requestId]:
+                persistedDraft?.customQuestionId ?? current[activePrompt.requestId] ?? null,
         }))
         setQuestionShellOpen(false)
         setQuestionShellMinimized(false)
@@ -129,7 +193,7 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             answers: activeDraftAnswers,
             questionIndex,
             customQuestionId: customQuestionIdByRequestId[activePrompt.requestId] || null,
-            returnToReview
+            returnToReview,
         })
     }, [activeDraftAnswers, activePrompt, customQuestionIdByRequestId, questionIndex, returnToReview])
 
@@ -143,104 +207,195 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         return () => window.cancelAnimationFrame(frame)
     }, [activePrompt?.requestId])
 
-    const updateDraftAnswer = useCallback((questionId: string, answer: AssistantUserInputAnswer) => {
-        if (!activePrompt) return
-        setDraftAnswersByRequestId((current) => ({
-            ...current,
-            [activePrompt.requestId]: {
-                ...(current[activePrompt.requestId] || {}),
-                [questionId]: answer
-            }
-        }))
-    }, [activePrompt])
-
-    const handleSelectOption = useCallback((questionId: string, optionLabel: string) => {
-        updateDraftAnswer(questionId, optionLabel)
-        if (!activePrompt) return
-        setCustomQuestionIdByRequestId((current) => ({
-            ...current,
-            [activePrompt.requestId]: current[activePrompt.requestId] === questionId ? null : current[activePrompt.requestId] ?? null
-        }))
-    }, [activePrompt, updateDraftAnswer])
-
-    const handleToggleOption = useCallback((questionId: string, optionLabel: string) => {
-        if (!activePrompt) return
-        const question = activePrompt.questions.find((candidate) => candidate.id === questionId)
-        if (!question) return
-        setDraftAnswersByRequestId((current) => {
-            const requestAnswers = current[activePrompt.requestId] || {}
-            const currentValue = requestAnswers[questionId]
-            const values = Array.isArray(currentValue) ? currentValue : []
-            const nextValues = values.includes(optionLabel)
-                ? values.filter((entry) => entry !== optionLabel)
-                : [...values, optionLabel]
-            if (question.maxSelections !== undefined && nextValues.length > question.maxSelections) return current
-            return {
+    const updateDraftAnswer = useCallback(
+        (questionId: string, answer: AssistantUserInputAnswer) => {
+            if (!activePrompt) return
+            setDraftAnswersByRequestId((current) => ({
                 ...current,
-                [activePrompt.requestId]: { ...requestAnswers, [questionId]: nextValues }
+                [activePrompt.requestId]: {
+                    ...(current[activePrompt.requestId] || {}),
+                    [questionId]: answer,
+                },
+            }))
+        },
+        [activePrompt],
+    )
+
+    const handleSelectOption = useCallback(
+        (questionId: string, optionLabel: string) => {
+            updateDraftAnswer(questionId, optionLabel)
+            if (!activePrompt) return
+            setCustomQuestionIdByRequestId((current) => ({
+                ...current,
+                [activePrompt.requestId]:
+                    current[activePrompt.requestId] === questionId
+                        ? null
+                        : (current[activePrompt.requestId] ?? null),
+            }))
+        },
+        [activePrompt, updateDraftAnswer],
+    )
+
+    const handleToggleOption = useCallback(
+        (questionId: string, optionLabel: string) => {
+            if (!activePrompt) return
+            const question = activePrompt.questions.find((candidate) => candidate.id === questionId)
+            if (!question) return
+            setDraftAnswersByRequestId((current) => {
+                const requestAnswers = current[activePrompt.requestId] || {}
+                const currentValue = requestAnswers[questionId]
+                const values = Array.isArray(currentValue) ? currentValue : []
+                const nextValues = values.includes(optionLabel)
+                    ? values.filter((entry) => entry !== optionLabel)
+                    : [...values, optionLabel]
+                if (question.maxSelections !== undefined && nextValues.length > question.maxSelections)
+                    return current
+                return {
+                    ...current,
+                    [activePrompt.requestId]: { ...requestAnswers, [questionId]: nextValues },
+                }
+            })
+        },
+        [activePrompt],
+    )
+
+    const handleSelectCustom = useCallback(
+        (questionId: string) => {
+            if (!activePrompt) return
+            const question = activePrompt.questions.find((candidate) => candidate.id === questionId) || null
+            if (!question) return
+            setCustomQuestionIdByRequestId((current) => ({
+                ...current,
+                [activePrompt.requestId]: questionId,
+            }))
+            setDraftAnswersByRequestId((current) => {
+                const currentAnswers = current[activePrompt.requestId] || {}
+                const currentAnswer = currentAnswers[questionId]
+                const nextAnswer = isAssistantUserInputMultiValueQuestion(question)
+                    ? Array.isArray(currentAnswer)
+                        ? currentAnswer
+                        : []
+                    : question?.options.some((option) => option.label === currentAnswer)
+                      ? ''
+                      : String(currentAnswer || '')
+                return {
+                    ...current,
+                    [activePrompt.requestId]: { ...currentAnswers, [questionId]: nextAnswer },
+                }
+            })
+            window.requestAnimationFrame(() => {
+                const textarea = customTextareaRef.current
+                if (!textarea) return
+                textarea.focus()
+                const cursor = textarea.value.length
+                textarea.setSelectionRange(cursor, cursor)
+            })
+        },
+        [activePrompt],
+    )
+
+    const handleCustomAnswerChange = useCallback(
+        (questionId: string, value: string) => {
+            if (!activePrompt) return
+            const question = activePrompt.questions.find((candidate) => candidate.id === questionId)
+            if (!question) return
+            if (question.type !== 'text' && question.type !== 'number' && question.type !== 'date') {
+                setCustomQuestionIdByRequestId((current) =>
+                    current[activePrompt.requestId] === questionId
+                        ? current
+                        : { ...current, [activePrompt.requestId]: questionId },
+                )
             }
-        })
-    }, [activePrompt])
+            setDraftAnswersByRequestId((current) => {
+                const requestAnswers = current[activePrompt.requestId] || {}
+                const currentAnswer = requestAnswers[questionId]
+                const answer = isAssistantUserInputMultiValueQuestion(question)
+                    ? [
+                          ...(Array.isArray(currentAnswer) ? currentAnswer : []).filter((entry) =>
+                              question.options.some((option) => option.label === entry),
+                          ),
+                          ...(value.trim() ? [value] : []),
+                      ]
+                    : value
+                return { ...current, [activePrompt.requestId]: { ...requestAnswers, [questionId]: answer } }
+            })
+        },
+        [activePrompt],
+    )
 
-    const handleSelectCustom = useCallback((questionId: string) => {
-        if (!activePrompt) return
-        const question = activePrompt.questions.find((candidate) => candidate.id === questionId) || null
-        if (!question) return
-        setCustomQuestionIdByRequestId((current) => ({ ...current, [activePrompt.requestId]: questionId }))
-        setDraftAnswersByRequestId((current) => {
-            const currentAnswers = current[activePrompt.requestId] || {}
-            const currentAnswer = currentAnswers[questionId]
-            const nextAnswer = isAssistantUserInputMultiValueQuestion(question)
-                ? Array.isArray(currentAnswer) ? currentAnswer : []
-                : question?.options.some((option) => option.label === currentAnswer) ? '' : String(currentAnswer || '')
-            return { ...current, [activePrompt.requestId]: { ...currentAnswers, [questionId]: nextAnswer } }
-        })
-        window.requestAnimationFrame(() => {
-            const textarea = customTextareaRef.current
-            if (!textarea) return
-            textarea.focus()
-            const cursor = textarea.value.length
-            textarea.setSelectionRange(cursor, cursor)
-        })
-    }, [activePrompt])
+    const handleRankingChange = useCallback(
+        (questionId: string, value: string[]) => {
+            updateDraftAnswer(questionId, value)
+        },
+        [updateDraftAnswer],
+    )
 
-    const handleCustomAnswerChange = useCallback((questionId: string, value: string) => {
-        if (!activePrompt) return
-        const question = activePrompt.questions.find((candidate) => candidate.id === questionId)
-        if (!question) return
-        if (question.type !== 'text' && question.type !== 'number' && question.type !== 'date') {
-            setCustomQuestionIdByRequestId((current) => ({ ...current, [activePrompt.requestId]: questionId }))
-        }
-        setDraftAnswersByRequestId((current) => {
-            const requestAnswers = current[activePrompt.requestId] || {}
-            const currentAnswer = requestAnswers[questionId]
-            const answer = isAssistantUserInputMultiValueQuestion(question)
-                ? [
-                    ...(Array.isArray(currentAnswer) ? currentAnswer : []).filter((entry) => question.options.some((option) => option.label === entry)),
-                    ...(value.trim() ? [value] : [])
-                ]
-                : value
-            return { ...current, [activePrompt.requestId]: { ...requestAnswers, [questionId]: answer } }
-        })
-    }, [activePrompt])
+    const stepQuestion = progress?.activeQuestion || null
+    const hasAttachments = composerController.contextFiles.length > 0
+    const emptyStepAnswer = !stepQuestion || !String(activeDraftAnswers[stepQuestion.id] || '').trim()
+    const attachmentAnswer =
+        stepQuestion &&
+        hasAttachments &&
+        emptyStepAnswer &&
+        (stepQuestion.type === 'text' || stepQuestion.allowOther)
+            ? isAssistantUserInputMultiValueQuestion(stepQuestion)
+                ? ['See attached files.']
+                : 'See attached files.'
+            : undefined
+    const attachmentAnswerComplete = Boolean(
+        stepQuestion &&
+            attachmentAnswer &&
+            isAssistantUserInputAnswerComplete(stepQuestion, attachmentAnswer, true),
+    )
+    const canSkipStep = stepQuestion?.required === false && emptyStepAnswer && !hasAttachments
+    const canAdvanceStep = Boolean(
+        !attaching && (progress?.hasAnswer || attachmentAnswerComplete || canSkipStep),
+    )
 
-    const handleRankingChange = useCallback((questionId: string, value: string[]) => {
-        updateDraftAnswer(questionId, value)
-    }, [updateDraftAnswer])
+    useEffect(
+        () => () => {
+            if (
+                questionComposerSessionId &&
+                submittedComposerSessionIdRef.current === questionComposerSessionId
+            )
+                clearAssistantComposerSessionState(questionComposerSessionId)
+        },
+        [questionComposerSessionId],
+    )
 
     const handleAdvance = useCallback(async () => {
-        if (!activePrompt || !progress) return
-        const resolvedAnswers = buildAssistantPendingUserInputAnswers(activePrompt.questions, activeDraftAnswers)
+        if (!activePrompt || !progress || attaching || responding || submittingRef.current) return
+        const nextAnswers =
+            !progress.isReviewStep && stepQuestion && !progress.hasAnswer
+                ? {
+                      ...activeDraftAnswers,
+                      [stepQuestion.id]: attachmentAnswerComplete
+                          ? attachmentAnswer!
+                          : isAssistantUserInputMultiValueQuestion(stepQuestion)
+                            ? []
+                            : '',
+                  }
+                : activeDraftAnswers
+        const resolvedAnswers = buildAssistantPendingUserInputAnswers(activePrompt.questions, nextAnswers)
 
         if (progress.isReviewStep) {
             if (!resolvedAnswers) return
-            await onRespond(activePrompt.requestId, resolvedAnswers)
-            suppressDraftPersistenceRequestIdRef.current = activePrompt.requestId
-            clearAssistantPendingUserInputDraft(activePrompt.requestId)
+            submittingRef.current = true
+            try {
+                await onRespond(activePrompt.requestId, resolvedAnswers, composerController.contextFiles)
+                submittedComposerSessionIdRef.current = questionComposerSessionId
+                if (questionComposerSessionId) clearAssistantComposerSessionState(questionComposerSessionId)
+                suppressDraftPersistenceRequestIdRef.current = activePrompt.requestId
+                clearAssistantPendingUserInputDraft(activePrompt.requestId)
+            } finally {
+                submittingRef.current = false
+            }
             return
         }
 
-        if (!progress.hasAnswer) return
+        if (!canAdvanceStep) return
+        if (stepQuestion && nextAnswers !== activeDraftAnswers)
+            updateDraftAnswer(stepQuestion.id, nextAnswers[stepQuestion.id])
         if (returnToReview) {
             setQuestionIndex(activePrompt.questions.length)
             setReturnToReview(false)
@@ -251,13 +406,31 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             return
         }
         setQuestionIndex(activePrompt.questions.length)
-    }, [activeDraftAnswers, activePrompt, onRespond, progress])
+    }, [
+        activeDraftAnswers,
+        activePrompt,
+        attachmentAnswer,
+        attachmentAnswerComplete,
+        attaching,
+        canAdvanceStep,
+        composerController.contextFiles,
+        onRespond,
+        progress,
+        questionComposerSessionId,
+        responding,
+        returnToReview,
+        stepQuestion,
+        updateDraftAnswer,
+    ])
 
     useEffect(() => {
         const activeQuestion = progress?.activeQuestion
         if (!activePrompt || !activeQuestion || activeQuestion.type !== 'ranking') return
         if (Object.prototype.hasOwnProperty.call(activeDraftAnswers, activeQuestion.id)) return
-        updateDraftAnswer(activeQuestion.id, activeQuestion.options.map((option) => option.label))
+        updateDraftAnswer(
+            activeQuestion.id,
+            activeQuestion.options.map((option) => option.label),
+        )
     }, [activeDraftAnswers, activePrompt, progress?.activeQuestion, updateDraftAnswer])
 
     useEffect(() => {
@@ -267,14 +440,22 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.metaKey || event.ctrlKey || event.altKey) return
             const target = event.target
-            if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement || target instanceof HTMLSelectElement) return
+            if (
+                target instanceof HTMLTextAreaElement ||
+                target instanceof HTMLInputElement ||
+                target instanceof HTMLSelectElement
+            )
+                return
 
             const digit = Number.parseInt(event.key, 10)
             if (!Number.isNaN(digit) && digit >= 1 && digit <= 9) {
                 const option = activeQuestion.options[digit - 1]
                 if (!option) return
                 event.preventDefault()
-                if (activeQuestion.type === 'multi_select' || (activeQuestion.type === 'file_select' && activeQuestion.multiple !== false)) {
+                if (
+                    activeQuestion.type === 'multi_select' ||
+                    (activeQuestion.type === 'file_select' && activeQuestion.multiple !== false)
+                ) {
                     handleToggleOption(activeQuestion.id, option.label)
                 } else {
                     handleSelectOption(activeQuestion.id, option.label)
@@ -282,7 +463,7 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                 return
             }
 
-            if ((event.key === 'Enter' || event.key === 'NumpadEnter') && progress.hasAnswer) {
+            if ((event.key === 'Enter' || event.key === 'NumpadEnter') && canAdvanceStep) {
                 event.preventDefault()
                 void handleAdvance()
             }
@@ -290,17 +471,26 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
 
         document.addEventListener('keydown', handleKeyDown)
         return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [activePrompt, handleAdvance, handleSelectOption, handleToggleOption, progress, responding])
+    }, [
+        activePrompt,
+        canAdvanceStep,
+        handleAdvance,
+        handleSelectOption,
+        handleToggleOption,
+        progress,
+        responding,
+    ])
 
     useLayoutEffect(() => {
         if (!progress?.activeQuestion || !activePrompt) return
         const activeCustomQuestionId = customQuestionIdByRequestId[activePrompt.requestId] || null
-        const shouldFocusCustomComposer = progress.activeQuestion.type === 'text'
-            || activeCustomQuestionId === progress.activeQuestion.id
-            || progress.isCustomAnswer
+        const shouldFocusCustomComposer =
+            progress.activeQuestion.type === 'text' ||
+            activeCustomQuestionId === progress.activeQuestion.id ||
+            progress.isCustomAnswer
         if (!shouldFocusCustomComposer) return
         const textarea = customTextareaRef.current
-        if (!textarea) return
+        if (!textarea || document.activeElement === textarea) return
         textarea.focus()
         const cursor = textarea.value.length
         textarea.setSelectionRange(cursor, cursor)
@@ -313,30 +503,46 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 40), 180)}px`
     }, [progress?.selectedAnswer, progress?.isReviewStep])
 
-    if (!activePrompt || !progress) return null
-
-    const activeQuestion = progress.activeQuestion
-    const isReviewStep = progress.isReviewStep
-    const activeCustomQuestionId = customQuestionIdByRequestId[activePrompt.requestId] || null
+    const activeQuestion = progress?.activeQuestion || null
+    const isReviewStep = progress?.isReviewStep ?? false
+    const activeCustomQuestionId = activePrompt
+        ? customQuestionIdByRequestId[activePrompt.requestId] || null
+        : null
     const showCustomComposer = Boolean(
-        activeQuestion
-        && activeQuestion.allowOther
-        && (activeCustomQuestionId === activeQuestion.id || progress.isCustomAnswer)
+        activeQuestion &&
+            activeQuestion.allowOther &&
+            (activeCustomQuestionId === activeQuestion.id || progress?.isCustomAnswer),
     )
     const showAnswerComposer = Boolean(activeQuestion?.type === 'text' || showCustomComposer)
-    const customAnswerValue = activeQuestion && Array.isArray(progress.selectedAnswer)
-        ? progress.selectedAnswer.find((entry) => !activeQuestion.options.some((option) => option.label === entry)) || ''
-        : typeof progress.selectedAnswer === 'string' ? progress.selectedAnswer : ''
-    const animatedStageKey = isReviewStep
-        ? `${activePrompt.requestId}:review`
-        : `${activePrompt.requestId}:${activeQuestion?.id || questionIndex}`
-    const answeredAllQuestions = progress.answeredQuestionCount >= activePrompt.questions.length
-    const actionLabel = responding ? 'Submitting' : isReviewStep ? 'Submit' : returnToReview ? 'Back to review' : 'Continue'
-    const canAdvance = isReviewStep ? answeredAllQuestions : progress.hasAnswer
-    const reviewAnswers = activePrompt.questions.map((question, index) => ({
+    const customAnswerValue =
+        activeQuestion && Array.isArray(progress?.selectedAnswer)
+            ? progress.selectedAnswer.find(
+                  (entry) => !activeQuestion.options.some((option) => option.label === entry),
+              ) || ''
+            : typeof progress?.selectedAnswer === 'string' &&
+                (activeQuestion?.type === 'text' ||
+                    progress.isCustomAnswer ||
+                    activeCustomQuestionId === activeQuestion?.id)
+              ? progress.selectedAnswer
+              : ''
+    const animatedStageKey = `${activePrompt?.requestId}:${isReviewStep ? 'review' : activeQuestion?.id || questionIndex}`
+    const answeredAllQuestions = Boolean(
+        progress && activePrompt && progress.answeredQuestionCount >= activePrompt.questions.length,
+    )
+    const actionLabel = responding
+        ? 'Submitting'
+        : isReviewStep
+          ? 'Submit'
+          : attaching
+            ? 'Adding files'
+            : canSkipStep
+              ? 'Skip'
+              : 'Continue'
+    const canAdvance = isReviewStep ? answeredAllQuestions && !attaching : canAdvanceStep
+    const reviewAnswers = (activePrompt?.questions || []).map((question, index) => ({
         question,
         index,
-        answer: formatAssistantUserInputAnswer(question, activeDraftAnswers[question.id])
+        answer: formatAssistantUserInputAnswer(question, activeDraftAnswers[question.id]),
     }))
     const composerCapabilities = deriveAssistantComposerCapabilities({
         mode: 'guided',
@@ -349,38 +555,43 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         allowEmptySubmit: false,
         hasContent: canAdvance,
         controlsLocked: true,
-        attachmentsLocked: true,
+        attachmentsLocked: false,
         isResponding: responding,
-        isReviewStep
+        isReviewStep,
     })
-    const composerStatusToneClass = composerCapabilities.tone === 'warning'
-        ? 'text-amber-200'
-        : composerCapabilities.tone === 'info'
-            ? 'text-sky-200'
-            : 'text-sparkle-text-secondary'
-    const composerStatusDotClass = composerCapabilities.tone === 'warning'
-        ? 'bg-amber-300/80'
-        : composerCapabilities.tone === 'info'
-            ? 'bg-sky-300/80'
-            : 'bg-white/35'
+    const composerStatusToneClass =
+        composerCapabilities.tone === 'warning'
+            ? 'text-amber-200'
+            : composerCapabilities.tone === 'info'
+              ? 'text-sky-200'
+              : 'text-sparkle-text-secondary'
+    const composerStatusDotClass =
+        composerCapabilities.tone === 'warning'
+            ? 'bg-amber-300/80'
+            : composerCapabilities.tone === 'info'
+              ? 'bg-sky-300/80'
+              : 'bg-white/35'
 
-    const handleCustomTextareaKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-        event.stopPropagation()
-        if ('nativeEvent' in event && 'stopImmediatePropagation' in event.nativeEvent) {
-            event.nativeEvent.stopImmediatePropagation()
-        }
-        if (!activeQuestion || isReviewStep || responding) return
-        if (event.ctrlKey || event.metaKey || event.altKey) return
-        if (event.key !== 'Enter' && event.key !== 'NumpadEnter') return
-        if (event.shiftKey) return
-        if (!progress.hasAnswer) return
-        event.preventDefault()
-        void handleAdvance()
-    }, [activeQuestion, handleAdvance, isReviewStep, progress.hasAnswer, responding])
+    const handleCustomTextareaKeyDown = useCallback(
+        (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+            event.stopPropagation()
+            if ('nativeEvent' in event && 'stopImmediatePropagation' in event.nativeEvent) {
+                event.nativeEvent.stopImmediatePropagation()
+            }
+            if (!activeQuestion || isReviewStep || responding) return
+            if (event.ctrlKey || event.metaKey || event.altKey) return
+            if (event.key !== 'Enter' && event.key !== 'NumpadEnter') return
+            if (event.shiftKey) return
+            if (!canAdvanceStep) return
+            event.preventDefault()
+            void handleAdvance()
+        },
+        [activeQuestion, canAdvanceStep, handleAdvance, isReviewStep, responding],
+    )
 
     useEffect(() => {
         const container = animatedStepRef.current
-        if (!container) return
+        if (!container || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
         const animatedNodes = Array.from(container.querySelectorAll<HTMLElement>('[data-guided-animate]'))
         animatedNodes.forEach((node, index) => {
@@ -389,23 +600,50 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                     {
                         opacity: 0,
                         transform: 'translateY(14px) scale(0.982)',
-                        filter: 'blur(3px)'
+                        filter: 'blur(3px)',
                     },
                     {
                         opacity: 1,
                         transform: 'translateY(0) scale(1)',
-                        filter: 'blur(0px)'
-                    }
+                        filter: 'blur(0px)',
+                    },
                 ],
                 {
                     duration: 280 + index * 48,
                     easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-                    fill: 'both'
-                }
+                    fill: 'both',
+                },
             )
         })
     }, [animatedStageKey])
 
+    const attachQuestionFile = async (file: File, source: 'paste' | 'manual') => {
+        setAttaching((count) => count + 1)
+        try {
+            await composerController.attachFile(file, source)
+        } finally {
+            setAttaching((count) => count - 1)
+        }
+    }
+
+    const pasteAnswerText = (value: string) => {
+        if (!activeQuestion) return
+        if (isLargeTextPaste(value)) composerController.upsertAttachment(buildTextAttachmentFromPaste(value))
+        else {
+            const start = customTextareaRef.current?.selectionStart ?? customAnswerValue.length
+            const end = customTextareaRef.current?.selectionEnd ?? start
+            handleCustomAnswerChange(
+                activeQuestion.id,
+                customAnswerValue.slice(0, start) + value + customAnswerValue.slice(end),
+            )
+            window.requestAnimationFrame(() => {
+                customTextareaRef.current?.focus({ preventScroll: true })
+                customTextareaRef.current?.setSelectionRange(start + value.length, start + value.length)
+            })
+        }
+    }
+
+    if (!activePrompt || !progress) return null
     return (
         <div className="mx-auto w-full max-w-3xl" data-assistant-composer-hitbox="true">
             <div ref={composerController.composerRootRef} className="pointer-events-auto relative z-10">
@@ -425,7 +663,7 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                                 hasAnswer: progress.hasAnswer,
                                 isReviewStep: progress.isReviewStep,
                                 isCustomAnswer: progress.isCustomAnswer,
-                                selectedAnswer: progress.selectedAnswer
+                                selectedAnswer: progress.selectedAnswer,
                             }}
                             reviewAnswers={reviewAnswers}
                             responding={responding}
@@ -437,7 +675,9 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                             setQuestionIndex={setQuestionIndex}
                             setReturnToReview={setReturnToReview}
                             setExpandedOptionKey={setExpandedOptionKey}
-                            onToggleQuestionShellMinimized={() => setQuestionShellMinimized((current) => !current)}
+                            onToggleQuestionShellMinimized={() =>
+                                setQuestionShellMinimized((current) => !current)
+                            }
                             handleSelectOption={handleSelectOption}
                             handleToggleOption={handleToggleOption}
                             handleSelectCustom={handleSelectCustom}
@@ -446,45 +686,142 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                             handleCustomTextareaKeyDown={handleCustomTextareaKeyDown}
                         />
 
-                        {showAnswerComposer ? (
+                        {showAnswerComposer ||
+                        activeQuestion?.type === 'single_select' ||
+                        activeQuestion?.type === 'multi_select' ? (
                             <div data-guided-animate className="flex min-h-10 items-start gap-2">
                                 <button
                                     type="button"
                                     disabled={composerCapabilities.attachDisabled}
-                                    className="mt-0.5 rounded-full p-1 text-sparkle-text-muted opacity-35"
-                                    title={composerCapabilities.attachDisabled
-                                        ? composerCapabilities.detailLabel || 'Attachments are disabled right now'
-                                        : 'Attach files'}
+                                    onClick={() => composerController.filePickerRef.current?.click()}
+                                    aria-label="Attach files"
+                                    className="mt-0.5 rounded-full p-1 text-sparkle-text-muted hover:text-sparkle-text disabled:opacity-35"
+                                    title={
+                                        composerCapabilities.attachDisabled
+                                            ? composerCapabilities.detailLabel ||
+                                              'Attachments are disabled right now'
+                                            : 'Attach files'
+                                    }
                                 >
                                     <Plus size={18} />
                                 </button>
+                                <button
+                                    type="button"
+                                    aria-label="Paste"
+                                    title="Paste text or an image"
+                                    disabled={composerCapabilities.attachDisabled}
+                                    onClick={async () => {
+                                        setPasteError(null)
+                                        try {
+                                            if (navigator.clipboard.read) {
+                                                const items = await navigator.clipboard.read()
+                                                for (const item of items) {
+                                                    const imageType = item.types.find((type) =>
+                                                        type.startsWith('image/'),
+                                                    )
+                                                    if (imageType)
+                                                        await attachQuestionFile(
+                                                            new File(
+                                                                [await item.getType(imageType)],
+                                                                'pasted-image.png',
+                                                                { type: imageType },
+                                                            ),
+                                                            'paste',
+                                                        )
+                                                    else if (
+                                                        item.types.includes('text/plain') &&
+                                                        activeQuestion
+                                                    )
+                                                        pasteAnswerText(
+                                                            await (await item.getType('text/plain')).text(),
+                                                        )
+                                                }
+                                            } else if (activeQuestion)
+                                                pasteAnswerText(await navigator.clipboard.readText())
+                                        } catch {
+                                            setPasteError(
+                                                'Could not read the clipboard. Use Ctrl+V in the answer field.',
+                                            )
+                                        }
+                                    }}
+                                    className="mt-0.5 rounded-full p-1 text-sparkle-text-muted hover:text-sparkle-text disabled:opacity-35"
+                                >
+                                    <ClipboardPaste size={18} />
+                                </button>
                                 <div className="relative min-w-0 flex-1">
-                                    <textarea
-                                        ref={customTextareaRef}
-                                        autoFocus
-                                        rows={1}
-                                        value={customAnswerValue}
-                                        onFocus={() => {
-                                            if (activeQuestion?.allowOther && activeQuestion.type !== 'text') handleSelectCustom(activeQuestion.id)
-                                        }}
-                                        onChange={(event) => {
-                                            if (!activeQuestion) return
-                                            handleCustomAnswerChange(activeQuestion.id, event.target.value)
-                                        }}
-                                        onKeyDownCapture={(event) => {
-                                            event.stopPropagation()
-                                            if ('nativeEvent' in event && 'stopImmediatePropagation' in event.nativeEvent) {
-                                                event.nativeEvent.stopImmediatePropagation()
+                                    {showAnswerComposer ? (
+                                        <textarea
+                                            key={activeQuestion?.id}
+                                            ref={customTextareaRef}
+                                            autoFocus
+                                            rows={1}
+                                            value={customAnswerValue}
+                                            onFocus={() => {
+                                                if (
+                                                    activeQuestion?.allowOther &&
+                                                    activeQuestion.type !== 'text' &&
+                                                    activeCustomQuestionId !== activeQuestion.id
+                                                )
+                                                    handleSelectCustom(activeQuestion.id)
+                                            }}
+                                            onChange={(event) => {
+                                                if (!activeQuestion) return
+                                                handleCustomAnswerChange(
+                                                    activeQuestion.id,
+                                                    event.target.value,
+                                                )
+                                            }}
+                                            onKeyDownCapture={(event) => {
+                                                event.stopPropagation()
+                                                if (
+                                                    'nativeEvent' in event &&
+                                                    'stopImmediatePropagation' in event.nativeEvent
+                                                ) {
+                                                    event.nativeEvent.stopImmediatePropagation()
+                                                }
+                                            }}
+                                            onKeyDown={handleCustomTextareaKeyDown}
+                                            onPaste={composerController.handlePaste}
+                                            aria-label="Your answer"
+                                            className="relative min-h-10 w-full resize-none overflow-y-auto bg-transparent pl-[3px] pr-2 text-[14px] leading-[1.45rem] text-sparkle-text outline-none placeholder:text-sparkle-text/20 selection:bg-white/15"
+                                            placeholder={
+                                                activeQuestion?.placeholder ||
+                                                composerCapabilities.placeholder
                                             }
-                                        }}
-                                        onKeyDown={handleCustomTextareaKeyDown}
-                                        className="relative min-h-10 w-full resize-none overflow-y-auto bg-transparent pl-[3px] pr-2 text-[14px] leading-[1.45rem] text-sparkle-text outline-none placeholder:text-sparkle-text/20 selection:bg-white/15"
-                                        placeholder={activeQuestion?.placeholder || composerCapabilities.placeholder}
-                                        disabled={composerCapabilities.inputDisabled}
-                                    />
+                                            disabled={composerCapabilities.inputDisabled}
+                                        />
+                                    ) : (
+                                        <span className="block py-2 text-xs text-sparkle-text-muted">
+                                            Paste a response or attach files
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         ) : null}
+                        {pasteError ? (
+                            <p role="alert" className="text-xs text-amber-300">
+                                {pasteError}
+                            </p>
+                        ) : null}
+                        <input
+                            ref={composerController.filePickerRef}
+                            type="file"
+                            multiple
+                            className="hidden"
+                            aria-label="Choose answer attachments"
+                            onChange={(event) => {
+                                for (const file of Array.from(event.currentTarget.files || []))
+                                    void attachQuestionFile(file, 'manual')
+                                event.currentTarget.value = ''
+                            }}
+                        />
+                        <ComposerAttachmentsShelf
+                            contextFiles={composerController.contextFiles}
+                            compact
+                            removingAttachmentIds={composerController.removingAttachmentIds}
+                            onPreview={(file) => composerController.setPreviewAttachment(file)}
+                            onRemove={composerController.removeAttachment}
+                        />
                     </div>
 
                     <AssistantPendingUserInputFooter
@@ -495,7 +832,6 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                         isReviewStep={isReviewStep}
                         returnToReview={returnToReview}
                         canAdvance={canAdvance}
-                        canSkip={!isReviewStep && activeQuestion?.required === false}
                         actionLabel={actionLabel}
                         onBack={() => {
                             if (returnToReview) {
@@ -505,21 +841,22 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                             }
                             setQuestionIndex((current) => Math.max(0, current - 1))
                         }}
-                        onSkip={() => {
-                            if (!activeQuestion) return
-                            updateDraftAnswer(activeQuestion.id, isAssistantUserInputMultiValueQuestion(activeQuestion) ? [] : '')
-                            if (returnToReview) {
-                                setQuestionIndex(activePrompt.questions.length)
-                                setReturnToReview(false)
-                            } else if (progress.questionIndex < activePrompt.questions.length - 1) {
-                                setQuestionIndex(progress.questionIndex + 1)
-                            } else {
-                                setQuestionIndex(activePrompt.questions.length)
-                            }
-                        }}
                         onAdvance={() => void handleAdvance()}
                     />
                 </div>
+                <AssistantAttachmentPreviewModal
+                    file={composerController.previewAttachment}
+                    meta={
+                        composerController.previewAttachment
+                            ? getContextFileMeta(composerController.previewAttachment)
+                            : null
+                    }
+                    contentType={composerController.previewAttachment?.mimeType || ''}
+                    sizeLabel={toKbLabel(composerController.previewAttachment?.sizeBytes)}
+                    showFormattingWarning={false}
+                    onUpdatePastedText={composerController.updateContextFileText}
+                    onClose={() => composerController.setPreviewAttachment(null)}
+                />
             </div>
         </div>
     )

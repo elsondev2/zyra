@@ -19,6 +19,7 @@ import { AssistantQuestionResponse } from './AssistantQuestionResponse'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import {
     CollapsibleUserMessageBody,
+    AssistantMessageMarkdown,
     CompletedAssistantMarkdown,
     StreamingAssistantMarkdown,
     StreamingAssistantText
@@ -780,23 +781,12 @@ export const TimelineMessage = memo(({
                             </div>
                         </div>
                     ) : null
-                ) : presentationActive ? (
-                    <StreamingAssistantMarkdown
-                        content={renderedAssistantText || ' '}
-                        cacheKey={`${message.id}:stream`}
-                        fadeStreamingText={assistantTextStreamingMode === 'stream'}
-                        timestamp={timestamp}
-                        renderFooter={renderMessageFooter}
-                        filePath={filePath || undefined}
-                        onInternalLinkClick={onInternalLinkClick}
-                        onLinkNotice={onLinkNotice}
-                        className={ASSISTANT_MARKDOWN_CLASS_NAME}
-                        mediaMode="none"
-                    />
                 ) : (
-                    <CompletedAssistantMarkdown
-                        content={renderedAssistantText}
-                        cacheKey={`${message.id}:${message.updatedAt}:${renderedAssistantText.length}`}
+                    <AssistantMessageMarkdown
+                        content={renderedAssistantText || ' '}
+                        cacheKey={message.id}
+                        streaming={presentationActive}
+                        fadeStreamingText={assistantTextStreamingMode === 'stream'}
                         timestamp={timestamp}
                         renderFooter={renderMessageFooter}
                         filePath={filePath || undefined}
@@ -804,7 +794,7 @@ export const TimelineMessage = memo(({
                         onInternalLinkClick={onInternalLinkClick}
                         onLinkNotice={onLinkNotice}
                         className={ASSISTANT_MARKDOWN_CLASS_NAME}
-                        mediaMode="images-and-videos"
+                        mediaMode={presentationActive ? 'none' : 'images-and-videos'}
                     />
                 )}
             </div>

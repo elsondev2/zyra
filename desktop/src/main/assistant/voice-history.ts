@@ -79,6 +79,7 @@ export async function transcribeVoiceAndSave(input: AssistantTranscribeVoiceInpu
         await saveVoiceHistory({ engine: 'codex', recording: input, transcript: text })
         return text
     } catch (error) {
+        if (signal?.aborted) throw error
         await saveVoiceHistory({ engine: 'codex', recording: input, error: error instanceof Error ? error.message : 'Voice transcription failed.' })
         throw error
     }

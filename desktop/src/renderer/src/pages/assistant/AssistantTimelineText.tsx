@@ -54,6 +54,13 @@ export const StreamingAssistantText = memo(function StreamingAssistantText({
     )
 })
 
+/** Keep artifact children mounted when narration settles; only text rendering changes. */
+export const AssistantMessageMarkdown = memo(function AssistantMessageMarkdown(props: StreamingAssistantMarkdownProps & { streaming: boolean; deferInitialRender?: boolean }) {
+    return <VisualizationMessage content={props.content} streaming={props.streaming} timestamp={props.timestamp} renderFooter={props.renderFooter} renderMarkdown={(content, key) => props.streaming
+        ? <StreamingAssistantMarkdownText {...props} content={content} cacheKey={key ? `${props.cacheKey}:${key}` : props.cacheKey}/>
+        : <CompletedAssistantMarkdownText {...props} content={content} cacheKey={key ? `${props.cacheKey}:${key}` : props.cacheKey}/>}/>
+})
+
 export const StreamingAssistantMarkdown = memo(function StreamingAssistantMarkdown(props: StreamingAssistantMarkdownProps) {
     return <VisualizationMessage content={props.content} streaming timestamp={props.timestamp} renderFooter={props.renderFooter} renderMarkdown={(content, key) => <StreamingAssistantMarkdownText {...props} content={content} cacheKey={key ? `${props.cacheKey}:${key}` : props.cacheKey} />} />
 })

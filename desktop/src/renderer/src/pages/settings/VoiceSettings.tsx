@@ -4,6 +4,7 @@ import { AudioLines, ChevronLeft, ChevronRight, LoaderCircle, Pause, Play } from
 import { INSTRUCTOR_REALTIME_VOICES } from '@shared/assistant/contracts'
 import { VoiceTranscriptionSettings } from './VoiceTranscriptionSettings'
 import { VoiceHistorySettings } from './VoiceHistorySettings'
+import { VoiceAgentStatusSetting } from './VoiceAgentStatusSetting'
 import {
     readInstructorVoicePreferences,
     writeInstructorVoicePreferences,
@@ -137,6 +138,10 @@ function VoiceConversationSettings() {
                 ) : (
                     <div className="px-4 py-5 text-[12px] text-[var(--settings-text-secondary)]">{connectionError ? 'ChatGPT connection status is unavailable.' : chatGptConnected === null ? 'Checking ChatGPT connection…' : 'Connect a ChatGPT account to use voice conversation.'}</div>
                 )}
+            </SettingsSection>
+
+            <SettingsSection title="Conversation">
+                <VoiceAgentStatusSetting />
             </SettingsSection>
 
             <div className="flex items-center justify-between gap-4 px-1 text-[11px]">

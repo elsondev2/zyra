@@ -1,15 +1,34 @@
 ---
 name: visualize
-description: Create full-width, themed inline HTML/CSS/SVG visualizations in Zyra chat, with native view/data toggles, collapsed supporting details and optional motion. Use proactively when charts, comparisons, diagrams, timelines or visual explanations help. Users need not name the skill. Prefer plain text for simple answers.
+description: Create saved, versioned HTML/SVG visuals, Mermaid diagrams and interactive 3D scenes in Zyra chat and the Resources inspector. Use proactively when charts, comparisons, diagrams, timelines or spatial explanations help. Users need not name the skill. Prefer plain text for simple answers.
 ---
 
 # Visualize in chat
 
 Use a visualization when it communicates something that prose would make harder to see. Do not decorate every reply. Use real data, label illustrative data, and never invent measurements. Optimize for reading a chat thread, not presenting a standalone dashboard.
 
-## Message format
+## Saved resources and pinned versions
 
-Emit this directly in an assistant response, outside code fences. The opening tag must occupy one line; the closing tag must occupy its own line. Put normal explanatory text before or after it.
+Before authoring a saved resource, read [the authoring guide](references/authoring.md) for the create/read/revise/embed workflow, readable source conventions, and complete HTML and 3D examples. Keep source indented and organized; never minify it for chat.
+
+Prefer the `visualization` tool for new visuals that users may reopen, edit or reuse. Resources are saved under the saved Project home's `.zyra/visualizations`, or under the current workspace for standalone/projectless sessions. A saved Project's resources remain available when its working folder changes. Explicit references can also resolve CLI resources in associated workspaces. The tool owns the storage root and thread identity. Do not provide an arbitrary root or thread ID.
+
+1. `create` with `kind` (`html`, `mermaid` or `scene3d`), concise `title`, meaningful `summary`, `source` and optional `height` (160–640).
+2. `embed` with the returned UUID and an explicit version. Emit its returned line directly, outside code fences:
+
+```html
+<visualization-ref id="00000000-0000-4000-8000-000000000000" version="1" />
+```
+
+Use only the real returned UUID. A reference is pinned: later edits do not change an earlier message. `list` finds saved resources; `read` returns source and revision history. To edit, read first, then `revise` with the resource ID, complete replacement source, `baseVersion` and `expectedVersion`. `baseVersion` is the parent snapshot (an older version creates a branch); `expectedVersion` is the currently observed latest revision. On a conflict, read again and reconcile; do not silently replace newer work. Revisions append permanently and retain a change note. Version source files are immutable snapshots; do not edit them directly. Use `revise` to save changes. Limits are 128 revisions per resource, 500 project resources, 8 MiB per resource manifest and 16 MiB of project manifests. A limit error leaves prior versions unchanged. Crashed-writer locks recover only after 30 seconds and a proven dead owner PID; live, reused or unknown owners fail closed. Recovery removes private manifest temp files and uncommitted source revisions, never committed snapshots. An unknown old-format lock or interrupted recovery claim requires explicit repair after confirming no writer is running.
+
+HTML remains scriptless and self-contained under the rules below. New edits reject malformed SVG numbers, path operands and point lists; calculate coordinates before submitting. Mermaid accepts diagram text without JavaScript, click/link actions or init directives. Existing completed inline HTML blocks and Mermaid fences are imported with message provenance; fenced HTML examples stay examples.
+
+For `scene3d`, prefer the tool's typed `scene` object parameter so JSON does not need to be escaped inside another JSON string. It accepts the same data as a JSON `source` string. Supply `schemaVersion:1`, an `objects` array (maximum 128), optional `camera:{position:[x,y,z],target:[x,y,z]}`, optional hex `background`, and optional boolean `grid`. Each object has a unique safe `id` and `type` (`box`, `sphere`, `pyramid`, `cylinder`, `torus`, `group`). Optional fields: `name`, `position`, `rotation` (radians), `scale`, hex `color`, `opacity` (0–1), `parentId` (a group), `size:[x,y,z]`, `radius`, `height`. Vectors must be finite; positions/camera coordinates are bounded to ±10000, rotation to ±3600, positive scale to 0.001–100, and geometry to 0.001–1000. Colors use #RGB or #RRGGBB. Parent graphs must be acyclic; combined ancestor scales may not exceed 100. Use declarative objects, never scripts, arbitrary models or external textures. Direct `<scene3d>` message blocks are not supported; save and embed the resource.
+
+## Legacy inline message format
+
+Completed inline blocks remain supported and are saved with provenance. Emit this directly in an assistant response, outside code fences. The opening tag must occupy one line; the closing tag must occupy its own line. Put normal explanatory text before or after it.
 
 ```html
 <visualization title="Delivery stages" summary="Research, build, and verify form three sequential stages." height="240">

@@ -154,7 +154,7 @@ When editing UI, explain the design idea in terms of the current screen, not as 
 
 ## Visual explanations
 
-When a chart, diagram, comparison, or other visual would make the answer clearer, read the built-in `visualize` skill and use it without requiring a user command. Prefer plain text when a visual adds little. Its explicit `<visualization>` blocks render in supported Zyra chat surfaces; the terminal presents their title and summary. Supply accessible text, use the surface theme by default, and never claim a preview was inspected without checking it.
+When a chart, diagram, comparison, or other visual would make the answer clearer, read the built-in `visualize` skill and use it without requiring a user command. Prefer plain text when a visual adds little. Prefer the `visualization` tool to save reusable HTML/SVG visuals, Mermaid diagrams, and declarative 3D scenes. Read a saved version before revising it; changes append versions instead of replacing history. Embed only the real UUID and explicit version returned by the tool. Saved references and legacy `<visualization>` blocks render in supported Zyra chat surfaces; the terminal presents a readable fallback. Supply accessible text, use the surface theme by default, and never claim a preview was inspected without checking it.
 
 ## Desktop/Mobile Parity
 

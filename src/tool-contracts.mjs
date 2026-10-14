@@ -8,3 +8,8 @@ export const MANAGED_BASH_CONTROL_CONTRACT = Object.freeze({
 });
 export const ZYRA_WEB_SEARCH_TOOL_NAME = "web_search";
 export const ZYRA_WEB_FETCH_TOOL_NAME = "web_fetch";
+export const ZYRA_VISUALIZATION_TOOL_NAME = "visualization";
+/** Unknown actions fail closed as writes. The gate must apply filesystem scope to the actual project-local store. */
+export function visualizationActionPermission(action) {
+  return ['list', 'read', 'embed'].includes(action) ? 'read' : 'write';
+}

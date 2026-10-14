@@ -47,7 +47,8 @@ assert.equal(questions[2].minSelections, 2)
 const legacy = toUserInputQuestions([{ id: 'legacy', header: 'Legacy', question: 'Old question', options: [{ label: 'One', description: 'First' }] }], asRecord, asString)
 assert.equal(legacy[0].type, 'single_select', 'legacy option questions remain readable')
 assert.equal(legacy[0].required, true)
-assert.equal(legacy[0].allowOther, false)
+assert.equal(legacy[0].allowOther, true, 'choice questions always offer an editable alternative, including legacy prompts')
+assert.equal(toUserInputQuestions([{ id: 'escape', header: 'Choice', question: 'Choose or explain', type: 'single_select', allowOther: false, options: [{ label: 'A' }] }], asRecord, asString)[0].allowOther, true, 'an agent flag cannot remove the user custom-response escape hatch')
 const deduplicatedRankingQuestion = toUserInputQuestions([{
     id: 'deduplicated-ranking',
     header: 'Ranking',
@@ -246,6 +247,10 @@ const reconciledResponse = reconcileAssistantUserInputResponseMessageIds(
     }]
 )
 assert.equal(reconciledResponse[0]?.responseMessageId, 'pi-message:answer', 'canonical replay repairs the durable question-to-answer-message link')
+const evidenceMessage = { id: 'canonical-evidence', role: 'user' as const, text: `${continuationPrompt}\n\nSupporting files for these answers:\n\nAttached files (1):\n1. notes.txt [text]\ncontent:\nExact notes.`, streaming: false, createdAt: '2026-08-19T00:01:00.200Z', updatedAt: '2026-08-19T00:01:00.200Z' }
+const evidenceInput = { ...reconciledResponse[0], responseMessageId: null }
+assert.equal(reconcileAssistantUserInputResponseMessageIds([evidenceInput], [], [evidenceMessage])[0].responseMessageId, evidenceMessage.id, 'canonical replay links answers with supporting attachments even when the optimistic message is absent')
+assert.equal(reconcileAssistantUserInputResponseMessageIds([evidenceInput], [], [{ ...evidenceMessage, text: `${continuationPrompt}\n\nAn unrelated follow-up.` }])[0].responseMessageId, null, 'ordinary follow-ups are not mistaken for attached question responses')
 
 const turn = buildTurnParams(thread, 'hello', undefined, undefined, 'plan')
 const collaborationMode = turn.collaborationMode as { mode: string; settings: { developer_instructions: string } }
@@ -269,8 +274,8 @@ assert.match(questionFieldSource, /DndContext[\s\S]*SortableContext/, 'ranking a
 assert.match(questionFieldSource, /CSS\.Transform\.toString\(transform\)/, 'the complete ranking row follows the pointer')
 assert.match(pendingQuestionSource, /AssistantPendingUserInputStage/, 'the existing guided questionnaire remains the composer-owned input')
 assert.match(pendingQuestionSource, /data-assistant-composer-hitbox="true"/, 'questionnaire wheel and pointer input stay inside the composer surface')
-assert.match(pendingQuestionSource, /onRespond\(activePrompt\.requestId, resolvedAnswers\)/, 'finishing the composer questionnaire submits one linked answer set')
-assert.match(pendingQuestionSource, /responding \? 'Submitting' : isReviewStep \? 'Submit'/, 'the settled review step exposes a direct Submit action')
+assert.match(pendingQuestionSource, /onRespond\(activePrompt\.requestId, resolvedAnswers, composerController\.contextFiles\)/, 'finishing the questionnaire submits one linked answer set with its supporting files')
+assert.match(pendingQuestionSource, /responding\s*\?\s*'Submitting'\s*:\s*isReviewStep\s*\?\s*'Submit'/, 'the settled review step exposes a direct Submit action')
 assert.match(questionResponseSource, /Answered agent question/, 'the linked user bubble identifies question responses')
 assert.match(questionResponseSource, /aria-haspopup=\"dialog\"/, 'the compact response card opens all answers in the existing dialog')
 assert.match(questionResponseSource, /input\.questions\.map/, 'the dedicated modal presents every question and answer')

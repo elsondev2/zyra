@@ -294,6 +294,9 @@ export function createZyraPermissionGateExtension(options = {}) {
     access?.consume([...collectPaths(input, true), ...collectCommandPathHints(input.command || input.cmd || input.script)], normalizeToolName(event?.toolName || event?.name));
   };
   const handleToolCall = async (event) => {
+    // The saved-resource tool authorizes its trusted store destination from its
+    // executor. Caller arguments cannot supply that path or bypass this check.
+    if (normalizeToolName(event?.toolName || event?.name) === 'visualization') return undefined;
     const permissionMode = getPermissionMode();
     if (permissionMode === "full-access") {
       consumeAccess(event);
@@ -356,6 +359,22 @@ export function createZyraPermissionGateExtension(options = {}) {
   };
 
   return {
+    async authorizeVisualization(context, action, toolCallId) {
+      if (!['list', 'read', 'embed', 'create', 'revise'].includes(action)) throw new Error('Unknown visualization action.');
+      if (!context || typeof context.cwd !== 'string' || !context.cwd) throw new Error('Visualization workspace is unavailable.');
+      const mutation = action === 'create' || action === 'revise';
+      const destination = path.join(path.resolve(context.cwd), '.zyra', 'visualizations');
+      const roots = access?.currentRoots() || scopedRoots;
+      const mode = getPermissionMode();
+      if (mutation && mode === 'read-only') throw new Error('Visualization revisions cannot be saved in read-only mode.');
+      if (roots) {
+        const matched = filesystemRootForPath(destination, options.project || process.cwd(), roots, true, mutation ? 'write' : 'read');
+        if (!matched) throw new Error('Visualization store is outside this chat\'s filesystem scope.');
+        if (mutation && matched.access === 'read-only') throw new Error('Visualization store is inside a read-only Project folder.');
+      }
+      const blocked = await handleToolCall({ toolName: mutation ? 'write' : 'read', toolCallId, input: { path: destination } });
+      if (blocked?.block) throw new Error(blocked.reason || 'Visualization access was denied.');
+    },
     path: "<zyra:permission-gate>",
     resolvedPath: "<zyra:permission-gate>",
     sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra permission gate" },

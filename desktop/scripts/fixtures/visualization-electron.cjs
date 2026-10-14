@@ -74,6 +74,7 @@ app.whenReady().then(async () => {
     for (const mode of ['dark', 'light']) {
         for (const width of [undefined, 320]) {
             const expected = await window.webContents.executeJavaScript(`window.visualizationShowcase('${mode}',${width ?? 'undefined'})`)
+            await window.webContents.executeJavaScript(`(async()=>{const frame=document.querySelector('iframe');await Promise.all([frame,...(frame.parentElement?[frame.parentElement]:[])].flatMap(element=>element.getAnimations().map(animation=>animation.finished.catch(()=>undefined))));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))})()`)
             const parent = await window.webContents.executeJavaScript(`(()=>{const r=document.querySelector('iframe').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight}})()`)
             if (width) assert.equal(parent.width, width, 'narrow chart is rendered at 320px, not scaled down')
             if (!(parent.height <= 430 && parent.height > 32)) {

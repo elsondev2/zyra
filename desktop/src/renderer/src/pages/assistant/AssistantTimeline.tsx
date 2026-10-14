@@ -24,6 +24,7 @@ import {
 } from './AssistantTimelineRows'
 import { TimelineTurnInterruptionMarker, TimelineTurnWorkSummary } from './AssistantTimelineWorkSummary'
 import { TimelineVoiceTaskStatus } from './AssistantTimelineVoiceTask'
+import { useVoiceAgentStatusPreference } from './useVoiceAgentStatusPreference'
 import { AssistantTimelineNetworkRecovery } from './AssistantTimelineNetworkRecovery'
 import { AssistantTimelineThreadMessage } from './AssistantTimelineThreadMessage'
 import { getAssistantInterruptionLabel } from '@shared/assistant/interruption'
@@ -76,7 +77,10 @@ function revealTimelineActivityElement(target: HTMLElement): void {
     target.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
 }
 
+import { VisualizationThreadContext } from '@/components/ui/visualization/visualization-thread-context'
+
 type AssistantTimelineProps = {
+    threadId?: string | null
     messages: AssistantMessage[]
     activities: AssistantActivity[]
     proposedPlans?: AssistantProposedPlan[]
@@ -131,6 +135,7 @@ type AssistantTimelineProps = {
 }
 
 function AssistantTimelineImpl({
+    threadId = null,
     messages,
     activities,
     proposedPlans = [],
@@ -250,9 +255,11 @@ function AssistantTimelineImpl({
         pendingActivityRevealRef.current = activityId
     }, [revealActivityInDom])
 
+    const showVoiceAgentStatus = useVoiceAgentStatusPreference()
     const baseRows = useMemo(
-        () => buildTimelineRows(entries, isWorking, activeWorkStartedAt),
-        [activeWorkStartedAt, entries, isWorking]
+        () => buildTimelineRows(entries, isWorking, activeWorkStartedAt).filter(row => showVoiceAgentStatus
+            || row.kind !== 'activity' || !isVoiceStrongTaskActivity(row.activity)),
+        [activeWorkStartedAt, entries, isWorking, showVoiceAgentStatus]
     )
     const rows = useMemo(
         () => {
@@ -612,6 +619,7 @@ function AssistantTimelineImpl({
     }
 
     return (
+        <VisualizationThreadContext.Provider value={threadId}>
         <AssistantVirtualTimeline
             rows={stableRows}
             windowKey={windowKey}
@@ -635,6 +643,7 @@ function AssistantTimelineImpl({
             onInitialLayout={handleInitialLayout}
             renderRow={renderRow}
         />
+        </VisualizationThreadContext.Provider>
     )
 }
 

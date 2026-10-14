@@ -73,6 +73,7 @@ import {
 
 type ActiveCompactionLifecycle = {
     activityId: string
+    startedSequence?: number
     startedAt: string
     reason: string
     turnId: string | null
@@ -3380,10 +3381,11 @@ export class ZyraRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_start') {
-            const startedAt = nowIso()
+            const startedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || 'threshold'
             const lifecycle: ActiveCompactionLifecycle = {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
+                startedSequence: metadata?.sequence,
                 startedAt,
                 reason,
                 turnId
@@ -3406,6 +3408,9 @@ export class ZyraRuntime extends EventEmitter {
                         category: 'context-compaction',
                         sourceMethod: 'pi-sdk',
                         status: 'running',
+                        replay: metadata?.replay === true,
+                        sourceSequence: metadata?.sequence,
+                        startedSequence: lifecycle.startedSequence,
                         reason,
                         startedAt
                     }
@@ -3415,7 +3420,7 @@ export class ZyraRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_end') {
-            const completedAt = nowIso()
+            const completedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || context.activeCompaction?.reason || 'threshold'
             const lifecycle = context.activeCompaction || {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
@@ -3455,6 +3460,9 @@ export class ZyraRuntime extends EventEmitter {
                         category: 'context-compaction',
                         sourceMethod: 'pi-sdk',
                         status,
+                        replay: metadata?.replay === true,
+                        sourceSequence: metadata?.sequence,
+                        startedSequence: 'startedSequence' in lifecycle ? lifecycle.startedSequence : undefined,
                         reason,
                         startedAt: lifecycle.startedAt,
                         completedAt,
@@ -3471,7 +3479,7 @@ export class ZyraRuntime extends EventEmitter {
                 ? result.estimatedTokensAfter
                 : null
             const activeCompactionTurnId = lifecycle.turnId || turnId
-            if (status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
+            if (metadata?.replay !== true && status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
                 context.sessionUsage = {
                     ...(context.sessionUsage || { threadId: context.localThreadId }),
                     threadId: context.localThreadId,

@@ -15,6 +15,9 @@ import { useNonPassiveWheel } from '../../src/renderer/src/lib/useNonPassiveWhee
 import { TimelineMessage } from '../../src/renderer/src/pages/assistant/AssistantTimelineRows'
 import { projectVoiceLiveTimelineMessages } from '../../src/renderer/src/pages/assistant/assistant-voice-live-timeline'
 import { TimelineVoiceTaskStatus } from '../../src/renderer/src/pages/assistant/AssistantTimelineVoiceTask'
+import { AssistantTimeline } from '../../src/renderer/src/pages/assistant/AssistantTimeline'
+import { VoiceAgentStatusSetting } from '../../src/renderer/src/pages/settings/VoiceAgentStatusSetting'
+import { VOICE_AGENT_STATUS_STORAGE_KEY, writeVoiceAgentStatusPreference } from '../../src/renderer/src/pages/assistant/voice-agent-status-preference'
 import { getTimelineEntries, buildTimelineRows } from '../../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 
 const container = document.getElementById('root')!
@@ -299,6 +302,29 @@ async function run() {
     await waitFor(() => container.textContent!.includes('I will check the available plugins.'), 'Assistant speech grows live as more words arrive')
     check(container.textContent!.indexOf('I will check') < container.textContent!.indexOf('Primary agent working'), 'The primary task stays below its spoken introduction')
     results.push('Real Voice message rows stream unfinished assistant words above primary-agent activity')
+
+    localStorage.removeItem(VOICE_AGENT_STATUS_STORAGE_KEY)
+    const completedTask = { ...task, payload: { status: 'completed', startedAt: task.createdAt, completedAt: '2026-10-04T10:00:06.000Z' } }
+    function VoiceStatusHarness() {
+        return <><VoiceAgentStatusSetting /><div style={{ height: 500 }}><AssistantTimeline messages={continuedSpeech.messages} activities={[completedTask]} windowKey="voice-status-preference" /></div></>
+    }
+    flushSync(() => root.render(<VoiceStatusHarness />))
+    await pause()
+    check(!container.textContent!.includes('Primary agent finished'), 'Voice agent completion rows are absent by default in the actual timeline')
+    check(container.textContent!.includes('I will check the available plugins.'), 'Hiding agent status preserves the spoken reply')
+    const statusToggle = container.querySelector<HTMLButtonElement>('button[aria-label="Show voice agent status"]')
+    check(statusToggle && statusToggle.getAttribute('aria-checked') === 'false', 'The real Settings toggle starts off')
+    flushSync(() => statusToggle!.click())
+    await waitFor(() => container.textContent!.includes('Primary agent finished'), 'Opting in immediately reveals retained statuses in the actual timeline')
+    check(localStorage.getItem(VOICE_AGENT_STATUS_STORAGE_KEY) === 'true', 'Settings opt-in persists on this device')
+    flushSync(() => root.render(<div />))
+    flushSync(() => root.render(<VoiceStatusHarness />))
+    await waitFor(() => container.textContent!.includes('Primary agent finished'), 'Opt-in survives leaving and reopening the voice chat')
+    flushSync(() => container.querySelector<HTMLButtonElement>('button[aria-label="Show voice agent status"]')!.click())
+    await waitFor(() => !container.textContent!.includes('Primary agent finished'), 'Turning status off removes the rows immediately')
+    check(container.textContent!.includes('I will check the available plugins.'), 'Toggle changes never remove conversation text')
+    writeVoiceAgentStatusPreference(false)
+    results.push('Voice status defaults off; the real Settings toggle persists and changes actual timeline rows without removing speech')
 
     const sent: string[] = []
     let interrupted = 0

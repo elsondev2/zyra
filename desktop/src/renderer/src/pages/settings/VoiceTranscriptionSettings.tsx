@@ -45,7 +45,7 @@ export function VoiceTranscriptionSettings() {
         <SettingsRow title="Transcription engine" description="Choose live browser dictation or recorded ChatGPT transcription." control={<SettingsSegmented value={settings.assistantTranscriptionEngine} options={[{ value: 'browser', label: 'Browser' }, { value: 'codex', label: 'ChatGPT' }]} onChange={(assistantTranscriptionEngine) => updateSettings({ assistantTranscriptionEngine })} label="Transcription engine" disabled={!settings.assistantTranscriptionEnabled} />} />
         {settings.assistantTranscriptionEngine === 'codex' ? (<SettingsRow
             title="ChatGPT transcription"
-            description="Transcribe voice notes with your connected ChatGPT account."
+            description="Record notes up to eight minutes. Longer notes are transcribed in short sections with your connected ChatGPT account."
             status={chatGptVoiceStatus.label}
             statusTone={chatGptVoiceStatus.tone}
             statusTitle={chatGptVoiceStatus.title}
