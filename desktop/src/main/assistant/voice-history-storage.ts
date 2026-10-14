@@ -26,7 +26,7 @@ export function insertVoiceHistoryEntry(db: Database, input: {
             const bytes = Number(usage?.[1] || 0)
             if (count >= MAX_FAILED_VOICE_HISTORY_RECORDINGS || audio.byteLength > MAX_FAILED_VOICE_HISTORY_BYTES - bytes) {
                 audio = null
-                error = `${error.slice(0, 800)} ${STORAGE_FULL_MESSAGE}`
+                error = `${(error || 'Transcription failed.').slice(0, 800)} ${STORAGE_FULL_MESSAGE}`
             }
         }
         db.run('INSERT INTO voice_history (id, created_at, engine, status, duration_ms, transcript, error, failed_audio) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
