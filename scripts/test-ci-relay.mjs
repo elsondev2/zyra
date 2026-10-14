@@ -58,22 +58,37 @@ class Storage {
     async delete(key) { return this.map.delete(key) }
     async setAlarm(at) { this.alarm = at }
     async list({ prefix = '', limit = Infinity } = {}) { return new Map([...this.map].filter(([key]) => key.startsWith(prefix)).sort().slice(0, limit)) }
-    async transaction(fn) { return fn(this) }
+    async transaction(fn) {
+        return fn({ get: this.get.bind(this), put: this.put.bind(this), delete: this.delete.bind(this), list: this.list.bind(this) })
+    }
 }
 function fixture() {
     const storage = new Storage(), calls = []
     const pr = { ...payload('opened').pull_request, changed_files: 1 }
     const runs = [], artifacts = [{ id: 7, name: 'zyra-preview-windows-42-1', expired: false }], comments = []
     const failures = new Map()
-    let uncertain = false, nextRunId = 42, checkId = 5, loseCommentResponse = false
+    let uncertain = false, nextRunId = 42, checkId = 5, loseCommentResponse = false, loseCheckResponse = false, moveOnSecondPRRead = false, prReads = 0
     const api = { async request(role, route, method = 'GET', body) {
         calls.push({ role, route, method, body })
         const fault = `${method} ${route}`
         if (failures.get(fault)) { failures.set(fault, failures.get(fault) - 1); throw new Error('Synthetic GitHub outage') }
-        if ((/^\/pulls\/\d+$/.test(route))) return structuredClone(pr)
+        if ((/^\/pulls\/\d+$/.test(route))) {
+            prReads++
+            if (moveOnSecondPRRead && prReads === 2) pr.head.sha = other
+            return structuredClone(pr)
+        }
         if (route.includes('/files?')) return [{ filename: 'desktop/src/main/index.ts' }]
-        if (route.includes('/runs?')) return { workflow_runs: structuredClone(runs) }
-        if (route === '/check-runs' && method === 'POST') return { id: checkId++ }
+        if (route.includes('/runs?')) {
+            const page = Number(new URL(`https://test${route}`).searchParams.get('page')) || 1
+            return { workflow_runs: structuredClone(runs.slice((page - 1) * 100, page * 100)) }
+        }
+        if (route.includes('/check-runs?')) return { check_runs: this.orphanCheck ? [this.orphanCheck] : [] }
+        if (route === '/check-runs' && method === 'POST') {
+            const check = { id: checkId++, external_id: body.external_id, name: body.name }
+            this.orphanCheck = check
+            if (loseCheckResponse) { loseCheckResponse = false; throw new Error('lost accepted check response') }
+            return check
+        }
         if (route.endsWith('/dispatches')) { if (uncertain) throw new Error('lost dispatch response'); return { workflow_run_id: nextRunId++ } }
         if (/^\/actions\/runs\/\d+$/.test(route)) return structuredClone(runs.find(run => route === `/actions/runs/${run.id}`))
         if (route.includes('/artifacts')) return { artifacts: structuredClone(artifacts) }
@@ -94,7 +109,7 @@ function fixture() {
         }
         return null
     } }
-    return { storage, calls, pr, runs, artifacts, comments, coordinator: new RelayCoordinator({ storage }, env, api), loseResponse() { uncertain = true },
+    return { storage, calls, pr, runs, artifacts, comments, coordinator: new RelayCoordinator({ storage }, env, api), loseResponse() { uncertain = true }, moveHeadBeforeDispatch() { moveOnSecondPRRead = true }, loseNextCheckResponse() { loseCheckResponse = true },
         failNext(route, method = 'GET') { failures.set(`${method} ${route}`, 1) }, loseNextCommentResponse() { loseCommentResponse = true } }
 }
 const event = { kind: 'request', mode: 'preview', pr: 3, sha, requestId: 'delivery1' }
@@ -108,7 +123,7 @@ assert.equal(f.calls.filter(call => call.route.endsWith('/dispatches')).length, 
 assert.deepEqual(f.calls.find(call => call.route.endsWith('/dispatches')).body, { ref: env.AUTOMATION_REF, inputs: { source_repository: env.SOURCE_REPOSITORY, source_sha: sha, source_pr: '3', request_id: 'delivery1', target: 'windows-x64' } })
 assert.equal(f.calls.find(call => call.route === '/check-runs').body.head_sha, sha)
 assert.equal((await f.storage.get(`request:preview:${sha}:pr:3`)).runId, 42, 'New dispatches retain the returned run identity')
-const run = { id: 42, run_attempt: 1, event: 'workflow_dispatch', path: '.github/workflows/windows-preview.yml', head_branch: env.AUTOMATION_REF, display_title: `Preview ${sha} request:delivery1`, status: 'completed', conclusion: 'success' }
+const run = { id: 42, run_attempt: 1, event: 'workflow_dispatch', path: '.github/workflows/windows-preview.yml@ci/automation', head_branch: env.AUTOMATION_REF, display_title: `Preview ${sha} request:delivery1`, status: 'completed', conclusion: 'success' }
 f.runs.push(run)
 await f.coordinator.handle({ kind: 'completion', runId: 42 })
 assert.equal(f.calls.filter(call => call.route.endsWith('/comments')).length, 1)
@@ -319,12 +334,30 @@ assert.equal(await cleanup.storage.get('preview-latest:3'), undefined)
 const stale = fixture(); stale.pr.head.sha = other
 await stale.coordinator.handle(event)
 assert.equal(stale.calls.filter(call => call.route.endsWith('/dispatches')).length, 0)
+const changedBeforeDispatch = fixture(); changedBeforeDispatch.moveHeadBeforeDispatch(); await changedBeforeDispatch.coordinator.handle(event)
+assert.equal(dispatches(changedBeforeDispatch), 0, 'Head changes between initial lookup and dispatch are rejected')
+assert.equal((await changedBeforeDispatch.storage.get(requestKey)).phase, 'failed')
+const orphanCheck = fixture(); await orphanCheck.coordinator.handle(event)
+const orphanRecord = await orphanCheck.storage.get(requestKey)
+await orphanCheck.storage.put(requestKey, { ...orphanRecord, checkId: null })
+await orphanCheck.storage.put(`pending:${requestKey}`, { ...orphanRecord, checkId: null })
+orphanCheck.runs.push(run)
+await orphanCheck.coordinator.handle({ kind: 'completion', runId: 42 })
+assert.equal(orphanCheck.calls.filter(call => call.route === '/check-runs' && call.method === 'POST').length, 1)
+assert.equal((await orphanCheck.storage.get(requestKey)).checkId, 5, 'A process interruption after check creation recovers its external_id before completing the check')
+assert.ok(orphanCheck.calls.some(call => call.route === '/check-runs/5' && call.method === 'PATCH'), 'Recovered orphan check receives the successful helper result')
+const recoverQueued = fixture(); await deliver(recoverQueued, 'queued-recovery'); recoverQueued.failNext('/pulls/3')
+await recoverQueued.coordinator.alarm()
+assert.ok(await recoverQueued.storage.get('queue:queued-recovery'), 'Failed processing leaves the delivery queued')
+await recoverQueued.coordinator.alarm()
+assert.equal(await recoverQueued.storage.get('queue:queued-recovery'), undefined, 'Recovered processing consumes the delivery after success')
 const moved = fixture(); await moved.coordinator.handle(event); moved.pr.head.sha = other; moved.runs.push(run)
 await moved.coordinator.handle({ kind: 'completion', runId: 42 })
 assert.equal(moved.calls.filter(call => call.route.endsWith('/comments')).length, 0, 'A stale build is never presented as the latest preview')
 const unknown = fixture(); unknown.loseResponse(); await unknown.coordinator.handle(event); await unknown.coordinator.handle(event); await unknown.coordinator.alarm()
 assert.equal(unknown.calls.filter(call => call.route.endsWith('/dispatches')).length, 1, 'Uncertain HTTP responses never retry installer dispatch')
-unknown.runs.push(run); await unknown.coordinator.alarm()
+unknown.runs.push(...Array.from({ length: 100 }, (_, id) => ({ ...run, id: 1000 + id, display_title: `Unrelated ${id}` })), run)
+await unknown.coordinator.alarm()
 assert.equal((await unknown.storage.get(`request:preview:${sha}:pr:3`)).phase, 'completed', 'Reporting recovers an accepted run without redispatching')
 const wrong = fixture(); await wrong.coordinator.handle(event)
 wrong.runs.push({ ...run, display_title: `Preview ${other}` }); await wrong.coordinator.handle({ kind: 'completion', runId: 42 })

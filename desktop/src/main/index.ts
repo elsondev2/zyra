@@ -53,6 +53,7 @@ import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionServic
 import { createDesktopSetupServices } from './setup'
 import { initializeDesktopStartup } from './setup/startup-initialization'
 import { resolveZyraRoot } from './zyra/zyra-root'
+import { configurePreviewDataEnvironment } from './zyra/zyra-data-root'
 import { registerInstalledDesktop } from './desktop-install-registration'
 import { dispatchDesktopTui, isDesktopTuiDispatch } from './desktop-tui-dispatcher'
 import { createRendererHangRecorder } from './diagnostics/renderer-hang-recorder'
@@ -87,6 +88,7 @@ function applyRuntimeIdentity(identity: RuntimeIdentity): void {
 }
 
 applyRuntimeIdentity(runtimeIdentity)
+configurePreviewDataEnvironment(app.getPath('userData'))
 configureDesktopTerminalEnvironment(app.getPath('userData'))
 configureRuntimeInstallation({
     kind: runtimeIdentity.isDevRuntime ? 'development' : 'installed',

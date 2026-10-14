@@ -688,7 +688,19 @@ export class ZyraAgentServer extends EventEmitter {
     }
     const requested = requestedCandidate;
     if (requested?.agentThread || requested?.agentCreatedBy) {
-      const linked = this.findAgentOwner(requested.canonicalChatId);
+      let linked = this.findAgentOwner(requested.canonicalChatId);
+      if (!linked && requested.agentConversationKind === 'thread' && requested.agentCreatedBy) {
+        // Explicit independent conversations retain their durable creator ID.
+        // Reconnect that parent from the catalog before creating the child view,
+        // so opening the sidebar row works after an agent-server restart.
+        const ownerChat = await this.catalog.find(requested.agentCreatedBy, { project, allProjects: true });
+        if (ownerChat && !ownerChat.deleted) {
+          const restored = await this.attachSession(client, { ...params, session: ownerChat.canonicalChatId, localThreadId: undefined });
+          const owner = this.sessions.get(restored.canonicalChatId);
+          if (owner) owner.detach(client);
+          linked = this.findAgentOwner(requested.canonicalChatId);
+        }
+      }
       if (!linked) throw new AgentServerProtocolError('Open the owning chat to restore this agent thread.', 'AGENT_SERVER_SESSION_NOT_FOUND');
       const view = this.ensureAgentView(linked.owner, linked.agent);
       const connected = await view.connect({ ...params, noSession: true, memoryEnabled: false });

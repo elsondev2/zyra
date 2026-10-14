@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { SquareTerminal } from 'lucide-react'
+import { isPreviewDistribution } from '@shared/distribution-identity'
 import type { DevScopeTerminalCommandStatus } from '@shared/contracts/devscope-api'
 import {
     SettingsButton,
@@ -46,7 +47,11 @@ export function TerminalCommandSettings() {
             {terminalCommandError ? <SettingsNotice tone="error">{terminalCommandError}</SettingsNotice> : null}
             <SettingsRow
                 title="zyra command"
-                description={terminalCommand?.canManage === false ? 'Manage the global command in installed Zyra. Terminals opened here use this development instance.' : 'Run the bundled Zyra TUI from your terminal.'}
+                description={terminalCommand?.canManage === false
+                    ? isPreviewDistribution()
+                        ? 'Preview cannot change the global zyra command. Terminals opened here use this isolated Preview.'
+                        : 'Manage the global command in installed Zyra. Terminals opened here use this development instance.'
+                    : 'Run the bundled Zyra TUI from your terminal.'}
                 info={terminalCommand?.installed ? <code className="break-all text-[11px]">{terminalCommand.path}</code> : undefined}
                 status={!terminalCommand ? terminalCommandError ? 'Unavailable' : 'Checking…' : terminalCommand.installed ? (terminalCommand.pathConfigured ? 'Ready' : 'Add folder to PATH') : 'Not installed'}
                 control={<SettingsButton onClick={() => void toggleTerminalCommand()} disabled={terminalCommandBusy || !terminalCommand || terminalCommand.canManage === false}><SquareTerminal size={12} />{terminalCommandBusy ? 'Updating…' : terminalCommand?.installed ? 'Remove' : 'Install'}</SettingsButton>}

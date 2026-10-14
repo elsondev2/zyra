@@ -32,7 +32,8 @@ import {
     runSqlTransaction,
     shouldDeleteInvalidSession,
     toNullableString,
-    toNumber
+    toNumber,
+    toAssistantMessagePhase
 } from './persistence-utils'
 import { assistantActivityPayloadColumns, assistantActivityTerminalOutcomeColumn, parseAssistantActivityPayload, parseAssistantActivityTerminalOutcome } from './persistence-activity-payload'
 import { persistAssistantSnapshotMeta } from './persistence-write'
@@ -143,7 +144,7 @@ export function readAssistantTimelineProjectionRows(
 
 function readAssistantMessages(db: SqlDatabase, threadId: string): AssistantMessage[] {
     return reconcileAssistantMessageReplays(readThreadRows<AssistantMessage>(db, 'assistant_messages', threadId, [
-        'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at', 'provider_item_id', 'modality'
+        'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at', 'provider_item_id', 'modality', 'phase'
     ], (row) => ({
         id: String(row[0] || ''),
         role: String(row[1] || 'assistant') as AssistantMessage['role'],
@@ -154,7 +155,8 @@ function readAssistantMessages(db: SqlDatabase, threadId: string): AssistantMess
         createdAt: String(row[6] || new Date(0).toISOString()),
         updatedAt: String(row[7] || new Date(0).toISOString()),
         providerItemId: toNullableString(row[8]) || undefined,
-        modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality']
+        modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality'],
+        phase: toAssistantMessagePhase(row[10])
     })))
 }
 

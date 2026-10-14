@@ -347,7 +347,7 @@ export async function stopManagedBashJobs(state, input = {}) {
     throw new Error("Provide either jobId or all:true to stop managed commands");
   }
   const jobs = input.all === true
-    ? [...state.jobs.values()].filter(job => job.background
+    ? [...state.jobs.values()].filter(job => (job.background || job.error?.code === "SHELL_CLEANUP_FAILED")
       && (input.ownerAgentRunId === undefined || job.ownerAgentRunId === input.ownerAgentRunId)
       && (!job.completedAt || job.error?.code === "SHELL_CLEANUP_FAILED"))
     : [getJob(state, input.jobId, input.ownerAgentRunId)];

@@ -88,9 +88,9 @@ export class RelayCoordinator {
             await storage.put(`seen:${delivery}`, Date.now())
             await storage.put(`queue:${delivery}`, event.mode === 'preview'
                 ? { ...event, requestId: delivery, ...(event.retry ? { attempt: delivery } : {}) } : event)
-            await storage.setAlarm(Date.now() + 1)
             return true
         })
+        if (queued) await this.state.storage.setAlarm(Date.now() + 1)
         return response({ queued }, 202)
     }
     async saveRecord(key, record) {
@@ -107,11 +107,15 @@ export class RelayCoordinator {
     async alarm() {
         const queue = await this.state.storage.list({ prefix: 'queue:', limit: 8 })
         for (const [key, event] of queue) {
-            // Consume once. Reporting may poll/retry; installer dispatch never retries.
-            await this.state.storage.delete(key)
-            try { await this.handle(event) } catch {
-                await this.state.storage.put(`failed:${key}`, { event, at: Date.now(), message: 'Relay request failed. No build was automatically retried.' })
-                console.warn('Relay event failed before completion; inspect failed delivery metadata', key)
+            // Keep delivery durable until handling returns. A crash midway through
+            // handling replays it; request claims prevent duplicate dispatch.
+            try {
+                await this.handle(event)
+                await this.state.storage.delete(key)
+                await this.state.storage.delete(`failed:${key}`)
+            } catch {
+                await this.state.storage.put(`failed:${key}`, { event, at: Date.now(), message: 'Relay request failed and remains queued for recovery.' })
+                console.warn('Relay event failed; retaining queued delivery for recovery', key)
             }
         }
         const requests = await this.pendingRecords()
@@ -159,7 +163,8 @@ export class RelayCoordinator {
         // without one still require a returned run ID; a plain same-SHA title
         // can never identify those attempts after a lost dispatch response.
         const title = `${modes[record.mode].title} ${record.sha}${record.requestId ? ` request:${record.requestId}` : ''}`
-        return (!record.retry || record.requestId || Number.isSafeInteger(record.runId)) && (!record.runId || record.runId === run.id) && run.event === 'workflow_dispatch' && run.path === `.github/workflows/${modes[record.mode].workflow}` && run.head_branch === this.env.AUTOMATION_REF && run.display_title === title
+        const expectedPath = `.github/workflows/${modes[record.mode].workflow}`
+        return (!record.retry || record.requestId || Number.isSafeInteger(record.runId)) && (!record.runId || record.runId === run.id) && run.event === 'workflow_dispatch' && (run.path === expectedPath || run.path.startsWith(`${expectedPath}@`)) && run.head_branch === this.env.AUTOMATION_REF && run.display_title === title
     }
     async findRun(record, cache = new Map()) {
         if (record.runId) {
@@ -167,9 +172,25 @@ export class RelayCoordinator {
             return run && this.matchesRun(record, run) ? run : undefined
         }
         if (record.retry && !record.requestId) return undefined
-        if (!cache.has(record.mode)) cache.set(record.mode, await this.api.request('helper', `/actions/workflows/${modes[record.mode].workflow}/runs?event=workflow_dispatch&per_page=50`))
-        const candidates = cache.get(record.mode).workflow_runs.filter(run => this.matchesRun(record, run))
+        if (!cache.has(record.mode)) cache.set(record.mode, await this.paginate('helper', `/actions/workflows/${modes[record.mode].workflow}/runs?event=workflow_dispatch&per_page=100`, 'workflow_runs'))
+        const candidates = cache.get(record.mode).filter(run => this.matchesRun(record, run))
         return candidates.length === 1 ? candidates[0] : undefined
+    }
+    async paginate(role, route, property) {
+        const items = []
+        for (let page = 1; page <= 20; page++) {
+            const separator = route.includes('?') ? '&' : '?'
+            const result = await this.api.request(role, `${route}${separator}page=${page}`)
+            const batch = property ? result?.[property] : result
+            if (!Array.isArray(batch)) break
+            items.push(...batch)
+            if (batch.length < 100) break
+        }
+        return items
+    }
+    async findCheck(record, key) {
+        const checks = await this.paginate('source', `/commits/${record.sha}/check-runs?per_page=100`, 'check_runs')
+        return checks.find(check => check.external_id === key && check.name === modes[record.mode].name)
     }
     async handle(event) {
         if (event.kind === 'completion') {
@@ -184,16 +205,16 @@ export class RelayCoordinator {
         const requestId = event.mode === 'preview' ? (event.requestId || event.attempt || crypto.randomUUID()) : undefined
         if (requestId && !REQUEST_ID.test(requestId)) return
         const legacyKey = `request:${event.mode}:${event.sha}${event.retry ? `:retry:${event.attempt}` : ''}`
-        const key = event.mode === 'preview' ? `${legacyKey}:pr:${event.pr}` : legacyKey
+        const key = `${legacyKey}:pr:${event.pr}`
         const record = { mode: event.mode, sha: event.sha, pr: event.pr, phase: 'preparing', createdAt: Date.now(), checkId: null,
             ...(requestId ? { requestId } : {}),
             ...(event.retry ? { retry: true, attempt: event.attempt } : {}) }
         const claimed = await this.state.storage.transaction(async storage => {
-            const legacy = event.mode === 'preview' ? await storage.get(legacyKey) : undefined
+            const legacy = await storage.get(legacyKey)
             const existing = await storage.get(key) || (legacy?.pr === event.pr ? legacy : undefined)
             if (existing && (!['completed', 'failed'].includes(existing.phase) || Date.now() - existing.createdAt < 7 * 86400000)) return false
             const pending = await storage.list({ prefix: 'pending:request:' })
-            if ([...pending.values()].some(item => item.mode === event.mode && item.sha === event.sha && (event.mode !== 'preview' || item.pr === event.pr) && !['completed', 'failed'].includes(item.phase))) return false
+            if ([...pending.values()].some(item => item.mode === event.mode && item.sha === event.sha && item.pr === event.pr && !['completed', 'failed'].includes(item.phase))) return false
             await storage.put(key, record)
             await storage.put(`pending:${key}`, record)
             if (event.mode === 'preview') await storage.put(`preview-latest:${event.pr}`, key)
@@ -201,10 +222,16 @@ export class RelayCoordinator {
         })
         if (!claimed) return
         try {
-            const check = await this.api.request('source', '/check-runs', 'POST', {
-                name: modes[event.mode].name, head_sha: event.sha, status: 'in_progress', external_id: key,
-                output: { title: 'Requested exact source revision', summary: `Source \`${event.sha}\`. Scope: ${event.mode}. Installer work is request-only.` }
-            })
+            let check
+            try {
+                check = await this.api.request('source', '/check-runs', 'POST', {
+                    name: modes[event.mode].name, head_sha: event.sha, status: 'in_progress', external_id: key,
+                    output: { title: 'Requested exact source revision', summary: `Source \`${event.sha}\`. Scope: ${event.mode}. Installer work is request-only.` }
+                })
+            } catch (error) {
+                check = await this.findCheck(record, key)
+                if (!check) throw error
+            }
             record.checkId = check.id
             await this.saveRecord(key, record)
             const existing = event.mode === 'preview' ? undefined : await this.findRun(record)
@@ -222,6 +249,11 @@ export class RelayCoordinator {
             }
             record.phase = 'dispatching'
             await this.saveRecord(key, record)
+            const latestPR = await this.currentPR(event.pr)
+            if (latestPR.state !== 'open' || latestPR.head.sha !== event.sha || latestPR.head.repo?.full_name !== this.env.SOURCE_REPOSITORY) {
+                await this.fail(key, record, 'The pull request head changed before helper dispatch. No build was started.')
+                return
+            }
             const dispatch = await this.api.request('helper', `/actions/workflows/${modes[event.mode].workflow}/dispatches`, 'POST', { ref: this.env.AUTOMATION_REF, inputs })
             if (Number.isSafeInteger(dispatch?.workflow_run_id)) record.runId = dispatch.workflow_run_id
             record.phase = 'submitted'
@@ -236,7 +268,8 @@ export class RelayCoordinator {
         }
     }
     async fail(key, record, summary) {
-        if (record.checkId) await this.api.request('source', `/check-runs/${record.checkId}`, 'PATCH', { status: 'completed', conclusion: 'failure', output: { title: 'Helper result unavailable', summary } })
+        const check = record.checkId ? { id: record.checkId } : await this.findCheck(record, key)
+        if (check?.id) await this.api.request('source', `/check-runs/${check.id}`, 'PATCH', { status: 'completed', conclusion: 'failure', output: { title: 'Helper result unavailable', summary } })
         await this.saveRecord(key, { ...record, phase: 'failed' })
     }
     async finish(key, record, run) {
@@ -245,7 +278,13 @@ export class RelayCoordinator {
             return
         }
         if (record.phase === 'failed') return
-        if (!this.matchesRun(record, run) || !record.checkId) return
+        if (!this.matchesRun(record, run)) return
+        if (!record.checkId) {
+            const check = await this.findCheck(record, key)
+            if (!check?.id) return
+            record = { ...record, checkId: check.id }
+            await this.saveRecord(key, record)
+        }
         const url = `https://github.com/${this.env.HELPER_REPOSITORY}/actions/runs/${run.id}`
         if (run.status !== 'completed') {
             await this.api.request('source', `/check-runs/${record.checkId}`, 'PATCH', { details_url: url })

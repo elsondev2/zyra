@@ -75,7 +75,7 @@ function BackgroundProcessOwner({ sessionId, threadId }: { sessionId: string; th
         }
     }
 
-    const processes = jobs.filter(job => job.background && (job.status === 'running' || job.cleanupFailed))
+    const processes = jobs.filter(job => (job.background && job.status === 'running') || job.cleanupFailed)
     const runningCount = processes.filter(job => job.status === 'running').length
     const buttonClass = 'shrink-0 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1.5 text-sparkle-text-secondary transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-50'
     return <section className="space-y-2 border-t border-white/5 pt-3 text-xs" aria-label="Background processes" aria-busy={loading || Boolean(stopping)}>

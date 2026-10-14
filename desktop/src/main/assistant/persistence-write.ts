@@ -413,7 +413,7 @@ function deleteAssistantThreadRowsById(db: SqlDatabase, tableName: string, threa
 
 function readAssistantMessageReplayDuplicateIds(db: SqlDatabase, threadId: string): string[] {
     const rows = db.exec(`
-        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
+        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality, phase
         FROM assistant_messages
         WHERE thread_id = ?
         ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
@@ -428,7 +428,8 @@ function readAssistantMessageReplayDuplicateIds(db: SqlDatabase, threadId: strin
         createdAt: String(row[6] || ''),
         updatedAt: String(row[7] || ''),
         providerItemId: row[8] == null ? undefined : String(row[8]),
-        modality: (row[9] == null ? undefined : String(row[9])) as AssistantMessage['modality']
+        modality: (row[9] == null ? undefined : String(row[9])) as AssistantMessage['modality'],
+        phase: row[10] === 'final_answer' || row[10] === 'commentary' ? row[10] : undefined
     }))
     return findAssistantMessageReplayDuplicateIds(messages)
 }
@@ -529,8 +530,8 @@ function deleteAssistantTurns(db: SqlDatabase, turnIds: string[]): void {
 
 function upsertAssistantMessage(db: SqlDatabase, threadId: string, message: AssistantMessage): void {
     db.run(`
-        INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, timeline_sequence, provider_item_id, modality, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, timeline_sequence, provider_item_id, modality, phase, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
             role = excluded.role,
@@ -540,6 +541,7 @@ function upsertAssistantMessage(db: SqlDatabase, threadId: string, message: Assi
             timeline_sequence = excluded.timeline_sequence,
             provider_item_id = COALESCE(excluded.provider_item_id, assistant_messages.provider_item_id),
             modality = COALESCE(excluded.modality, assistant_messages.modality),
+            phase = COALESCE(excluded.phase, assistant_messages.phase),
             created_at = excluded.created_at,
             updated_at = excluded.updated_at
     `, [
@@ -552,6 +554,7 @@ function upsertAssistantMessage(db: SqlDatabase, threadId: string, message: Assi
         message.timelineSequence ?? null,
         message.providerItemId || null,
         message.modality || null,
+        message.phase === 'final_answer' || message.phase === 'commentary' ? message.phase : null,
         message.createdAt,
         message.updatedAt
     ])

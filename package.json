@@ -43,7 +43,7 @@
     "test:user-input": "node scripts/test-request-user-input.mjs && bun desktop/scripts/test-assistant-user-input-contract.ts",
     "test:task-ownership-prompt": "node scripts/test-zyra-task-ownership-prompt.mjs",
     "test:agent-fleet:cancellation": "node scripts/test-agent-fleet-cancellation.mjs",
-    "test:agent-conversations": "node scripts/test-agent-conversation-kind.mjs",
+    "test:agent-conversations": "node scripts/test-agent-conversation-kind.mjs && node scripts/test-agent-conversations.mjs && node scripts/test-agent-conversation-owner.mjs",
     "test:ci-relay": "node scripts/test-ci-relay.mjs",
     "test:work-timeline-v2": "bun run --cwd desktop test:work-timeline-v2",
     "test:child-session-runtime": "node scripts/test-child-session-runtime.mjs",

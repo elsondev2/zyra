@@ -88,6 +88,13 @@ assert.equal(failedJob.status, 'failed');
 assert.equal(failedJob.cleanupFailed, true);
 assert.match(failedJob.errorMessage, /unconfirmed/);
 assert.equal(managed.listManagedBashJobs(g.state).jobs.at(-1).status, 'failed');
+const cleanupJob = g.state.jobs.get(bad.details.jobId);
+cleanupJob.background = false;
+let cleanupRetryReads = 0;
+const cleanupDone = cleanupJob.done;
+Object.defineProperty(cleanupJob, 'done', { get() { cleanupRetryReads++; return cleanupDone; } });
+await managed.stopManagedBashJobs(g.state, { all: true });
+assert.equal(cleanupRetryReads, 1, 'Stop all includes cleanup-failed foreground jobs while preserving unrelated active foreground work');
 // Failed cleanup cannot be silently pruned as a confirmed terminal job.
 for (let i = 0; i < 70; i++) {
   const run = g.tool.execute(`finite-${i}`, { command: 'complete', wait: 0.01 });

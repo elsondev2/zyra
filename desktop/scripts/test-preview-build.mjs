@@ -196,7 +196,12 @@ const workflow = await readFile(new URL('../../.github/workflows/windows-preview
 assert.ok(workflow.includes("run-name: Preview ${{ inputs.source_sha }}${{ inputs.request_id && format(' request:{0}', inputs.request_id) || '' }}"), 'Token-bearing previews match the relay and candidate policy; legacy direct requests retain their plain SHA title')
 assert.match(workflow, /workflow_dispatch:/)
 assert.doesNotMatch(workflow, /^\s*(push|pull_request|issue_comment|schedule|workflow_run):/m)
-assert.doesNotMatch(workflow, /secrets\./)
+const secretReference = /\bsecrets\s*(?:\.|\[)/i
+for (const expression of ["${{ secrets.TOKEN }}", "${{ secrets['TOKEN'] }}", '${{ secrets [ "TOKEN" ] }}']) {
+    assert.match(expression, secretReference, 'Both property and indexed secret references are rejected')
+}
+assert.doesNotMatch('${{ inputs.source_sha }}', secretReference)
+assert.doesNotMatch(workflow, secretReference)
 assert.match(workflow, /runs-on: windows-2025/)
 assert.equal(workflow.match(/retention-days: 7/g)?.length, 2)
 assert.match(workflow, /group: windows-preview-.*inputs.source_repository.*inputs.source_pr.*inputs.source_sha.*inputs.target/)

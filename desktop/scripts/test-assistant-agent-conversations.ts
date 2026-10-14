@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import type { AssistantSession, AssistantSnapshot, AssistantThread } from '../src/shared/assistant/contracts'
 import { projectCanonicalAgentOrigin } from '../src/main/assistant/service-canonical-agent-origin'
 import { getVisibleAssistantSessions, getAssistantSessionsByMode, getSelectedAssistantSession, isAssistantUserFacingSession } from '../src/renderer/src/lib/assistant/selectors'
@@ -17,4 +19,7 @@ assert.deepEqual(getVisibleAssistantSessions(snapshot).map(session => session.id
 assert.deepEqual(getAssistantSessionsByMode(snapshot, 'chat', true).map(session => session.id), ['root-with-worker', 'independent', 'archived-root'])
 assert.equal(getSelectedAssistantSession(snapshot)?.id, 'private', 'Existing selected/private histories remain addressable')
 assert.equal(isAssistantUserFacingSession(session('draft', [])), true, 'Empty user drafts are not mistaken for workers')
-console.log('Canonical origin and sidebar selectors: independent roots, nested workers, legacy artifacts and history access passed')
+const paneSource = readFileSync(path.resolve(import.meta.dirname, '../src/renderer/src/pages/assistant/AssistantConversationPane.tsx'), 'utf8')
+assert.match(paneSource, /const canonicalVoiceDisabled = !canonicalVoiceBinding\s*\|\| controller\.activeThread\?\.source === 'subagent'/, 'Voice eligibility must reject actual supporting subagents, not explicit root conversations with origin metadata')
+assert.match(paneSource, /activeThreadIsSubagent={activeThreadHasAgentOrigin}/, 'Origin metadata must remain available to the broader agent-origin indicator')
+console.log('Canonical origin, sidebar selectors and independent-thread Voice eligibility passed')

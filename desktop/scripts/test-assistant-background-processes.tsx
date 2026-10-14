@@ -101,7 +101,7 @@ try {
  assert(text().includes('retained') && text().includes('Offline'), 'transient read failure preserves live list')
  await click('Stop process retained')
  await settle(stops[2], ok([
-  job('retained', {status:'failed', cleanupFailed:true, errorMessage:'Child server cleanup could not be confirmed', ownerAgentRunId:'agent-run'}),
+  job('retained', {background:false, status:'failed', cleanupFailed:true, errorMessage:'Child server cleanup could not be confirmed', ownerAgentRunId:'agent-run'}),
   job('unrelated-running')
  ]))
  assert(text().includes('retained') && text().includes('Cleanup unconfirmed') && text().includes('Child server cleanup could not be confirmed'), 'successful invocation retains returned unconfirmed cleanup failure and error')

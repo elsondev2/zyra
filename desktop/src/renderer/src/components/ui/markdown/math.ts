@@ -4,11 +4,14 @@ import type { Element, Root } from 'hast'
 
 /** Normalize model-style TeX delimiters, leaving fenced and inline code alone. */
 export function normalizeMathDelimiters(content: string): string {
-    if (!content.includes('\\(') && !content.includes('\\[') && !content.includes('$$')) return content
+    const hasCurrencyBeforeEquation = /\$\d+(?:[.,]\d+)?[,]\s+[^$\n]+\$[A-Za-z][^$\n]*\$/.test(content)
+    if (!content.includes('\\(') && !content.includes('\\[') && !content.includes('$$') && !hasCurrencyBeforeEquation) return content
     const missingClosers = new Set<string>()
     let output = '', index = 0, fence = '', inline = ''
     while (index < content.length) {
         if (index === 0 || content[index - 1] === '\n') {
+            const indentedCodeLine = /^(?: {4,}|\t)[^\n]*(?:\n|$)/.exec(content.slice(index))
+            if (indentedCodeLine) { output += indentedCodeLine[0]; index += indentedCodeLine[0].length; continue }
             const marker = /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/.exec(content.slice(index))
             const displayLine = !fence && !inline ? /^ {0,3}\$\$([^\n]+?)\$\$[ \t]*(?:\r?\n|$)/.exec(content.slice(index)) : null
             if (displayLine) { output += `$$\n${displayLine[1]}\n$$\n`; index += displayLine[0].length; continue }
@@ -25,13 +28,20 @@ export function normalizeMathDelimiters(content: string): string {
             else if (inline === run) inline = ''
             output += run; index += run.length; continue
         }
+        if (!fence && !inline && content[index] === '$') {
+            const currencyBeforeEquation = /^\$\d+(?:[.,]\d+)?[,]\s+[^$\n]+\$[A-Za-z][^$\n]*\$/.exec(content.slice(index))
+            if (currencyBeforeEquation) { output += '\\$'; index += 1; continue }
+        }
         if (!fence && !inline && content[index] === '\\') {
             if (content[index + 1] === '\\') { output += '\\\\'; index += 2; continue }
             const display = content[index + 1] === '['
             if (display || content[index + 1] === '(') {
                 const closer = display ? '\\]' : '\\)'
-                const end = missingClosers.has(closer) ? -1 : content.indexOf(closer, index + 2)
-                if (end < 0) missingClosers.add(closer)
+                const candidateEnd = missingClosers.has(closer) ? -1 : content.indexOf(closer, index + 2)
+                const nextOpener = candidateEnd >= 0 ? content.indexOf(display ? '\\[' : '\\(', index + 2) : -1
+                const invalidatedByOpener = nextOpener >= 0 && nextOpener < candidateEnd
+                const end = invalidatedByOpener ? -1 : candidateEnd
+                if (candidateEnd < 0 && !missingClosers.has(closer)) missingClosers.add(closer)
                 if (end >= 0) {
                     const value = content.slice(index + 2, end)
                     output += display ? `\n$$\n${value}\n$$\n` : `$${value}$`
@@ -51,7 +61,12 @@ export function remarkMathFallback() {
         const source = String(file.value)
         const walk = (node: MathNode) => {
             const raw = source.slice(node.position?.start.offset, node.position?.end.offset)
-            const price = node.type === 'inlineMath' && /^\d/.test(node.value || '') && /^\d/.test(source.slice(node.position?.end.offset)) && !/[\\^_+=]/.test(node.value || '')
+            const value = node.value || ''
+            const trailingFormula = /^[A-Za-z][^$\n]*\$/.test(source.slice(node.position?.end.offset))
+            const price = node.type === 'inlineMath' && /^\d/.test(value) && (
+                /^\d/.test(source.slice(node.position?.end.offset)) ||
+                (/,\s+/.test(value) && trailingFormula)
+            ) && !/[\\^_+=]/.test(value)
             if ((node.type === 'math' && !/\n {0,3}\${2,}\s*$/.test(raw)) || price) {
                 node.type = 'text'; node.value = raw; delete node.data
             }

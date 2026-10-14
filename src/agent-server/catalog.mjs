@@ -2,7 +2,7 @@ import { stripSidebarBrowserContext } from "../browser-context.mjs";
 import { getAgentConversationKind } from '../agents/contracts.mjs';
 import { mobileHistoryStart } from './mobile-history-window.mjs';
 import { normalizeChatModel } from './chat-model.mjs';
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { replaceFileWithRetry } from '../file-replacement.mjs';
 import path from "node:path";
 import { getProjectSessionsDir } from "../project-paths.mjs";
@@ -112,15 +112,21 @@ export class CanonicalChatCatalog {
       // Recover old promoted workers and real threads from one known parent
       // fleet snapshot. No label heuristics, project-wide scans or history deletion.
       const file = path.join(chat.storageProject || chat.project, '.zyra', 'agent-runs', metadata.agentCreatedBy, 'fleet.snapshot.json');
-      let kinds = this.legacyAgentKinds.get(file);
-      if (!kinds) {
-        kinds = new Map();
-        try {
+      // Validate the cache against the current file; missing/changed snapshots
+      // must not keep a legacy independent conversation hidden until restart.
+      let kinds = new Map();
+      try {
+        const stat = statSync(file, { bigint: true });
+        const stamp = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}`;
+        const cached = this.legacyAgentKinds.get(file);
+        if (cached?.stamp === stamp) kinds = cached.kinds;
+        else {
           const snapshot = JSON.parse(readFileSync(file, 'utf8'));
           for (const run of Object.values(snapshot.agents || {})) if (run?.providerSessionId) kinds.set(run.providerSessionId, getAgentConversationKind(run));
-        } catch { /* Missing private fleet state never promotes a worker into a chat. */ }
-        this.legacyAgentKinds.set(file, kinds);
-      }
+          if (this.legacyAgentKinds.size >= 128) this.legacyAgentKinds.delete(this.legacyAgentKinds.keys().next().value);
+          this.legacyAgentKinds.set(file, { stamp, kinds });
+        }
+      } catch { this.legacyAgentKinds.delete(file); /* Missing private fleet state never promotes a worker into a chat. */ }
       kind = kinds.get(chat.canonicalChatId);
     }
     return applyMetadata(chat, { ...metadata, agentConversationKind: kind || (chat.agentThread || metadata.agentCreatedBy ? 'subagent' : null) }, this.record);

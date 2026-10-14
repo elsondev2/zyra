@@ -192,6 +192,10 @@ const syntaxTargets = [
 
 const coreTests = [
   "scripts/test-ci-relay.mjs",
+  "scripts/test-agent-conversation-kind.mjs",
+  "scripts/test-agent-conversations.mjs",
+  "scripts/test-agent-conversation-owner.mjs",
+  "scripts/test-managed-bash.mjs",
   "scripts/test-chat-catalog-file-locks.mjs",
  "scripts/test-agent-bridge-pipe-errors.mjs",
  "scripts/test-dev-command.mjs",
@@ -320,6 +324,7 @@ const quickCoreTests = [
 ];
 
 const serialCoreTests = new Set([
+  "scripts/test-agent-conversation-owner.mjs",
   "scripts/test-computer-tool-errors.mjs",
   "scripts/test-zyra-computer-control-tool.mjs",
   "scripts/test-zyra-plugin-revocation-bridge.mjs",
@@ -366,6 +371,7 @@ const desktopTasks = [
   { label: "desktop:test:markdown-renderer", bunArgs: ["run", "--cwd", "desktop", "test:markdown-renderer"] },
   { label: "desktop:test:compaction-replay", bunArgs: ["run", "--cwd", "desktop", "test:compaction-replay"] },
   { label: "desktop:test:assistant-response-media", bunArgs: ["run", "--cwd", "desktop", "test:assistant-response-media"] },
+  { label: "desktop:test:assistant-message-phase-persistence", bunArgs: ["run", "--cwd", "desktop", "test:assistant-message-phase-persistence"] },
   { label: "desktop:test:assistant-voice-transcription", bunArgs: ["run", "--cwd", "desktop", "test:assistant-voice-transcription"] },
   { label: "desktop:test:voice-conversation-settings", bunArgs: ["run", "--cwd", "desktop", "test:voice-conversation-settings"] },
   { label: "desktop:test:voice-history-storage", bunArgs: ["run", "--cwd", "desktop", "test:voice-history-storage"] },

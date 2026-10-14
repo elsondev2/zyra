@@ -1161,7 +1161,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     }, [props.onToggleRightSidebar])
 
     const canonicalVoiceDisabled = !canonicalVoiceBinding
-        || activeThreadHasAgentOrigin
+        || controller.activeThread?.source === 'subagent'
         || isThreadWorking
         || controller.commandPending
     const handlePrepareCanonicalVoice = useCallback((executionConfiguration: AssistantVoiceExecutionConfiguration) => {

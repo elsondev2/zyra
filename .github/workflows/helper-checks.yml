@@ -44,6 +44,7 @@ jobs:
         with:
           repository: ${{ inputs.source_repository }}
           ref: ${{ inputs.source_sha }}
+          fetch-depth: 2
           persist-credentials: false
       - name: Verify checkout identity
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -70,7 +71,7 @@ jobs:
             if test -f "desktop/scripts/$target"; then bun "desktop/scripts/$target"; else echo "Source revision has no $target target"; fi
           done
       - name: Privacy and patch checks
-        run: npm run privacy-check && git diff --check
+        run: npm run privacy-check && git diff --check "$SOURCE_SHA^" "$SOURCE_SHA"
       - name: Explain check scope
         run: |
           echo '## Quick source checks' >> "$GITHUB_STEP_SUMMARY"

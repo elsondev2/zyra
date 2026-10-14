@@ -112,10 +112,14 @@ export class AgentThreadCoordinator {
         const conversationKind = getAgentConversationKind(agent);
         // Workers stay addressable through their fleet without becoming chats.
         if (conversationKind === 'thread') this.server.catalog.index?.registerAgentThread?.(agent.sessionFile, project);
-        this.registered.add(agent.providerSessionId);
         if (conversationKind === 'thread' || this.server.catalog.index?.get?.(agent.providerSessionId)) {
           void this.server.catalog.updateChat(agent.providerSessionId, { title: agent.label, agentCreatedBy: owner.sessionKey, agentLabel: agent.label,
-            agentRunId: agent.agentRunId, agentConversationKind: conversationKind }).then(() => this.server.broadcastCatalogChanged({ canonicalChatId: agent.providerSessionId, agentThread: conversationKind === 'thread' })).catch(() => {});
+            agentRunId: agent.agentRunId, agentConversationKind: conversationKind }).then(() => {
+              this.registered.add(agent.providerSessionId);
+              this.server.broadcastCatalogChanged({ canonicalChatId: agent.providerSessionId, agentThread: conversationKind === 'thread' });
+            }).catch(() => { /* Leave it unregistered so the next fleet event retries metadata persistence. */ });
+        } else {
+          this.registered.add(agent.providerSessionId);
         }
       } catch { /* In-memory/transient child sessions have no canonical sidebar entry. */ }
     }
