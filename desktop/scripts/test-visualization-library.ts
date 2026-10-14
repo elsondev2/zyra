@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import { readVisualizationCandidatesFromDb } from '../src/main/assistant/visualization-candidates'
-import { mkdtemp, mkdir, rename, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createVisualizationStore } from '../../src/visualizations/store.mjs'
@@ -104,6 +104,11 @@ try {
                     item.versions.every((revision) => revision.source === ''),
             ),
             'metadata listing does not open immutable source files',
+        )
+        assert.equal(
+            (await new VisualizationLibrary().list(context, reader)).length,
+            2,
+            'restart ingestion of known legacy IDs remains metadata-only with an unavailable immutable file',
         )
         await assert.rejects(
             () => library.get(context, html.id),
@@ -218,6 +223,45 @@ try {
         1,
         'completed-message import and historical indexing preserve mixed-case Mermaid fences',
     )
+    const fullCwd = join(cwd, 'capacity-project')
+    await mkdir(fullCwd)
+    const fullContext = { cwd: fullCwd, threadId: 'capacity-thread' }
+    const template = await createVisualizationStore(fullContext).create({
+        kind: 'html',
+        title: 'At capacity',
+        source: '<p>Existing source</p>',
+    })
+    for (let index = 0; index < 499; index++) {
+        const id = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
+        const directory = join(fullCwd, '.zyra', 'visualizations', id)
+        await mkdir(directory)
+        await writeFile(join(directory, 'resource.json'), JSON.stringify({ ...template, id }))
+        await writeFile(join(directory, 'v1.html'), template.versions[0].source)
+    }
+    const overCap = {
+        ...legacy,
+        cursor: 1,
+        id: 'over-cap',
+        text: '<visualization title="Extra" summary="Over capacity">\n<p>Extra</p>\n</visualization>',
+    }
+    const reads: number[] = []
+    const capacityReader = async (after: number) => {
+        reads.push(after)
+        return after < 2 ? [overCap, { ...overCap, cursor: 2, id: 'over-cap-second' }] : []
+    }
+    const fullLibrary = new VisualizationLibrary()
+    assert.equal(
+        (await fullLibrary.list(fullContext, capacityReader)).length,
+        500,
+        'a failed legacy import at the supported cap cannot hide existing resources',
+    )
+    assert.equal(
+        fullLibrary.status(fullContext).skippedCount,
+        2,
+        'over-cap imports are accounted for without repeated writes',
+    )
+    assert.equal((await fullLibrary.list(fullContext, capacityReader)).length, 500)
+    assert.equal(reads.at(-1), 2, 'index cursor advances beyond capacity-blocked candidates')
     console.log(
         'Visualization library: legacy import, reopen, pins, explicit reuse, stable Project home, scope changes and completion passed',
     )

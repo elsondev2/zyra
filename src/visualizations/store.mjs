@@ -8,6 +8,9 @@ export const MAX_VISUALIZATION_MANIFEST_BYTES = 8 * 1024 * 1024;
 export const MAX_VISUALIZATION_PROJECT_BYTES = 16 * 1024 * 1024;
 export const MAX_VISUALIZATION_RESOURCES = 500;
 export const VISUALIZATION_LOCK_STALE_MS = 30000;
+export class VisualizationCapacityError extends Error {
+  constructor(message) { super(message); this.name = 'VisualizationCapacityError'; this.code = 'VISUALIZATION_CAPACITY'; }
+}
 
 const extension = { html: 'html', mermaid: 'mmd', scene3d: 'json' };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -206,7 +209,7 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
   }
   async function projectBudget(replacementId, replacementBytes = 0) {
     const entries = (await readdir(root)).filter(entry => VISUALIZATION_ID_PATTERN.test(entry));
-    if (entries.length > MAX_VISUALIZATION_RESOURCES || (replacementId && !entries.includes(replacementId) && entries.length >= MAX_VISUALIZATION_RESOURCES)) throw new Error('Visualization resource count limit reached.');
+    if (entries.length > MAX_VISUALIZATION_RESOURCES || (replacementId && !entries.includes(replacementId) && entries.length >= MAX_VISUALIZATION_RESOURCES)) throw new VisualizationCapacityError('Visualization resource count limit reached.');
     let total = replacementBytes;
     for (const id of entries) {
       const directory = directoryFor(id); await safeEntry(directory, 'directory');
@@ -215,9 +218,9 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
       const stat = await lstat(file);
       if (stat.size > MAX_VISUALIZATION_MANIFEST_BYTES) throw new Error('Oversized visualization manifest.');
       if (id !== replacementId) total += stat.size;
-      if (total > MAX_VISUALIZATION_PROJECT_BYTES) throw new Error('Visualization project source budget exceeded.');
+      if (total > MAX_VISUALIZATION_PROJECT_BYTES) throw new VisualizationCapacityError('Visualization project source budget exceeded.');
     }
-    if (total > MAX_VISUALIZATION_PROJECT_BYTES) throw new Error('Visualization project source budget exceeded.');
+    if (total > MAX_VISUALIZATION_PROJECT_BYTES) throw new VisualizationCapacityError('Visualization project source budget exceeded.');
   }
   async function save(resource, added) {
     await ensureRoot(true);
@@ -307,11 +310,15 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
         return save({ ...resource, title: added.title, summary: added.summary, latestVersion: added.version, updatedAt: now, versions: [...resource.versions, added] }, added);
       });
     },
-    async importLegacy(input) {
+    async importLegacy(input, { metadataOnly = false } = {}) {
       const origin = originValue(input?.origin);
       const normalized = normalizeVisualizationInput(input, { legacy: true });
       const createdAt = input.createdAt === undefined ? undefined : validateVisualizationTimestamp(input.createdAt);
       const id = importId(normalized.kind, origin);
+      // Existing imports are reads, not writes: avoid project-wide recovery and
+      // source I/O for the library's metadata-only ingestion path.
+      const known = await load(id, { metadataOnly });
+      if (known) return known;
       return withLock(async () => {
         const existing = await load(id);
         if (existing) return existing;

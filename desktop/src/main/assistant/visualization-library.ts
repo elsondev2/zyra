@@ -1,6 +1,9 @@
 import { realpath } from 'node:fs/promises'
 import { isAbsolute, relative } from 'node:path'
-import { createVisualizationStore } from '../../../../src/visualizations/store.mjs'
+import {
+    createVisualizationStore,
+    VisualizationCapacityError,
+} from '../../../../src/visualizations/store.mjs'
 import {
     extractLegacyVisualizationSources,
     parseVisualizationReferences,
@@ -91,28 +94,42 @@ export class VisualizationLibrary {
             createdAt: string
             turnId?: string | null
         },
+        importState = { capacityReached: false },
     ) {
         const skipped: string[] = []
         if (context.canImport === false || !/(?:visualization|mermaid)/i.test(message.text))
             return skipped
         const store = createVisualizationStore(context)
         for (const block of extractLegacyVisualizationSources(message.text)) {
+            if (importState.capacityReached) {
+                skipped.push(`${message.id}:${block.offset}`)
+                continue
+            }
             try {
                 validateVisualizationSource(block.kind, block.source, { legacy: true })
             } catch {
                 skipped.push(`${message.id}:${block.offset}`)
                 continue
             }
-            await store.importLegacy({
-                ...block,
-                origin: {
-                    threadId: context.threadId,
-                    messageId: message.id,
-                    offset: block.offset,
-                    ...(message.turnId ? { turnId: message.turnId } : {}),
-                },
-                createdAt: message.createdAt,
-            })
+            try {
+                await store.importLegacy(
+                    {
+                        ...block,
+                        origin: {
+                            threadId: context.threadId,
+                            messageId: message.id,
+                            offset: block.offset,
+                            ...(message.turnId ? { turnId: message.turnId } : {}),
+                        },
+                        createdAt: message.createdAt,
+                    },
+                    { metadataOnly: true },
+                )
+            } catch (cause) {
+                if (!(cause instanceof VisualizationCapacityError)) throw cause
+                importState.capacityReached = true
+                skipped.push(`${message.id}:${block.offset}`)
+            }
         }
         return skipped
     }
@@ -144,12 +161,15 @@ export class VisualizationLibrary {
         const state = scan
         if (!state.pending) {
             state.pending = (async () => {
+                // Once a capacity limit is reached, scan metadata without retrying
+                // writes for every remaining candidate in this indexing pass.
+                const importState = { capacityReached: false }
                 // Bounded batches yield between disk writes; later opens continue older indexing.
                 for (let batch = 0; batch < 8; batch++) {
                     const candidates = await readCandidates(state.cursor, 80)
                     state.hasMore = candidates.length === 80
                     for (const message of candidates) {
-                        const skipped = await this.importMessage(context, message)
+                        const skipped = await this.importMessage(context, message, importState)
                         skipped.forEach((id) => {
                             if (state.skipped.size < 500) state.skipped.add(id)
                         })

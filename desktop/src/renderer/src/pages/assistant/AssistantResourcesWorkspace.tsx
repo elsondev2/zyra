@@ -164,6 +164,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
     useEffect(() => {
         const request = ++listRequest.current
         ++detailRequest.current
+        setOpeningResourceId(null)
         if (!active || !threadId) { setVisualizations([]); setVisualizationLoad('idle'); return }
         const list = window.devscope.assistant.listVisualizations
         if (!list) { setVisualizations([]); setVisualizationLoad('unavailable'); return }

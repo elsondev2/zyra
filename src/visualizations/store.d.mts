@@ -9,8 +9,9 @@ export interface VisualizationStore {
   get(id: string, version?: number): Promise<(VisualizationResource & { selectedVersion: VisualizationRevision }) | null>;
   create(input: VisualizationInput): Promise<VisualizationResource>;
   revise(input: VisualizationReviseInput): Promise<VisualizationResource>;
-  importLegacy(input: VisualizationInput & { origin: VisualizationOrigin; createdAt?: string }): Promise<VisualizationResource>;
+  importLegacy(input: VisualizationInput & { origin: VisualizationOrigin; createdAt?: string }, options?: { metadataOnly?: boolean }): Promise<VisualizationResource>;
 }
+export class VisualizationCapacityError extends Error { readonly code: 'VISUALIZATION_CAPACITY'; }
 export const MAX_VISUALIZATION_MANIFEST_BYTES: number;
 export const MAX_VISUALIZATION_PROJECT_BYTES: number;
 export const MAX_VISUALIZATION_RESOURCES: number;
