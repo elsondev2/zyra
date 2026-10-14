@@ -130,6 +130,9 @@ jobs:
       - name: Verify native terminal ABI
         run: npm --prefix desktop run test:native-abi
 
+      - name: Validate source after tests before branding generation
+        run: node ../control/desktop/scripts/release/build-preview.mjs validate .
+
       - name: Prepare native icons
         run: python -m pip install --disable-pip-version-check Pillow==11.3.0 && npm --prefix desktop run brand:release-assets -- --preview
 

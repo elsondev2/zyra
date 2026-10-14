@@ -115,8 +115,15 @@ export class RelayCoordinator {
                 await this.state.storage.delete(key)
                 await this.state.storage.delete(`failed:${key}`)
             } catch {
-                await this.state.storage.put(`failed:${key}`, { event, at: Date.now(), message: 'Relay request failed and remains queued for recovery.' })
-                console.warn('Relay event failed; retaining queued delivery for recovery', key)
+                const prior = await this.state.storage.get(`failed:${key}`)
+                const attempts = (prior?.attempts || 0) + 1
+                const quarantined = attempts >= 3
+                await this.state.storage.transaction(async storage => {
+                    await storage.put(`failed:${key}`, { event, at: Date.now(), attempts, quarantined,
+                        message: quarantined ? 'Relay delivery quarantined after three failures; inspect before retrying.' : 'Relay delivery failed and remains queued for recovery.' })
+                    if (quarantined) await storage.delete(key)
+                })
+                console.warn(quarantined ? 'Relay poison delivery quarantined' : 'Relay delivery retained for recovery', key)
             }
         }
         const requests = await this.pendingRecords()

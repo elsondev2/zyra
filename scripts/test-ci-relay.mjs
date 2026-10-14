@@ -113,6 +113,15 @@ function fixture() {
         failNext(route, method = 'GET') { failures.set(`${method} ${route}`, 1) }, loseNextCommentResponse() { loseCommentResponse = true } }
 }
 const event = { kind: 'request', mode: 'preview', pr: 3, sha, requestId: 'delivery1' }
+const poisonQueue = fixture()
+const delivered = []
+poisonQueue.coordinator.handle = async input => { if (input.poison) throw new Error('Deleted helper run'); delivered.push(input.requestId) }
+for (let i=0;i<8;i++) await poisonQueue.coordinator.fetch(new Request('https://relay.internal',{method:'POST',body:JSON.stringify({delivery:`poison-${i}`,event:{...event,poison:true}})}))
+await poisonQueue.coordinator.fetch(new Request('https://relay.internal',{method:'POST',body:JSON.stringify({delivery:'zz-good',event})}))
+for (let i=0;i<4;i++) await poisonQueue.coordinator.alarm()
+assert.deepEqual(delivered,['zz-good'],'Eight poison deliveries cannot indefinitely starve later requests')
+assert.equal((await poisonQueue.storage.get('failed:queue:poison-0')).attempts,3,'Repeated failure remains recorded for inspection after bounded retries')
+assert.equal(await poisonQueue.storage.get('queue:poison-0'),undefined)
 const alarmRecovery = fixture()
 let alarmCalls = 0
 const scheduleAlarm = alarmRecovery.storage.setAlarm.bind(alarmRecovery.storage)
