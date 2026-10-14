@@ -6,6 +6,7 @@ import type { AssistantProjectChoice } from './assistant-project-choices'
 export type AssistantComposerProjectRoot = AssistantChatScopeRoot
 
 export type ComposerContextFile = {
+    selection?: import('./assistant-code-context').CodeSelectionSnapshot
     id: string
     path: string
     name?: string

@@ -18,8 +18,13 @@ export function getActiveAssistantThread(session: AssistantSession | null): Assi
     return session.threads.find((thread) => thread.id === session.activeThreadId) || null
 }
 
+/** Standalone supporting transcripts remain addressable, not user-facing chats. */
+export function isAssistantUserFacingSession(session: AssistantSession): boolean {
+    return session.threads.length === 0 || session.threads.some(thread => thread.source !== 'subagent')
+}
+
 export function getVisibleAssistantSessions(snapshot: AssistantSnapshot, includeArchived = false): AssistantSession[] {
-    return snapshot.sessions.filter((session) => includeArchived || !session.archived)
+    return snapshot.sessions.filter((session) => isAssistantUserFacingSession(session) && (includeArchived || !session.archived))
 }
 
 export function getAssistantSessionsByMode(
@@ -27,7 +32,7 @@ export function getAssistantSessionsByMode(
     mode: AssistantSession['mode'],
     includeArchived = false
 ): AssistantSession[] {
-    return snapshot.sessions.filter((session) => session.mode === mode && (includeArchived || !session.archived))
+    return snapshot.sessions.filter((session) => isAssistantUserFacingSession(session) && session.mode === mode && (includeArchived || !session.archived))
 }
 
 export function getAssistantPendingApprovals(thread: AssistantThread | null): AssistantPendingApproval[] {
@@ -120,6 +125,14 @@ export function getAssistantThreadPhase(thread: AssistantThread | null): {
     }
 
     const canonicalPresence = thread.canonicalPresence
+    const terminalTurn = thread.latestTurn && thread.latestTurn.state !== 'running' ? thread.latestTurn : null
+    const distinctActiveTurn = canonicalPresence?.state === 'running' && canonicalPresence.activeTurnId
+        && canonicalPresence.activeTurnId !== terminalTurn?.id
+    if (terminalTurn && !distinctActiveTurn && canonicalPresence?.state !== 'background'
+        && (thread.state === 'running' || thread.state === 'waiting' || canonicalPresence?.state === 'running')) {
+        return terminalTurn.state === 'interrupted' ? { key: 'stopped', label: 'Stopped' }
+            : terminalTurn.state === 'error' ? { key: 'error', label: 'Error' } : { key: 'ready', label: 'Idle' }
+    }
     if (canonicalPresence?.state === 'running') {
         return { key: 'running', label: 'Running' }
     }
@@ -173,6 +186,12 @@ export function isAssistantThreadActivelyWorking(thread: AssistantThread | null)
     // Connection, tool, and approval states can change while the same turn keeps
     // running. Only the turn ledger's terminal state can stop that active turn.
     if (thread?.latestTurn?.state === 'running') return true
+    if (thread?.latestTurn) {
+        // Background agents/processes do not reopen their parent's terminal turn.
+        return thread.canonicalPresence?.state === 'running'
+            && Boolean(thread.canonicalPresence.activeTurnId)
+            && thread.canonicalPresence.activeTurnId !== thread.latestTurn.id
+    }
 
     const phase = getAssistantThreadPhase(thread)
     if (phase.key === 'background') return true

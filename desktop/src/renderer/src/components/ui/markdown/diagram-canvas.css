@@ -1,0 +1,8 @@
+.mermaid-canvas {
+    background-image: radial-gradient(circle, color-mix(in srgb, var(--color-text-muted) 28%, transparent) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+.mermaid-canvas svg { background: transparent; }
+.mermaid-reveal { animation: mermaid-reveal 220ms ease-out both; }
+@keyframes mermaid-reveal { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mermaid-reveal { animation: none; } }

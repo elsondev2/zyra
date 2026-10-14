@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { LegendList, type LegendListRef, type LegendListRenderItemProps } from '@legendapp/list/react'
 import { ChevronUp } from 'lucide-react'
+import { usePresentationReducedMotion } from '@/lib/use-presentation-reduced-motion'
 import {
     rendererVisibility,
     shouldSnapRendererPresentation,
@@ -74,6 +75,8 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     renderRow: (row: TimelineDisplayRow) => ReactNode
 }) {
     const visibilitySnapshot = useRendererVisibilitySnapshot()
+    const reducedMotion = usePresentationReducedMotion()
+    const textStreaming = props.rows.some(row => row.kind === 'message' && row.message.streaming)
     const renderRowRef = useRef(props.renderRow)
     const disclosureTimerRef = useRef(0)
     const completionFollowTimerRef = useRef(0)
@@ -172,14 +175,14 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
 
     const requestEndAlignment = useCallback(() => {
         if (endAlignmentFrameRef.current !== null) return
+        const targetWindowKey = activeWindowKeyRef.current
         endAlignmentFrameRef.current = window.requestAnimationFrame(() => {
             endAlignmentFrameRef.current = null
-            if (scrollModeRef.current !== 'following-end') return
-            const element = props.scrollContainerRef?.current
-            if (element && Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight) > 1) return
+            if (activeWindowKeyRef.current !== targetWindowKey || scrollModeRef.current !== 'following-end') return
+            // Ownership, not old prompt geometry, decides whether to follow.
             void props.listRef.current?.scrollToEnd({ animated: false })
         })
-    }, [props.listRef, props.scrollContainerRef])
+    }, [props.listRef])
 
     const beginDisclosureLayout = useCallback((
         duration = DEFAULT_DISCLOSURE_SETTLE_MS,
@@ -328,10 +331,11 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
                 if (activeWindowKeyRef.current !== targetWindowKey) return
                 initialHistoryBackfillReadyRef.current = true
                 scheduleInitialHistoryBackfillCheck()
+                requestEndAlignment()
                 settleInitialPresentation(targetWindowKey, onInitialLayout)
             })
         })
-    }, [cancelStartupAlignment, props.onInitialLayout, props.windowKey, scheduleInitialHistoryBackfillCheck, settleInitialPresentation])
+    }, [cancelStartupAlignment, props.onInitialLayout, props.windowKey, requestEndAlignment, scheduleInitialHistoryBackfillCheck, settleInitialPresentation])
 
     const stopFollowingForUserNavigation = useCallback(() => {
         clearCompletionEndFollow()
@@ -721,9 +725,10 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             previousRowsRef.current = props.rows
             clearCompletionEndFollow()
             cancelEndAlignment()
-            // The startup layout effect already scheduled this window's presentation.
-            userNavigationAwayRef.current = false
-            updateScrollMode('following-end')
+            // Opening a search result is deliberate history navigation, not
+            // a request for the live end. Keep that ownership through startup.
+            userNavigationAwayRef.current = Boolean(props.focusMessageId)
+            updateScrollMode(props.focusMessageId ? 'free-scrolling' : 'following-end')
             return
         }
 
@@ -755,12 +760,21 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         cancelStartupAlignment,
         clearCompletionEndFollow,
         props.listRef,
+        props.focusMessageId,
         props.rows,
         props.windowKey,
         requestEndAlignment,
         scrollElement,
         updateScrollMode
     ])
+
+    useLayoutEffect(() => {
+        // LegendList owns live size/data follow. A second instant alignment on
+        // every token canceled its animation and produced visible line jumps.
+        if (startupSettled && textStreaming) return
+        if (!props.selectionHydrating && !disclosureLayoutActive && !props.focusMessageId
+            && scrollModeRef.current === 'following-end') requestEndAlignment()
+    }, [disclosureLayoutActive, props.focusMessageId, props.rows, props.selectionHydrating, props.windowKey, requestEndAlignment, startupSettled, textStreaming])
 
     useEffect(() => () => {
         window.clearTimeout(disclosureTimerRef.current)
@@ -820,14 +834,14 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             onLoad={handleInitialLoad}
             maintainVisibleContentPosition={maintainVisibleContentPosition}
             maintainScrollAtEnd={scrollMode === 'following-end' ? {
-                animated: false,
+                animated: startupSettled && textStreaming && !reducedMotion,
                 on: {
                     dataChange: true,
                     itemLayout: !disclosureLayoutActive,
                     layout: !disclosureLayoutActive
                 }
             } : false}
-            // Follow is explicitly owned by send/latest intent, not by geometry
+            // Follow is owned by opening/send/latest intent, not by geometry
             // after a tall prompt or late measurement moves the end farther away.
             maintainScrollAtEndThreshold={scrollMode === 'following-end' ? Number.POSITIVE_INFINITY : 0.12}
             contentInsetEndAdjustment={props.contentInsetEndAdjustment}

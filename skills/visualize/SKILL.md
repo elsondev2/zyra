@@ -1,15 +1,34 @@
 ---
 name: visualize
-description: Create full-width, themed inline HTML/CSS/SVG visualizations in Zyra chat, with native view/data toggles, collapsed supporting details and optional motion. Use proactively when charts, comparisons, diagrams, timelines or visual explanations help. Users need not name the skill. Prefer plain text for simple answers.
+description: Create saved, versioned HTML/SVG visuals, Mermaid diagrams and interactive 3D scenes in Zyra chat and the Resources inspector. Use proactively when charts, comparisons, diagrams, timelines or spatial explanations help. Users need not name the skill. Prefer plain text for simple answers.
 ---
 
 # Visualize in chat
 
 Use a visualization when it communicates something that prose would make harder to see. Do not decorate every reply. Use real data, label illustrative data, and never invent measurements. Optimize for reading a chat thread, not presenting a standalone dashboard.
 
-## Message format
+## Saved resources and pinned versions
 
-Emit this directly in an assistant response, outside code fences. The opening tag must occupy one line; the closing tag must occupy its own line. Put normal explanatory text before or after it.
+Before authoring a saved resource, read [the authoring guide](references/authoring.md) for the create/read/revise/embed workflow, readable source conventions, and complete HTML and 3D examples. Keep source indented and organized; never minify it for chat.
+
+Prefer the `visualization` tool for new visuals that users may reopen, edit or reuse. Resources are saved under the saved Project home's `.zyra/visualizations`, or under the current workspace for standalone/projectless sessions. A saved Project's resources remain available when its working folder changes. Explicit references can also resolve CLI resources in associated workspaces. The tool owns the storage root and thread identity. Do not provide an arbitrary root or thread ID.
+
+1. `create` with `kind` (`html`, `mermaid` or `scene3d`), concise `title`, meaningful `summary`, `source` and optional `height` (160–640).
+2. `embed` with the returned UUID and an explicit version. Emit its returned line directly, outside code fences:
+
+```html
+<visualization-ref id="00000000-0000-4000-8000-000000000000" version="1" />
+```
+
+Use only the real returned UUID. A reference is pinned: later edits do not change an earlier message. `list` finds saved resources; `read` returns source and revision history. To edit, read first, then `revise` with the resource ID, complete replacement source, `baseVersion` and `expectedVersion`. `baseVersion` is the parent snapshot (an older version creates a branch); `expectedVersion` is the currently observed latest revision. On a conflict, read again and reconcile; do not silently replace newer work. Revisions append permanently and retain a change note. Version source files are immutable snapshots; do not edit them directly. Use `revise` to save changes. Limits are 128 revisions per resource, 500 project resources, 8 MiB per resource manifest and 16 MiB of project manifests. A limit error leaves prior versions unchanged. Crashed-writer locks recover only after 30 seconds and a proven dead owner PID; live, reused or unknown owners fail closed. Recovery removes private manifest temp files and uncommitted source revisions, never committed snapshots. An unknown old-format lock or interrupted recovery claim requires explicit repair after confirming no writer is running.
+
+HTML remains scriptless and self-contained under the rules below. New edits reject malformed SVG numbers, path operands and point lists; calculate coordinates before submitting. Mermaid accepts diagram text without JavaScript, click/link actions or init directives. Existing completed inline HTML blocks and Mermaid fences are imported with message provenance; fenced HTML examples stay examples.
+
+For `scene3d`, prefer the tool's typed `scene` object parameter so JSON does not need to be escaped inside another JSON string. It accepts the same data as a JSON `source` string. Supply `schemaVersion:1`, an `objects` array (maximum 128), optional `camera:{position:[x,y,z],target:[x,y,z]}`, optional hex `background`, and optional boolean `grid`. Each object has a unique safe `id` and `type` (`box`, `sphere`, `pyramid`, `cylinder`, `torus`, `group`). Optional fields: `name`, `position`, `rotation` (radians), `scale`, hex `color`, `opacity` (0–1), `parentId` (a group), `size:[x,y,z]`, `radius`, `height`. Vectors must be finite; positions/camera coordinates are bounded to ±10000, rotation to ±3600, positive scale to 0.001–100, and geometry to 0.001–1000. Colors use #RGB or #RRGGBB. Parent graphs must be acyclic; combined ancestor scales may not exceed 100. Use declarative objects, never scripts, arbitrary models or external textures. Direct `<scene3d>` message blocks are not supported; save and embed the resource.
+
+## Legacy inline message format
+
+Completed inline blocks remain supported and are saved with provenance. Emit this directly in an assistant response, outside code fences. The opening tag must occupy one line; the closing tag must occupy its own line. Put normal explanatory text before or after it.
 
 ```html
 <visualization title="Delivery stages" summary="Research, build, and verify form three sequential stages." height="240">
@@ -27,7 +46,7 @@ small { color: var(--viz-muted); }
 ```
 
 - Always include a concise title and a meaningful plain-text summary. Quote attribute values; escape double quotes as `&quot;` and ampersands as `&amp;`.
-- Optional height is a quoted pixel number between 160 and 640, default 320. The user can expand and save the result.
+- Optional height is a quoted pixel maximum between 160 and 640, default 320. The preview fits short content and scrolls when it reaches this maximum. Its menu contains only Copy HTML and Download HTML.
 - Use self-contained HTML, CSS, and SVG only. No JavaScript, event handlers, external images, libraries, imports, fonts, iframes, forms, file access, or network requests. Native `<details>` can reveal supporting explanations.
 - Do not wrap a complete document in the tag. Supply body content and optional `<style>` rules.
 - Keep HTML under 64 KiB and responses under eight visualization blocks. Prefer one focused visual.
@@ -42,20 +61,71 @@ Defaults follow the current chat surface, including later theme changes:
 - `--viz-muted`: secondary text
 - `--viz-accent`: accent
 - `--viz-border`: dividers
+- `--viz-series-1` through `--viz-series-6`: chart categories, in purple, teal, amber, rose, blue and lime order; each adapts to light/dark themes
+- `--viz-on-series`: readable labels inside these colored marks
+- `--viz-track`: quiet unfilled bar tracks
+- `--viz-heat-low` and `--viz-heat-high`: endpoints for a sequential heatmap scale
 
-The default font also follows the app. Inline previews have no surrounding card or background. Let the visual sit on the page; do not add an enclosing card just to frame it. The title's information button holds the description and controls, and View HTML opens a separate source dialog. Use explicit colors only when the subject requires them, such as a flag or series colors. Keep labels readable in light and dark themes. Use responsive SVG viewBoxes, flexible grids, wrapping labels, and compact legends. Prefer inline styles or locally named CSS classes; no fixed viewport-width layouts.
+The default font also follows the app. Inline previews have no surrounding card or background. Let the visual sit on the page; do not add an enclosing card just to frame it. The title's options menu contains only Copy HTML and Download HTML. The summary remains available to assistive technology; include important context in the visible visual or surrounding text. Use the chart palette proactively for distinct categories or series: a clear purple/teal/amber comparison is welcome without a special color request. Keep the same category's color across views. A single quantity or ordered scale should retain one hue; use the heatmap endpoints for quantitative intensity, not unrelated category colors. Explicit subject colors, such as a flag or established brand, are still supported. Keep labels readable in light and dark themes. Use responsive SVG viewBoxes, flexible grids, wrapping labels, and compact legends. Prefer inline styles or locally named CSS classes; no fixed viewport-width layouts.
+
+The current app UI font is the default for HTML and SVG text. Leave `font-family` unset to inherit it; use an explicit family only when the user or subject calls for one. Zyra embeds the selected bundled or managed app font in previews and exported HTML. Do not author `@font-face`, `@import`, or font URLs: those loading rules are removed. An explicit family such as `serif` remains supported; installed system fonts depend on availability on the computer opening the export.
+
+## Chart craft
+
+- Build a clean reading order: concise heading, plot, visible values and units. Use compact spacing and enough contrast; vivid data marks belong against quiet tracks and dividers.
+- For horizontal bars, align category labels, tracks and end values in three columns. Use one shared baseline and scale, with lengths derived from the actual numbers. Show the unit once beside the scale. Keep labels at a readable size when narrow; do not shrink an entire wide SVG until its text becomes tiny.
+- Use distinct palette colors when categories need to be distinguished. Avoid giving every bar the app accent by habit. For one series across time, use one hue consistently.
+- Heatmaps need row/column labels, visible cell values and a stated scale. Use a monotonic color ramp, for example `color-mix(in srgb, var(--viz-heat-high) 70%, var(--viz-heat-low))` for 70 on a 0–100 scale. Keep numbers legible throughout the ramp; use plain text beside the grid if a cell cannot carry a readable label.
+- Prefer flat bars and tidy rectangular cells. Avoid decorative gradients, large rounded cards, shadows and duplicate headings. A gradient is useful when it expresses a continuous data scale.
+- Give SVG labels `fill="var(--viz-text)"` or `fill="var(--viz-muted)"` explicitly. SVG's default black text is unreadable on dark chat surfaces.
+- Label individual chart marks with `data-viz-tooltip="Window 3: 22 packets"` or a child SVG `<title>`. Zyra shows the value on hover and keyboard focus. Include visible units and values too.
+- Use `<figcaption>` for a short chart caption; the renderer supplies compact spacing. Avoid blank padding below short charts. Supporting `<details>` get full-width summaries and renderer-owned expand/collapse motion, respecting reduced motion.
+
+A compact category comparison, with explicitly illustrative values:
+
+```html
+<style>
+.snack-chart { display: grid; grid-template-columns: minmax(72px, 96px) minmax(0, 1fr) 28px; gap: 12px; align-items: center; }
+.snack-track { height: 20px; background: var(--viz-track); }
+.snack-fill { height: 100%; }
+.snack-value { text-align: right; font-variant-numeric: tabular-nums; }
+.snack-axis { display: flex; justify-content: space-between; grid-column: 2; color: var(--viz-muted); font-size: 12px; }
+</style>
+<div class="snack-chart" role="img" aria-label="Fictional snack demand on a 0 to 100 unit scale: Moon chips 84, Byte bites 57, RAM rolls 32.">
+  <span>Moon chips</span><div class="snack-track"><div class="snack-fill" style="width:84%;background:var(--viz-series-1)"></div></div><span class="snack-value">84</span>
+  <span>Byte bites</span><div class="snack-track"><div class="snack-fill" style="width:57%;background:var(--viz-series-2)"></div></div><span class="snack-value">57</span>
+  <span>RAM rolls</span><div class="snack-track"><div class="snack-fill" style="width:32%;background:var(--viz-series-3)"></div></div><span class="snack-value">32</span>
+  <div class="snack-axis"><span>0</span><span>50</span><span>100 units · fictional</span></div>
+</div>
+```
+
+A small heatmap can use the same quantitative ramp for every row; these values are also fictional:
+
+```html
+<style>
+.score-grid { display:grid; grid-template-columns:72px repeat(2,minmax(44px,1fr)); gap:5px; align-items:center; }
+.score-cell { padding:8px; text-align:center; font-variant-numeric:tabular-nums; background:color-mix(in srgb,var(--viz-heat-high) var(--level),var(--viz-heat-low)); color:var(--viz-text); }
+.score-day { color:var(--viz-muted); text-align:center; }
+</style>
+<p>Fictional activity scores · 0–100</p>
+<div class="score-grid" role="img" aria-label="Fictional scores: Kitchen Monday 15, Tuesday 40; Lab Monday 70, Tuesday 25.">
+  <span></span><span class="score-day">Mon</span><span class="score-day">Tue</span>
+  <span>Kitchen</span><span class="score-cell" style="--level:15%">15</span><span class="score-cell" style="--level:40%">40</span>
+  <span>Lab</span><span class="score-cell" style="--level:70%">70</span><span class="score-cell" style="--level:25%">25</span>
+</div>
+```
 
 ## Fit the chat thread
 
 - Use the full message width by default: a fluid wrapper, `width:100%` for charts, flexible labels and wrapping controls. Do not add an arbitrary `max-width:640px`, fixed chart width, centered narrow column, or surrounding card. Exceptions are intrinsically sized objects such as a flag or icon, not data charts.
 - Start with the answer and one useful visual. Do not repeat the title, headline number, legend and explanatory paragraph unless each adds information.
-- Keep critical context visible, such as the unit, selected period and next reset. Put snapshot time, provenance, missing secondary windows, caveats and secondary counts inside a closed `<details><summary>Details</summary>...</details>` or the title's information summary. A caveat that changes the main conclusion must remain visible.
-- Choose a compact height for the collapsed state. Details can use the frame's scrolling and the existing Expand action. Do not reserve a tall blank region for hidden content. The iframe does not automatically resize to disclosures.
+- Keep critical context visible, such as the unit, selected period and next reset. Put snapshot time, provenance, missing secondary windows, caveats and secondary counts inside a closed `<details><summary>Details</summary>...</details>` within the visualization. A caveat that changes the main conclusion must remain visible.
+- Choose a compact height that fits the main content. Details can use the frame's scrolling; there is no Expand action. Do not reserve a tall blank region for hidden content. The iframe does not automatically resize to disclosures.
 - Keep visualizations self-contained and lightweight. Prefer one small chart to several duplicate panels. Avoid large precomputed state combinations, rasterized charts, repeated styles across many blocks and decorative effects. The 64 KiB limit is a ceiling, not a target.
 
 ## Useful interactions without scripts
 
-When the user wants controls, author them inside the visualization. The runtime supplies source/export/expand controls, not a universal chart toolbar.
+When the user wants controls, author them inside the visualization. The runtime supplies Copy HTML and Download HTML, not a universal chart toolbar.
 
 - Native `<details>` and `<summary>` work with mouse, touch and keyboard. CSS `[open]` sibling selectors or `:has()` can switch the visible representation, selected measure or included data. Give the summary a clear, current-state label and keep its focus indicator.
 - Offer only useful choices, for example Bar / Ring, Remaining / Used, or Summary / Table. Switching the representation must preserve the selected data and scale. Switching a measure must update its number, label and geometry together.

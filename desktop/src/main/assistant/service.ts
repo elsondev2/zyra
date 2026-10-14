@@ -1,3 +1,6 @@
+import { findSupersededRuntimeCompactionIds } from './compaction-reconciliation'
+import { VisualizationLibrary, resolveVisualizationLibraryContext } from './visualization-library'
+import type { GetVisualizationInput, ListVisualizationsInput } from '../../shared/visualization-resources'
 import { usageProjectionFallback } from '../../shared/assistant/usage-ownership'
 import { ensureCanonicalChatAvailability } from './canonical-chat-availability'
 import { projectThreadMessage } from '../../shared/assistant/thread-message'
@@ -11,13 +14,19 @@ import { MobileVoicePresence, clearRestoredMobileVoice } from './mobile-voice-pr
 import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
 import { canonicalVoicePresentationEvent } from './voice/canonical-voice-presentation'
 import { resolveAssistantWorkingDirectory } from '../../shared/assistant/working-directory'
+import { resolveImportedAssistantProjectPath } from '../../shared/assistant/project-identity'
+import { prepareDefaultChatWorkspace } from '../setup/default-chat-workspace'
+import { filterAssistantAutomaticProjectImports } from './assistant-project-persistence'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { app, safeStorage, shell } from 'electron'
+import * as electron from 'electron'
+import { ChatNotifications, type ChatAttentionNotice } from './chat-notifications'
 import { PluginMcpConnections } from './plugin-mcp-connections'
 import log from 'electron-log'
+import { requestAssistantBackgroundProcesses } from './service-background-processes'
 import type {
     AssistantApprovePendingPlaygroundLabRequestInput,
     AssistantAssociateProjectFolderInput,
@@ -92,7 +101,10 @@ import type { AnalyticsEventInput, AnalyticsEventName } from '../../shared/analy
 import { inspectProjectAnalyticsCapabilities } from '../analytics/project-capabilities'
 import { classifyAnalyticsErrorCode as classifyAnalyticsError } from '../../shared/analytics/error-code'
 import { findAssistantMessageReplayDuplicateIds, preserveCanonicalUserReplayBoundaries } from '../../shared/assistant/message-reconciliation'
-import { normalizeCanonicalMessageSourceId } from '../../shared/assistant/message-identity'
+import { canonicalDesktopMessageId, canonicalPiMessageSourceId } from './canonical-message-identity'
+import { preserveAssistantMessagePhases } from '../../shared/assistant/message-phase'
+import { CanonicalMessagePhaseRecovery } from './canonical-message-phase-recovery'
+import { extractAssistantEventMessagePhase } from './assistant-message-content'
 import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { reconcileAssistantUserInputResponseMessageIds } from '../../shared/assistant/user-input-continuation'
 import { recoverCanonicalUserInputReceipts, mergeRecoveredUserInputReceipts } from './user-input-history'
@@ -134,6 +146,7 @@ import { canonicalImageAttachmentSection } from './canonical-media-cache'
 import { getAssistantCanonicalThreadId } from './thread-identity'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
+import { AssistantStartupSelection } from './startup-selection'
 import { AssistantPersistence } from './persistence'
 import { connectWithStablePluginAuthority, PluginAuthorityMutations } from './assistant-plugin-authority'
 import { AssistantPluginRegistry } from './assistant-plugin-registry'
@@ -146,10 +159,12 @@ import {
     listAssistantPromptResources,
     updateAssistantSkillSourceSettings
 } from './prompt-resources'
-import { toAssistantShellSnapshot } from './persistence-snapshot'
+import { shouldKeepHydratedThread, toAssistantShellSnapshot } from './persistence-snapshot'
 import { FleetProjection, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
-import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, regenerateSessionTitleFromPrompt, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
-import { resolveSessionTitleTarget } from './session-title-target'
+import { recoverSessionTitleFromHistory, queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, regenerateSessionTitleFromPrompt, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
+import { recoverAssistantSidebarTitles } from './sidebar-title-recovery'
+import { findSessionTitleThread, resolveSessionTitleTarget } from './session-title-target'
+import { awaitCanonicalSessionTitleSaves } from './session-title-updates'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
 import {
@@ -184,7 +199,8 @@ import {
     buildStreamingToolActivity,
     handleAssistantRuntimeEvent
 } from './service-runtime-events'
-import { hasCanonicalUserInputAttention, mergeCanonicalPresenceLatestTurn, mergeCanonicalPresenceObservation, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
+import { projectCanonicalAgentOrigin } from './service-canonical-agent-origin'
+import { hasCanonicalUserInputAttention, isCanonicalPresenceActive, mergeCanonicalCompletionReceipt, mergeCanonicalPresenceLatestTurn, mergeCanonicalPresenceObservation, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
 import { leaveAssistantThreadForNavigation, shouldKeepAssistantThreadAttachedDuringNavigation } from './service-navigation-runtime'
 import { CanonicalHistoryRefreshTracker, shouldRefreshCanonicalHistory } from './canonical-history-refresh-policy'
 import { TrailingAsyncReconciler } from './trailing-async-reconciler'
@@ -265,6 +281,7 @@ type PendingCanonicalVoiceStart = {
 }
 
 export type AssistantServiceOptions = {
+    openNotificationChat?: (canonicalChatId: string) => Promise<void>
     getDefaultProjectsFolder?: () => string | null
     getNewChatExecutionDefaults?: () => Promise<{ webSearch: boolean; webFetch: boolean }>
     getNewChatPreparationModel?: () => Promise<string | null>
@@ -320,6 +337,13 @@ export class AssistantService {
     private static readonly ASSISTANT_EVENT_BROADCAST_BATCH_MS = 16
 
     private readonly runtime: ZyraRuntime
+    private readonly threadViews = new Map<string, { threadId: string; expiresAt: number }>()
+    private readonly chatNotifications = new ChatNotifications({
+        readChat: (id) => this.runtime.getCanonicalChat(id),
+        create: (options) => electron.Notification.isSupported() ? new electron.Notification(options) : null,
+        openChat: async (id) => { await this.options.openNotificationChat?.(id) },
+        failed: (error) => log.warn('[Assistant] Chat notification failed', error)
+    })
     private modelCatalogLastAttemptAt = 0
     private modelCatalogLastRefreshFailed = false
     private modelCatalogTimer: ReturnType<typeof setInterval> | null = null
@@ -425,6 +449,8 @@ export class AssistantService {
     private disposePromise: Promise<void> | null = null
     private disposeRequested = false
     private readonly actionDeps: AssistantServiceActionDeps
+    private readonly startupSelection = new AssistantStartupSelection()
+    private sidebarTitleRecovery: Promise<void> | null = null
 
     private state: AssistantStateRecord = {
         snapshot: createDefaultSnapshot(),
@@ -439,6 +465,7 @@ export class AssistantService {
     private canonicalHistoryBodyCacheBytes = 0
     private readonly canonicalHistoryLoadPromises = new Map<string, Promise<void>>()
     private readonly canonicalHistoryRefresh = new CanonicalHistoryRefreshTracker()
+    private readonly canonicalMessagePhaseRecovery = new CanonicalMessagePhaseRecovery()
     private readonly canonicalHistoryState = new Map<string, {
         before: string | null
         hasOlder: boolean
@@ -492,9 +519,11 @@ export class AssistantService {
         this.runtime.on('runtime', (event) => {
             this.handleRuntimeEvent(event)
         })
+        this.runtime.on('chat.attention', (notice: ChatAttentionNotice) => { void this.chatNotifications.receive(notice) })
         this.runtime.on('catalog.changed', (value) => {
             const change = asCanonicalRecord(value)
             const canonicalChatId = String(change?.['canonicalChatId'] || '').trim()
+            void this.chatNotifications.refresh(canonicalChatId || undefined)
             const transcriptChanged = !change
                 || change['canonicalMessage'] === true
                 || !change['presence'] && !change['metadata'] && !change['title'] && !change['project']
@@ -550,8 +579,8 @@ export class AssistantService {
             this.broadcastRealtimeVoiceEvent(event, false, eventOwner)
         })
         void this.readyPromise
-            .then(() => this.recoverSelectedSessionTitle())
-            .catch((error) => log.warn('[Assistant] Failed to recover the selected chat title', error))
+            .then(() => this.recoverSidebarSessionTitles())
+            .catch((error) => log.warn('[Assistant] Failed to recover chat titles', error))
     }
 
     subscribe(senderId: number) {
@@ -561,6 +590,26 @@ export class AssistantService {
 
     unsubscribe(senderId: number) {
         this.subscribers.delete(senderId)
+        this.threadViews.delete(`desktop:${senderId}`)
+        return { success: true as const }
+    }
+
+    async setThreadView(viewId: string, input: { threadId: string; viewing: boolean }, surface: 'desktop' | 'browser' = 'desktop') {
+        await this.ensureReady()
+        if (!input || typeof input.threadId !== 'string' || typeof input.viewing !== 'boolean') throw new Error('Invalid chat view.')
+        const record = findThreadRecord(this.state.snapshot, input.threadId)
+        if (!record) return { success: false as const, error: 'Chat is unavailable.' }
+        for (const [id, view] of this.threadViews) if (view.expiresAt <= Date.now()) this.threadViews.delete(id)
+        if (input.viewing) this.threadViews.set(viewId, { threadId: record.thread.id, expiresAt: Date.now() + 35_000 })
+        else if (this.threadViews.get(viewId)?.threadId === record.thread.id) this.threadViews.delete(viewId)
+        const turn = record.thread.latestTurn
+        if (input.viewing && turn && ['completed', 'interrupted'].includes(turn.state) && record.thread.lastSeenCompletedTurnId !== turn.id) {
+            this.appendEvent('thread.updated', nowIso(), { threadId: record.thread.id, patch: { lastSeenCompletedTurnId: turn.id } }, record.session.id, record.thread.id)
+        }
+        if (record.thread.providerThreadId) await this.runtime.reportCanonicalChatView(record.thread.providerThreadId, {
+            viewId, surface, viewing: input.viewing,
+            ...(turn && ['completed', 'interrupted'].includes(turn.state) ? { seenTurnId: turn.id, seenCompletedAt: turn.completedAt } : {})
+        })
         return { success: true as const }
     }
 
@@ -751,6 +800,8 @@ export class AssistantService {
 
     async getBootstrap() {
         await this.ensureReady()
+        await this.startupSelection.ensure(this.actionDeps)
+        void this.recoverSidebarSessionTitles()
         const status = await this.getStatus()
         return {
             snapshot: toAssistantShellSnapshot(this.state.snapshot),
@@ -767,7 +818,10 @@ export class AssistantService {
         const discoveryRoots = await this.options.getProjectDiscoveryRoots?.().catch(() => []) || []
         return {
             success: true as const,
-            catalog: await this.persistence.listProjects(discoveryRoots)
+            catalog: filterAssistantAutomaticProjectImports(
+                await this.persistence.listProjects(discoveryRoots),
+                this.options.getDefaultProjectsFolder?.()
+            )
         }
     }
 
@@ -1271,6 +1325,7 @@ export class AssistantService {
         const snapshot = toAssistantShellSnapshot(this.state.snapshot)
         if (!isAssistantDevelopmentChatFixtureSessionId(sessionId)) {
             this.scheduleSelectedCanonicalSessionSynchronization(sessionId, generation)
+            void this.recoverSessionTitle(sessionId).catch(error => log.warn('[Assistant] Selected chat title recovery failed:', error))
         }
         return { ...result, snapshot }
     }
@@ -1285,6 +1340,7 @@ export class AssistantService {
         const snapshot = toAssistantShellSnapshot(this.state.snapshot)
         if (!isAssistantDevelopmentChatFixtureSessionId(sessionId)) {
             this.scheduleSelectedCanonicalSessionSynchronization(sessionId, generation)
+            void this.recoverSessionTitle(sessionId).catch(error => log.warn('[Assistant] Selected chat title recovery failed:', error))
         }
         return { ...result, snapshot }
     }
@@ -1296,6 +1352,36 @@ export class AssistantService {
         await this.ensureCanonicalHistoryLoaded(record.session, record.thread)
         const refreshedRecord = findThreadRecord(this.state.snapshot, threadId) || record
         const detail = await this.persistence.readThreadDetail(refreshedRecord.thread.id)
+        detail.history.messages = preserveAssistantMessagePhases(refreshedRecord.thread.messages, detail.history.messages)
+        if (refreshedRecord.thread.providerThreadId) {
+            detail.history.messages = await this.canonicalMessagePhaseRecovery.recover(refreshedRecord.thread, detail.history.messages, async () => {
+                try {
+                    const history = await this.runtime.readCanonicalChatHistory(refreshedRecord.thread.providerThreadId!, this.getSessionRuntimeCwd(refreshedRecord.session, refreshedRecord.thread), {
+                        limit: CANONICAL_CHAT_HISTORY_PAGE_LIMIT,
+                        toolResultBodies: 'lazy-v1'
+                    })
+                    return history?.entries || null
+                } catch (error) {
+                    log.warn('[Assistant] Failed to recover canonical message phase', error)
+                    return null
+                }
+            })
+            // A live event may have advanced the message while the read was in
+            // flight. Copy only missing phase onto current resident records.
+            const current = findThreadRecord(this.state.snapshot, threadId)
+            if (current) {
+                const livePhases = new Map(current.thread.messages.filter(message => message.role === 'assistant' && message.phase)
+                    .map(message => [message.id, message.phase] as const))
+                detail.history.messages = detail.history.messages.map(message => {
+                    const phase = message.role === 'assistant' ? livePhases.get(message.id) : undefined
+                    return phase && phase !== message.phase ? { ...message, phase } : message
+                })
+                const resident = preserveAssistantMessagePhases(detail.history.messages, current.thread.messages)
+                if (resident !== current.thread.messages) this.appendEvent('thread.updated', nowIso(), {
+                    threadId, patch: { messages: resident.filter((message, index) => message !== current.thread.messages[index]) }
+                }, current.session.id, threadId)
+            }
+        }
         return { success: true as const, detail }
     }
 
@@ -1480,7 +1566,7 @@ export class AssistantService {
                 this.appendEvent(type, occurredAt, payload, eventSessionId, eventThreadId)
             },
             onApplied: async (nextTitle) => {
-                await Promise.allSettled(canonicalIds
+                await awaitCanonicalSessionTitleSaves(canonicalIds
                     .map((providerThreadId) => this.runtime.updateCanonicalChat(providerThreadId, { title: nextTitle })))
             }
         }
@@ -1682,7 +1768,17 @@ export class AssistantService {
         } catch (error) {
             this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'fail', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
             throw error
+        } finally {
+            this.flushBroadcastEvents()
         }
+    }
+
+    async listBackgroundProcesses(input: import('../../shared/assistant/contracts').AssistantBackgroundProcessesInput) {
+        return requestAssistantBackgroundProcesses(this.actionDeps, 'list', input)
+    }
+
+    async stopBackgroundProcesses(input: import('../../shared/assistant/contracts').AssistantStopBackgroundProcessesInput) {
+        return requestAssistantBackgroundProcesses(this.actionDeps, 'stop', input)
     }
 
     async interruptTurn(turnId?: string, sessionId?: string) {
@@ -1700,7 +1796,7 @@ export class AssistantService {
         return respondAssistantApprovalAction(this.actionDeps, input)
     }
 
-    async respondUserInput(input: { requestId: string; answers: Record<string, string | string[]> }) {
+    async respondUserInput(input: import('../../shared/assistant/contracts').AssistantUserInputResponseInput) {
         return respondAssistantUserInputAction(this.actionDeps, input)
     }
 
@@ -2024,6 +2120,8 @@ export class AssistantService {
     }
 
     dispose(): Promise<void> {
+        this.chatNotifications.dispose()
+        this.threadViews.clear()
         if (this.disposePromise) return this.disposePromise
         this.disposeRequested = true
         if (this.modelCatalogTimer) clearInterval(this.modelCatalogTimer)
@@ -2679,14 +2777,14 @@ export class AssistantService {
             streaming: false,
             providerItemId: input.providerItemId,
             modality: input.modality,
-            createdAt: input.providerCompletedAt,
+            createdAt: input.providerStartedAt || input.providerCompletedAt,
             updatedAt: receipt.observedAt
         }
         if (input.role === 'user') {
             const persistedFirstUserMessage = await this.persistence.readFirstUserMessageText(record.session.id)
             const shouldGenerateTitle = shouldGenerateSessionTitleForPrompt(record.session, persistedFirstUserMessage)
             let titleSeed = record.session.title
-            this.appendEvent('thread.message.user', input.providerCompletedAt, {
+            this.appendEvent('thread.message.user', message.createdAt, {
                 threadId: record.thread.id,
                 message
             }, record.session.id, record.thread.id)
@@ -2723,7 +2821,7 @@ export class AssistantService {
                 })
             }
         } else {
-            this.appendEvent('thread.message.assistant.delta', input.providerCompletedAt, {
+            this.appendEvent('thread.message.assistant.delta', message.createdAt, {
                 threadId: record.thread.id,
                 messageId: input.messageId,
                 delta: input.text,
@@ -2880,6 +2978,7 @@ export class AssistantService {
                 patch: {
                     canonicalPresence: mergeCanonicalPresenceObservation(thread.canonicalPresence, chat.presence),
                     latestTurn,
+                    lastSeenCompletedTurnId: mergeCanonicalCompletionReceipt(thread.lastSeenCompletedTurnId, chat.lastSeenCompletedTurnId, latestTurn?.id),
                     state: resolveCanonicalPresenceThreadState({
                         currentState: thread.state,
                         localThread: thread,
@@ -2910,14 +3009,21 @@ export class AssistantService {
         }
         for (const chat of chats) {
             if (!chat.canonicalChatId) continue
+            const agentOrigin = projectCanonicalAgentOrigin(chat)
             const existing = this.state.snapshot.sessions
                 .flatMap((session) => session.threads.map((thread) => ({ session, thread })))
                 .find(({ thread }) => thread.providerThreadId === chat.canonicalChatId)
             const createdAt = normalizeCatalogDate(chat.createdAt)
             const updatedAt = normalizeCatalogDate(chat.modifiedAt, createdAt)
-            const canonicalProjectPath = this.resolveCanonicalProjectPath(chat.project, chat.cwd)
-            const canonicalRuntimeCwd = canonicalProjectPath || this.persistence.getGlobalWorkspaceRoot()
-            const messageCount = Math.max(0, Number(chat.displayMessageCount ?? chat.messageCount) || 0)
+            const canonicalProjectPath = resolveImportedAssistantProjectPath({
+                canonicalProjectPath: this.resolveCanonicalProjectPath(chat.project),
+                existingSession: existing?.session
+            })
+            const canonicalRuntimeCwd = this.resolveCanonicalProjectPath(chat.cwd)
+                || canonicalProjectPath
+                || this.options.getDefaultProjectsFolder?.()
+                || this.persistence.getGlobalWorkspaceRoot()
+            const messageCount = canonicalCatalogMessageCount(chat)
             const activityCount = Math.max(0, Number(chat.toolCallCount || 0) + Number(chat.errorCount || 0))
             if (existing) {
                 if (shouldRefreshCanonicalHistory({
@@ -2940,7 +3046,7 @@ export class AssistantService {
                     }, existing.session.id, existing.thread.id)
                 }
                 const nextCwd = this.resolveCanonicalProjectPath(existing.session.workingRoot) || canonicalRuntimeCwd
-                const canonicalTurnActive = chat.presence?.state === 'running' || chat.presence?.state === 'background'
+                const canonicalTurnActive = isCanonicalPresenceActive(chat.presence)
                 const nextMessageCount = canonicalTurnActive ? Math.max(existing.thread.messageCount, messageCount) : messageCount
                 const nextActivityCount = Math.max(existing.thread.activityCount, activityCount)
                 const nextCanonicalPresence = chat.presence
@@ -2954,6 +3060,7 @@ export class AssistantService {
                     presence: nextCanonicalPresence
                 })
                 const nextLatestTurn = mergeCanonicalPresenceLatestTurn(existing.thread.latestTurn, nextCanonicalPresence)
+                const nextSeenTurnId = mergeCanonicalCompletionReceipt(existing.thread.lastSeenCompletedTurnId, chat.lastSeenCompletedTurnId, nextLatestTurn?.id)
                 const latestTurnChanged = JSON.stringify(existing.thread.latestTurn || null) !== JSON.stringify(nextLatestTurn || null)
                 const nextAttention = resolveCanonicalPresenceAttention({
                     currentHasPendingApprovals: existing.thread.hasPendingApprovals,
@@ -2973,8 +3080,10 @@ export class AssistantService {
                     || existing.thread.hasPendingApprovals !== nextHasPendingApprovals
                     || existing.thread.hasPendingUserInputs !== nextHasPendingUserInputs
                     || latestTurnChanged
+                    || existing.thread.lastSeenCompletedTurnId !== nextSeenTurnId
                     || presenceChanged
                     || Boolean(chat.agentLabel && existing.thread.agentNickname !== chat.agentLabel)
+                    || Boolean(agentOrigin && existing.thread.source !== agentOrigin.source)
                 ) {
                     this.appendEvent('thread.updated', updatedAt, {
                         threadId: existing.thread.id,
@@ -2985,10 +3094,11 @@ export class AssistantService {
                             activityCount: nextActivityCount,
                             canonicalPresence: nextCanonicalPresence,
                             latestTurn: nextLatestTurn,
+                            lastSeenCompletedTurnId: nextSeenTurnId,
                             hasPendingApprovals: nextHasPendingApprovals,
                             hasPendingUserInputs: nextHasPendingUserInputs,
                             state: nextThreadState,
-                            ...(chat.agentCreatedBy ? { source: 'subagent', providerParentThreadId: chat.agentCreatedBy, agentNickname: chat.agentLabel || 'Agent' } : {}),
+                            ...agentOrigin,
                             updatedAt
                         }
                     }, existing.session.id, existing.thread.id)
@@ -3010,17 +3120,14 @@ export class AssistantService {
             const thread = createAssistantThread(createdAt, null, canonicalRuntimeCwd)
             thread.id = threadId
             thread.providerThreadId = chat.canonicalChatId
-            if (chat.agentCreatedBy) {
-                thread.source = 'subagent'
-                thread.providerParentThreadId = chat.agentCreatedBy
-                thread.agentNickname = chat.agentLabel || 'Agent'
-            }
+            if (agentOrigin) Object.assign(thread, agentOrigin)
             thread.messageCount = messageCount
             thread.activityCount = activityCount
             thread.canonicalPresence = chat.presence
                 ? mergeCanonicalPresenceObservation(undefined, chat.presence)
                 : undefined
             thread.latestTurn = mergeCanonicalPresenceLatestTurn(null, chat.presence)
+            thread.lastSeenCompletedTurnId = chat.lastSeenCompletedTurnId || null
             thread.hasPendingApprovals = chat.presence?.attention === 'approval'
             thread.hasPendingUserInputs = hasCanonicalUserInputAttention(chat.presence)
             if (chat.presence?.state === 'running') thread.state = 'running'
@@ -3033,6 +3140,7 @@ export class AssistantService {
                 createdAt,
                 thread
             })
+            session.workingRoot = canonicalRuntimeCwd
             session.archived = chat.archived === true
             session.updatedAt = updatedAt
             this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
@@ -3212,6 +3320,12 @@ export class AssistantService {
                         projection.legacyActivityIds
                     )
                 ])]
+                // Local events can advance while the history response or SQLite
+                // read is pending. Re-read the current thread before counting.
+                const currentThread = findThreadRecord(this.state.snapshot, input.threadId)?.thread || record.thread
+                const canonicalMessageCount = canonicalCatalogMessageCount(history.chat)
+                const canonicalTurnActive = currentThread.latestTurn?.state === 'running'
+                    || shouldKeepHydratedThread(currentThread) || isCanonicalPresenceActive(history.chat.presence)
                 this.appendEvent('thread.updated', normalizeCatalogDate(history.chat.modifiedAt, record.thread.updatedAt), {
                     threadId: input.threadId,
                     patch: {
@@ -3219,7 +3333,7 @@ export class AssistantService {
                         canonicalHistoryEntryCount,
                         messages: canonicalMessages,
                         activities: canonicalActivities,
-                        messageCount: countMergedCanonicalRecords(persistedTimeline.messages, canonicalMessages, removedMessageIds),
+                        messageCount: canonicalTurnActive ? Math.max(currentThread.messageCount, canonicalMessageCount) : canonicalMessageCount,
                         activityCount: countMergedCanonicalRecords(persistedTimeline.activities, canonicalActivities, removedActivityIds)
                     },
                     removedMessageIds,
@@ -3405,11 +3519,12 @@ export class AssistantService {
     }
 
     private async maybeAutoRegenerateSessionTitle(sessionId: string, threadId: string): Promise<void> {
-        const preferences = await this.options.getTitleAutomation?.().catch(() => null)
-        if (!preferences?.enabled) return
         const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
         const thread = session?.threads.find((entry) => entry.id === threadId) || null
         if (!session || !thread || thread.source !== 'root' || session.titleGenerating) return
+        if (await this.recoverSessionTitle(sessionId)) return
+        const preferences = await this.options.getTitleAutomation?.().catch(() => null)
+        if (!preferences?.enabled) return
 
         const review = await this.persistence.readReviewIndex(thread.id)
         const completedTurns = review.turns.filter((turn) => turn.state === 'completed' && turn.prompt && turn.response)
@@ -3432,7 +3547,7 @@ export class AssistantService {
                 this.appendEvent(type, occurredAt, payload, eventSessionId, eventThreadId)
             },
             onApplied: async (nextTitle) => {
-                await Promise.allSettled(session.threads
+                await awaitCanonicalSessionTitleSaves(session.threads
                     .map((entry) => entry.providerThreadId)
                     .filter((providerThreadId): providerThreadId is string => Boolean(providerThreadId))
                     .map((providerThreadId) => this.runtime.updateCanonicalChat(providerThreadId, { title: nextTitle })))
@@ -3440,34 +3555,56 @@ export class AssistantService {
         })
     }
 
-    private async recoverSelectedSessionTitle(): Promise<void> {
-        const session = getSelectedSession(this.state.snapshot)
-        const thread = getActiveThread(session)
-        if (!session || !thread) return
+    private recoverSidebarSessionTitles(): Promise<void> {
+        if (this.sidebarTitleRecovery) return this.sidebarTitleRecovery
+        const task = recoverAssistantSidebarTitles({
+            sessions: this.state.snapshot.sessions,
+            selectedSessionId: this.state.snapshot.selectedSessionId,
+            recover: async sessionId => { if (!this.disposeRequested) await this.recoverSessionTitle(sessionId) },
+            onError: error => log.warn('[Assistant] Chat title recovery failed:', error)
+        }).finally(() => { this.sidebarTitleRecovery = null })
+        this.sidebarTitleRecovery = task
+        return task
+    }
 
-        const firstUserMessage = await this.persistence.readFirstUserMessageText(session.id)
-        if (!shouldGenerateSessionTitleForPrompt(session, firstUserMessage)) return
-        const latestUserMessage = await this.persistence.readLatestUserMessageText(session.id)
-        if (!latestUserMessage) return
-
-        const titleModel = await this.options.getTitleGenerationModel?.().catch(() => null) || null
-        await queueGeneratedSessionTitle({
+    private async recoverSessionTitle(sessionId: string): Promise<boolean> {
+        const session = this.state.snapshot.sessions.find(entry => entry.id === sessionId)
+        const thread = session ? findSessionTitleThread(session) : null
+        if (!session || !thread || thread.source === 'subagent' || session.titleGenerating) return false
+        // Unloaded canonical chats need a known original prefix, not a latest
+        // fragment. Bound eligibility work without indexing complete history.
+        let firstUserMessage: string | null
+        if (thread.providerThreadId && !this.canonicalReviewHistoryState.has(thread.providerThreadId)) {
+            const prefix = await this.runtime.readCanonicalChatHistory(thread.providerThreadId, this.getSessionRuntimeCwd(session, thread), {
+                before: '128', limit: 128, toolResultBodies: 'lazy-v1'
+            })
+            if (!prefix || prefix.pageInfo?.startCursor !== '0') return false
+            firstUserMessage = projectCanonicalTimeline(prefix.entries, thread.providerThreadId, thread.id,
+                thread.createdAt, 0, prefix.chat.cwd || this.getSessionRuntimeCwd(session, thread))
+                .messages.find(message => message.role === 'user' && message.text.trim())?.text || null
+        } else {
+            firstUserMessage = await this.persistence.readFirstUserMessageText(session.id)
+        }
+        if (!firstUserMessage || !shouldGenerateSessionTitleForPrompt(session, firstUserMessage)) return false
+        const review = await this.persistence.readReviewIndex(thread.id)
+        const preferredModel = await this.options.getTitleGenerationModel?.().catch(() => null) || null
+        await recoverSessionTitleFromHistory({
             sessionId: session.id,
-            threadId: thread.id,
-            messageText: latestUserMessage,
-            seedTitle: session.title,
+            firstUserMessage,
+            turns: review.turns,
             cwd: this.getSessionRuntimeCwd(session, thread),
-            preferredModel: titleModel,
-            generateText: (titlePrompt, titleOptions) => this.runtime.generateText(titlePrompt, titleOptions),
+            preferredModel,
+            generateText: (prompt, options) => this.runtime.generateText(prompt, options),
             getSnapshot: () => this.state.snapshot,
-            appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
-                this.appendEvent(type, occurredAt, payload, sessionId, threadId)
+            appendEvent: (type, occurredAt, payload, eventSessionId, eventThreadId) => {
+                this.appendEvent(type, occurredAt, payload, eventSessionId, eventThreadId)
             },
-            onApplied: (nextTitle) => this.runtime.updateCanonicalChat(
-                thread.providerThreadId || thread.id,
-                { title: nextTitle }
-            )
+            onApplied: async title => {
+                const { canonicalIds } = resolveSessionTitleTarget(session)
+                await awaitCanonicalSessionTitleSaves(canonicalIds.map(id => this.runtime.updateCanonicalChat(id, { title })))
+            }
         })
+        return true
     }
 
     private async ensureReady() {
@@ -3501,13 +3638,11 @@ export class AssistantService {
                     pluginMcpSources: await this.pluginRegistry.getChatMcpSources(currentSession.id)
                 }
             },
-            connect: ({ session: currentSession, thread: currentThread, pluginSkillSources, pluginMcpSources }) => this.runtime.connect(
-                currentThread,
-                this.getSessionRuntimeCwd(currentSession, currentThread),
-                currentSession.chatScope,
-                pluginSkillSources,
-                pluginMcpSources
-            ),
+            connect: async ({ session: currentSession, thread: currentThread, pluginSkillSources, pluginMcpSources }) => {
+                const cwd = this.getSessionRuntimeCwd(currentSession, currentThread)
+                await prepareDefaultChatWorkspace(cwd, this.options.getDefaultProjectsFolder?.())
+                return this.runtime.connect(currentThread, cwd, currentSession.chatScope, pluginSkillSources, pluginMcpSources)
+            },
             disconnect: ({ thread: currentThread }) => this.runtime.disconnect(getAssistantCanonicalThreadId(currentThread))
         })
     }
@@ -3550,6 +3685,54 @@ export class AssistantService {
         }
     }
 
+    private readonly visualizationLibrary = new VisualizationLibrary()
+
+    async listVisualizations(input: ListVisualizationsInput) {
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, String(input?.threadId || ''))
+        if (!record) throw new Error('Select a known chat to view its visualizations.')
+        const canonicalChatId = record.thread.providerThreadId
+        if (input.indexOlder === true && canonicalChatId) {
+            if (!this.canonicalHistoryState.has(canonicalChatId)) {
+                await this.loadCanonicalHistoryPage({
+                    canonicalChatId, project: this.getSessionRuntimeCwd(record.session, record.thread),
+                    key: createHash('sha256').update(canonicalChatId).digest('hex').slice(0, 24),
+                    sessionId: record.session.id, threadId: record.thread.id,
+                    before: null, fallbackCreatedAt: record.thread.createdAt
+                })
+            } else await this.loadOlderCanonicalHistory(canonicalChatId)
+        }
+        const context = await this.getVisualizationContext(record.session, record.thread)
+        const resources = await this.visualizationLibrary.list(context,
+            (after, limit) => this.persistence.readVisualizationCandidates(record.thread.id, after, limit),
+            input.scope === 'project' ? 'project' : 'thread')
+        const status = this.visualizationLibrary.status(context)
+        return { success: true as const, resources, ...status,
+            indexingOlder: status.indexingOlder || Boolean(canonicalChatId && (this.canonicalHistoryState.get(canonicalChatId)?.hasOlder ?? true))
+        }
+    }
+
+    async getVisualization(input: GetVisualizationInput) {
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, String(input?.threadId || ''))
+        if (!record) throw new Error('This visualization does not belong to a known chat workspace.')
+        const context = await this.getVisualizationContext(record.session, record.thread)
+        const resource = await this.visualizationLibrary.get(context, input.id, input.version)
+        return { success: true as const, resource }
+    }
+
+    private getVisualizationContext(session: AssistantSession, thread: AssistantThread) {
+        const workingRoot = this.getSessionRuntimeCwd(session, thread)
+        const home = session.chatScope?.roots.find(root => root.kind === 'project-home')?.path
+        return resolveVisualizationLibraryContext({
+            cwd: home || workingRoot,
+            threadId: thread.providerThreadId || thread.id,
+            roots: session.chatScope?.roots,
+            readRoots: home ? [workingRoot, ...(thread.cwd ? [thread.cwd] : []),
+                ...(session.chatScope?.roots.filter(root => root.kind === 'associated-folder').map(root => root.path) || [])] : []
+        })
+    }
+
     private getSessionRuntimeCwd(
         session: AssistantSession,
         thread: AssistantThread
@@ -3575,6 +3758,13 @@ export class AssistantService {
         this.state.snapshot = applyDomainEvent(this.state.snapshot, event)
         this.persistence.appendEvent(event, this.state.snapshot)
         this.queueBroadcastEvent(event)
+        if (type === 'thread.message.assistant.completed' && threadId) {
+            const record = findThreadRecord(this.state.snapshot, threadId)
+            const message = record?.thread.messages.find(entry => entry.id === payload['messageId'])
+            if (record && message && !message.streaming) {
+                void this.getVisualizationContext(record.session, record.thread).then(context => this.visualizationLibrary.importMessage(context, message)).catch(error => log.warn('[Visualizations] Could not save completed visualizations', error))
+            }
+        }
     }
 
     private queueBroadcastEvent(event: AssistantDomainEvent): void {
@@ -3639,7 +3829,7 @@ export class AssistantService {
             })
         } else if (event.type === 'activity' && event.payload.kind === 'context.compaction') {
             const status = String(event.payload.data?.['status'] || '')
-            if (status && status !== 'running') {
+            if (status && status !== 'running' && event.payload.data?.['replay'] !== true) {
                 this.captureAnalytics({
                     event: 'zyra_v1_chat',
                     properties: {
@@ -3742,10 +3932,10 @@ export class AssistantService {
         if (event.type !== 'turn.completed') return
 
         const completedThreadRecord = findThreadRecord(this.state.snapshot, event.threadId)
-        const selectedSession = getSelectedSession(this.state.snapshot)
-        const activeThread = getActiveThread(selectedSession)
+        const activeThread = completedThreadRecord?.thread
+        const selectedSession = completedThreadRecord?.session
         if (!selectedSession || !activeThread) return
-        if ((completedThreadRecord?.thread.id || event.threadId) !== activeThread.id) return
+        if (![...this.threadViews.values()].some(view => view.threadId === activeThread.id && view.expiresAt > Date.now())) return
         if (!activeThread.latestTurn || !['completed', 'interrupted'].includes(activeThread.latestTurn.state)) return
         if (activeThread.lastSeenCompletedTurnId === activeThread.latestTurn.id) return
 
@@ -3838,6 +4028,10 @@ function normalizeClientVoiceMessageId(value: unknown): string {
     const normalized = typeof value === 'string' ? value.trim() : ''
     if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(normalized)) return normalized
     throw new Error('The Voice composer message identity is missing or invalid.')
+}
+
+function canonicalCatalogMessageCount(chat: { displayMessageCount?: number; messageCount: number }): number {
+    return Math.max(0, Number(chat.displayMessageCount ?? chat.messageCount) || 0)
 }
 
 function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
@@ -3975,6 +4169,7 @@ export function projectCanonicalTimeline(
                     timelineSequence,
                     providerItemId,
                     modality: canonicalModality,
+                    phase: role === 'assistant' ? extractAssistantEventMessagePhase({ message }) : undefined,
                     createdAt: messageOccurredAt,
                     updatedAt: messageOccurredAt
                 })
@@ -4180,26 +4375,8 @@ function countMergedCanonicalRecords<T extends { id: string }>(existing: T[], in
     return ids.size
 }
 
-function canonicalPiMessageSourceId(message: Record<string, unknown>, fallback: string): string {
-    const zyraCanonical = asCanonicalRecord(message['zyraCanonicalMessage'])
-    const canonicalMessageId = String(zyraCanonical?.['canonicalMessageId'] || '').trim()
-    if (canonicalMessageId) return normalizeCanonicalMessageSourceId(canonicalMessageId)
-    const timestamp = Number(message['timestamp'])
-    const role = String(message['role'] || 'unknown')
-    return Number.isFinite(timestamp) && timestamp > 0
-        ? `zyra-message:${role}:${Math.trunc(timestamp)}`
-        : fallback
-}
-
 function canonicalMessageModality(value: unknown): AssistantMessage['modality'] {
     return value === 'voice' || value === 'image' || value === 'multimodal' ? value : 'text'
-}
-
-function canonicalDesktopMessageId(role: string, sourceMessageId: string): string {
-    if (sourceMessageId.startsWith('voice_')) return sourceMessageId
-    if (role === 'assistant') return `assistant-message-${sourceMessageId}`
-    if (role === 'user') return `assistant-message-user-${sourceMessageId}`
-    return sourceMessageId
 }
 
 function canonicalMessageSignature(message: Pick<AssistantMessage, 'role' | 'text'>): string {
@@ -4297,6 +4474,7 @@ export function findSupersededCanonicalActivityIds(
 ): string[] {
     const canonicalIds = new Set(canonical.map((activity) => activity.id))
     const legacyIdSet = new Set(legacyIds)
+    const supersededCompactions = new Set(findSupersededRuntimeCompactionIds(existing, canonical))
     const canonicalBySignature = new Map<string, number[]>()
     const canonicalByDetail = new Map<string, number[]>()
     for (const activity of canonical) {
@@ -4307,7 +4485,7 @@ export function findSupersededCanonicalActivityIds(
     }
     return existing.flatMap((activity) => {
         if (canonicalIds.has(activity.id)) return []
-        if (legacyIdSet.has(activity.id)) return [activity.id]
+        if (legacyIdSet.has(activity.id) || supersededCompactions.has(activity.id)) return [activity.id]
         if (!activity.id.startsWith('assistant-internal-') && !activity.id.startsWith('assistant-activity-')) return []
         const timestamp = Date.parse(activity.createdAt)
         const candidates = [

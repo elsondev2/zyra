@@ -62,6 +62,7 @@ import { createZyraPermissionGateExtension } from "./zyra-permission-gate.mjs";
 import { AgentFleetController } from "./agents/runtime/fleet-controller.mjs";
 import { createFleetTools } from "./agents/tools.mjs";
 import { createThreadTool } from './threads/tool.mjs';
+import { createVisualizationTool } from './visualizations/tool.mjs';
 import { WorkflowRuntime } from "./workflows/runtime.mjs";
 import { DEFAULT_TERMINAL_THEME, listTerminalThemes, resolveTerminalTheme } from "./terminal-theme.mjs";
 import { removeZyraTitleGenerationMessages } from "./title-generation.mjs";
@@ -698,11 +699,12 @@ function injectSurfaceGuide(session, surface) {
     "Do not open with a banner, path recap, or generic greeting like \"Hey - I'm here\" unless the user only said hello.",
     "Start with the direct answer or the exact action being taken.",
     "Keep paragraphs short. Use bullets only when they help scan real work.",
-    "For useful charts, diagrams, or visual explanations, read the built-in visualize skill proactively. Explicit line-delimited <visualization> blocks render themed, sandboxed HTML/CSS/SVG in assistant messages. Include title and summary attributes; scripts and external requests are not supported. Streaming blocks show a placeholder until complete. Ordinary HTML code fences remain code.",
-    "Final responses support inline images and videos. When presenting media the user requested, use the embedding syntax below in the final response, outside code fences and backticks. Work narration does not embed media.",
+    "For useful charts, diagrams, 3D scenes or visual explanations, read the built-in visualize skill proactively. Prefer the visualization tool to save HTML, Mermaid or declarative scene3d resources, read source, and append immutable revisions. Embed a saved version by emitting the tool's pinned <visualization-ref id=\"uuid\" version=\"1\" /> line outside code fences; use only the actual returned UUID/version. Earlier references stay pinned when a resource is revised. Existing line-delimited <visualization> blocks render themed sandboxed HTML/CSS/SVG and are imported with provenance. Include concise title and summary; scripts/external requests are unsupported. Ordinary HTML code fences remain examples.",
+    "Final responses support inline images, videos and audio. When presenting media the user requested, use the embedding syntax below in the final response, outside code fences and backticks. Work narration does not embed media.",
     "Image example: ![Screenshot](file:///C:/Users/example/Pictures/screen%20shot.png)",
     "Video example: [Chat debug](file:///C:/Users/example/Videos/chat%20debug.mp4)",
-    "Use Markdown image syntax for images and a Markdown link for supported video files: .mp4, .webm, .ogv, .mov, or .m4v. Videos have playback controls and never autoplay; codec support varies. Do not use raw HTML video tags, iframes, or audio embeds.",
+    "Audio example: [Listen](file:///C:/Users/example/Music/sample%20take.wav)",
+    "Use Markdown image syntax for images and a Markdown link for supported video or audio files. Video: .mp4, .webm, .ogv, .mov, .m4v. Audio: .mp3, .wav, .ogg, .oga, .m4a, .aac, .flac, .opus. Players have playback controls and never autoplay; codec support varies. Do not use raw HTML media tags or iframes.",
     "For local media, use an absolute file:/// URL with forward slashes and URL-encoded path characters: spaces as %20, # as %23, and literal % as %25. Do not emit a bare Windows drive path as the link destination. Direct HTTPS media URLs also work; website/watch-page links remain links.",
     "Use only verified local files or known media URLs, never the example paths. A code-formatted path produces a file chip, not an embedded player. If asked how to embed media, explain this supported syntax rather than claiming the chat has no media instructions. Emitting a link does not prove playback succeeded.",
     "Immediately before each consecutive Action group, call begin_action_batch once with a short present-participle title that describes the shared intent. Call it after any narration and before the real Actions. Do not mention this hidden presentation marker to the user.",
@@ -924,6 +926,11 @@ export async function createZyraSession(options = {}) {
     })
     : null;
   const gateToolCall = permissionGate?.handlers.get("tool_call")?.[0];
+  // Preserve ungated CLI behavior while enforcing resource scope/read-only ceilings.
+  const visualizationPermissionGate = permissionGate ?? createZyraPermissionGateExtension({
+    project, filesystemScope: options.filesystemScope,
+    getPermissionMode: options.getPermissionMode ?? (() => 'full-access'),
+  });
   const harnessHooks = {
     conversation: new HarnessConversation(),
     resolveCwd: () => project,
@@ -1049,6 +1056,22 @@ export async function createZyraSession(options = {}) {
       }),
       ...fleetTools,
       ...createThreadTool(options.threadBridgeClient),
+      createVisualizationTool({
+        getContext: () => {
+          const workingDirectory = sessionManager.getCwd?.() ?? cwd;
+          const resourceRoot = projectHome ?? workingDirectory;
+          const readRoots = projectHome ? [workingDirectory, project,
+            ...(options.filesystemScope?.roots ?? []).filter(root => root.kind === 'associated-folder').map(root => root.path)] : [];
+          return { cwd: resourceRoot, threadId: sessionManager.getSessionId(),
+            readRoots: [...new Set(readRoots)].filter(root => {
+              try { return typeof root === 'string' && existsSync(root) && statSync(root).isDirectory(); }
+              catch { return false; }
+            }) };
+        },
+        authorize: async (context, action, toolCallId) => {
+          return visualizationPermissionGate.authorizeVisualization(context, action, toolCallId);
+        },
+      }),
       createBrowserControlTool({ client: options.controlBridgeClient }),
       ...(options.controlBridgeClient ? [createPluginMcpTool(options.controlBridgeClient)] : []),
       ...browserTools,
@@ -1164,6 +1187,7 @@ export async function createZyraSession(options = {}) {
   if (fleetEnabled) {
     fleet = await new AgentFleetController({
       project,
+      managedBash,
       rootSession: result.session,
       rootSessionId: sessionManager.getSessionId?.(),
       rootThreadId: options.rootThreadId ?? sessionManager.getSessionId?.(),

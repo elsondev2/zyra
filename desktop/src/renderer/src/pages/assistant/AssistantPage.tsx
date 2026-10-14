@@ -2,6 +2,7 @@ import { openDesktopLink } from '@/lib/desktop-links'
 import { desktopWebLink } from '@shared/desktop-link-policy'
 import { AssistantInspectorFrame, AssistantInspectorLoading } from './AssistantInspectorFrame'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { subscribeVisualizationContextRouting } from './visualization-context'
 import { useLocation } from 'react-router-dom'
 import type { AssistantActivity, AssistantChatScopeRoot, AssistantMessage, AssistantSession, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
 import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
@@ -82,6 +83,7 @@ function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelectio
 }
 
 export default function AssistantPage() {
+    useEffect(() => subscribeVisualizationContextRouting(), [])
     const { settings } = useSettings()
     const actions = useAssistantStoreActions()
     const preview = useFilePreview()

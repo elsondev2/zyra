@@ -75,11 +75,14 @@ export const ASSISTANT_IPC = {
     createSession: 'devscope:assistant:createSession',
     selectSession: 'devscope:assistant:selectSession',
     selectThread: 'devscope:assistant:selectThread',
+    setThreadView: 'devscope:assistant:setThreadView',
     getThreadDetailBootstrap: 'devscope:assistant:getThreadDetailBootstrap',
     getHistoryPage: 'devscope:assistant:getHistoryPage',
     getHistoryAroundMessage: 'devscope:assistant:getHistoryAroundMessage',
     hydrateHistoryBody: 'devscope:assistant:hydrateHistoryBody',
     getReviewIndex: 'devscope:assistant:getReviewIndex',
+    listVisualizations: 'devscope:assistant:listVisualizations',
+    getVisualization: 'devscope:assistant:getVisualization',
     getTurnDetail: 'devscope:assistant:getTurnDetail',
     searchChats: 'devscope:assistant:searchChats',
     searchTurns: 'devscope:assistant:searchTurns',
@@ -103,6 +106,8 @@ export const ASSISTANT_IPC = {
     newThread: 'devscope:assistant:newThread',
     sendPrompt: 'devscope:assistant:sendPrompt',
     interruptTurn: 'devscope:assistant:interruptTurn',
+    listBackgroundProcesses: 'devscope:assistant:listBackgroundProcesses',
+    stopBackgroundProcesses: 'devscope:assistant:stopBackgroundProcesses',
     respondApproval: 'devscope:assistant:respondApproval',
     respondUserInput: 'devscope:assistant:respondUserInput',
     subscribeRealtimeVoice: 'devscope:assistant:realtimeVoice:subscribe',
@@ -114,6 +119,7 @@ export const ASSISTANT_IPC = {
     realtimeVoiceEvent: 'devscope:assistant:realtimeVoice:event',
     getVoiceTranscriptionState: 'devscope:assistant:getVoiceTranscriptionState',
     transcribeVoice: 'devscope:assistant:transcribeVoice',
+    cancelVoiceTranscription: 'devscope:assistant:cancelVoiceTranscription',
     saveVoiceHistory: 'devscope:assistant:saveVoiceHistory',
     listVoiceHistory: 'devscope:assistant:listVoiceHistory',
     getFailedVoiceRecording: 'devscope:assistant:getFailedVoiceRecording',
@@ -335,6 +341,11 @@ export interface AssistantSelectThreadInput {
     threadId: string
 }
 
+export interface AssistantThreadViewInput {
+    threadId: string
+    viewing: boolean
+}
+
 export interface AssistantSetPlaygroundRootInput {
     rootPath: string | null
 }
@@ -394,6 +405,8 @@ export interface AssistantApprovalResponseInput {
 export interface AssistantUserInputResponseInput {
     requestId: string
     answers: Record<string, string | string[]>
+    contextText?: string
+    images?: AssistantPromptImageInput[]
 }
 
 export type AssistantVoiceTranscriptionStatus = 'ready' | 'signed-out' | 'unavailable'
@@ -407,6 +420,7 @@ export interface AssistantVoiceTranscriptionState {
 }
 
 export interface AssistantTranscribeVoiceInput {
+    requestId?: string
     audioBase64: string
     mimeType: 'audio/wav'
     sampleRateHz: 24_000

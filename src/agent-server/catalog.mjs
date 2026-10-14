@@ -1,7 +1,8 @@
 import { stripSidebarBrowserContext } from "../browser-context.mjs";
+import { getAgentConversationKind } from '../agents/contracts.mjs';
 import { mobileHistoryStart } from './mobile-history-window.mjs';
 import { normalizeChatModel } from './chat-model.mjs';
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { replaceFileWithRetry } from '../file-replacement.mjs';
 import path from "node:path";
 import { getProjectSessionsDir } from "../project-paths.mjs";
@@ -28,6 +29,7 @@ export class CanonicalChatCatalog {
     this.loadSessionManager = options.loadSessionManager || null;
     this.index = options.index || new CanonicalChatIndex(options);
     this.record = readCatalog(this.paths.catalogFile);
+    this.legacyAgentKinds = new Map();
   }
 
   registerProject(projectValue) {
@@ -81,13 +83,14 @@ export class CanonicalChatCatalog {
       : await this.index.listProjects(projects);
     const byId = new Map();
     for (const indexedChat of indexed) {
-      const chat = applyMetadata(indexedChat, this.record.metadata[indexedChat.canonicalChatId], this.record);
+      const chat = this.projectChatMetadata(indexedChat);
       const current = byId.get(chat.canonicalChatId);
       if (!current || Date.parse(chat.modifiedAt) > Date.parse(current.modifiedAt)) byId.set(chat.canonicalChatId, chat);
     }
     let chats = [...byId.values()].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt) || left.canonicalChatId.localeCompare(right.canonicalChatId));
     if (options.includeDeleted !== true) chats = chats.filter((chat) => !chat.deleted);
     if (options.includeArchived !== true) chats = chats.filter((chat) => !chat.archived);
+    if (options.includeSubagents !== true) chats = chats.filter(chat => (!chat.agentThread && !chat.agentCreatedBy) || chat.agentConversationKind === 'thread');
     const query = String(options.query || "").trim().toLowerCase();
     if (query) {
       chats = chats.filter((chat) => `${chat.title} ${chat.project} ${chat.cwd} ${chat.canonicalChatId}`.toLowerCase().includes(query));
@@ -100,6 +103,33 @@ export class CanonicalChatCatalog {
     }
     const limit = Math.max(1, Math.min(2000, Number(options.limit) || 500));
     return chats.slice(0, limit);
+  }
+
+  projectChatMetadata(chat) {
+    const metadata = this.record.metadata[chat.canonicalChatId] || {};
+    let kind = metadata.agentConversationKind;
+    if (!kind && metadata.agentCreatedBy && /^\w[\w.-]{0,191}$/.test(metadata.agentCreatedBy)) {
+      // Recover old promoted workers and real threads from one known parent
+      // fleet snapshot. No label heuristics, project-wide scans or history deletion.
+      const file = path.join(chat.storageProject || chat.project, '.zyra', 'agent-runs', metadata.agentCreatedBy, 'fleet.snapshot.json');
+      // Validate the cache against the current file; missing/changed snapshots
+      // must not keep a legacy independent conversation hidden until restart.
+      let kinds = new Map();
+      try {
+        const stat = statSync(file, { bigint: true });
+        const stamp = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}`;
+        const cached = this.legacyAgentKinds.get(file);
+        if (cached?.stamp === stamp) kinds = cached.kinds;
+        else {
+          const snapshot = JSON.parse(readFileSync(file, 'utf8'));
+          for (const run of Object.values(snapshot.agents || {})) if (run?.providerSessionId) kinds.set(run.providerSessionId, getAgentConversationKind(run));
+          if (this.legacyAgentKinds.size >= 128) this.legacyAgentKinds.delete(this.legacyAgentKinds.keys().next().value);
+          this.legacyAgentKinds.set(file, { stamp, kinds });
+        }
+      } catch { this.legacyAgentKinds.delete(file); /* Missing private fleet state never promotes a worker into a chat. */ }
+      kind = kinds.get(chat.canonicalChatId);
+    }
+    return applyMetadata(chat, { ...metadata, agentConversationKind: kind || (chat.agentThread || metadata.agentCreatedBy ? 'subagent' : null) }, this.record);
   }
 
   async history(selector, options = {}) {
@@ -145,7 +175,7 @@ export class CanonicalChatCatalog {
       };
     }
     const history = this.index.history(chat.canonicalChatId, options);
-    return history ? { ...history, chat: applyMetadata(history.chat, this.record.metadata[chat.canonicalChatId], this.record) } : null;
+    return history ? { ...history, chat: this.projectChatMetadata(history.chat) } : null;
   }
 
   async searchToolResults(selector, query, options = {}) {
@@ -210,13 +240,14 @@ export class CanonicalChatCatalog {
       ? null
       : this.index.get(normalized) || (path.isAbsolute(normalized) ? this.index.findByPath(normalized) : null);
     if (direct) {
-      const chat = applyMetadata(direct, this.record.metadata[direct.canonicalChatId], this.record);
+      const chat = this.projectChatMetadata(direct);
       return chat.deleted && options.includeDeleted !== true ? null : chat;
     }
     const chats = await this.list({
       ...options,
       allProjects: options.allProjects === true || path.isAbsolute(normalized),
       includeArchived: true,
+      includeSubagents: true,
       includeDeleted: options.includeDeleted === true,
       limit: 2000
     });
@@ -260,6 +291,8 @@ export class CanonicalChatCatalog {
       ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
       ...(patch.agentCreatedBy !== undefined ? { agentCreatedBy: String(patch.agentCreatedBy).slice(0, 192) } : {}),
       ...(patch.agentLabel !== undefined ? { agentLabel: String(patch.agentLabel).slice(0, 120) } : {}),
+      ...(patch.agentRunId !== undefined ? { agentRunId: String(patch.agentRunId).slice(0, 192) } : {}),
+      ...(['thread', 'subagent'].includes(patch.agentConversationKind) ? { agentConversationKind: patch.agentConversationKind } : {}),
       ...(patch.project !== undefined ? { project: normalizeProject(patch.project) } : {}),
       ...(patch.cwd !== undefined ? { cwd: normalizeProject(patch.cwd) } : {}),
       ...(patch.archived !== undefined ? {
@@ -280,6 +313,16 @@ export class CanonicalChatCatalog {
 
   snapshot() {
     return structuredClone(this.record);
+  }
+
+  markCompletionSeen(canonicalChatId, turnId, completedAt) {
+    const existing = this.record.metadata[canonicalChatId] || {};
+    if (existing.lastSeenCompletedTurnId === turnId) return false;
+    const timestamp = Date.parse(completedAt);
+    if (!Number.isFinite(timestamp) || timestamp < (Date.parse(existing.lastSeenCompletedAt) || 0)) return false;
+    this.record.metadata[canonicalChatId] = { ...existing, lastSeenCompletedTurnId: turnId, lastSeenCompletedAt: completedAt };
+    this.persist();
+    return true;
   }
 
   persist() {
@@ -323,6 +366,8 @@ function applyMetadata(chat, metadata = {}, record = {}) {
     title: normalizeTitle(metadata.title || chat.title),
     agentCreatedBy: metadata.agentCreatedBy || null,
     agentLabel: metadata.agentLabel || null,
+    agentRunId: metadata.agentRunId || null,
+    agentConversationKind: metadata.agentConversationKind || null,
     project: metadata.project || chat.project || chat.storageProject || chat.cwd,
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,
@@ -330,7 +375,8 @@ function applyMetadata(chat, metadata = {}, record = {}) {
     deleted: metadata.deleted === true,
     deletedAt: metadata.deletedAt || null,
     aliases: Object.entries(record.aliases || {}).filter(([, id]) => id === canonicalChatId).map(([alias]) => alias).slice(0, 32),
-    surfaces: [...new Set(record.surfaces?.[canonicalChatId] || [])]
+    surfaces: [...new Set(record.surfaces?.[canonicalChatId] || [])],
+    lastSeenCompletedTurnId: metadata.lastSeenCompletedTurnId || null
   };
 }
 

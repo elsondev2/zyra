@@ -1,6 +1,7 @@
 import { canonicalImageAttachmentSection } from './canonical-media-cache'
 import { projectThreadMessage } from '../../shared/assistant/thread-message'
 import { readAssistantInterruption } from '../../shared/assistant/interruption'
+import { readAssistantBackgroundProcessList } from '../../shared/assistant/background-processes'
 import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { assistantTextUpdate } from '../../shared/assistant/stream-text-update'
 import { normalizeCanonicalMessageSourceId } from '../../shared/assistant/message-identity'
@@ -42,10 +43,12 @@ import { desktopTerminalEnvironment } from './agent-server-namespace'
 import type { PreparedAssistantPromptImage } from './prompt-images'
 import { toUserInputQuestions } from './codex-runtime-session-utils'
 import { getAssistantCanonicalThreadId } from './thread-identity'
+import { remoteAssistantPromptMessageId } from './canonical-message-identity'
 import type { PluginMcpConnections } from './plugin-mcp-connections'
 import {
     emptyAssistantContentParts,
     extractAssistantEventContentParts,
+    extractAssistantEventMessagePhase,
     hasAssistantContentText,
     hasAssistantThinkingText
 } from './assistant-message-content'
@@ -70,6 +73,7 @@ import {
 
 type ActiveCompactionLifecycle = {
     activityId: string
+    startedSequence?: number
     startedAt: string
     reason: string
     turnId: string | null
@@ -174,6 +178,7 @@ type ZyraSessionContext = {
     commandActivityIdByJobId: Map<string, string>
     runningManagedCommandJobIds: Set<string>
     assistantTextByItemId: Map<string, string>
+    assistantPhaseByItemId?: Map<string, 'commentary' | 'final_answer'>
     assistantCompletedItemIds: Set<string>
     internalTextByItemId: Map<string, string>
     internalCompletedItemIds: Set<string>
@@ -909,7 +914,7 @@ export function classifyZyraToolActivity(input: {
             kind: 'plugin-mcp',
             summary: running ? 'Using Plugin' : failed ? 'Plugin action failed' : 'Used Plugin',
             detail: [server, target || action].filter(Boolean).join(' · '),
-            data: { status: state, toolName, category: 'plugin-mcp', pluginId, server, action, target }
+            data: { ...baseData, category: 'plugin-mcp', pluginId, server, action, target }
         }
     }
 
@@ -1632,6 +1637,10 @@ export class ZyraRuntime extends EventEmitter {
         await this.getAgentServerConnection(resolveZyraRoot()).updateCanonicalChat(normalizedThreadId, patch)
     }
 
+    async reportCanonicalChatView(session: string, input: Record<string, unknown>): Promise<void> {
+        await this.getAgentServerConnection(resolveZyraRoot()).reportChatView(session, input)
+    }
+
     async listModelsWithProvenance(forceRefresh = false, skipAvailability = false): Promise<{ models: AssistantModelInfo[]; authoritative: boolean; error?: string }> {
         try {
             const availability = await this.checkAvailability(forceRefresh)
@@ -1772,7 +1781,9 @@ export class ZyraRuntime extends EventEmitter {
             thread.canonicalPresence?.latestSequence || 0
         )
         const providerThreadId = getAssistantCanonicalThreadId(thread)
-        const model = normalizeZyraModel(thread.model) || 'openai-codex/gpt-5.5'
+        // An unset Desktop default must leave selection to the authenticated
+        // runtime and its saved preferences, rather than pinning a removed model.
+        const model = normalizeZyraModel(thread.model) || ''
         const context: ZyraSessionContext = {
             localThreadId: thread.id,
             providerThreadId,
@@ -1994,6 +2005,7 @@ export class ZyraRuntime extends EventEmitter {
         context.toolArgsByCallId.clear()
         context.toolStartedAtByCallId.clear()
         context.assistantTextByItemId.clear()
+        context.assistantPhaseByItemId?.clear()
         context.assistantCompletedItemIds.clear()
         context.internalTextByItemId.clear()
         context.internalCompletedItemIds.clear()
@@ -2301,16 +2313,22 @@ export class ZyraRuntime extends EventEmitter {
         return context.worker.request(`${namespace}.${action}`, payload)
     }
 
+    async requestBackgroundProcessOperation(threadId: string, action: 'list' | 'stop', payload: { jobId?: string; all?: boolean } = {}) {
+        const context = this.requireSession(threadId)
+        await this.ensureConnected(context)
+        const result = await context.worker.request(`managed_bash.${action}`, payload)
+        return readAssistantBackgroundProcessList(result['jobs'])
+    }
+
     async interruptTurn(threadId: string, turnId?: string): Promise<void> {
         const context = this.requireSession(threadId)
         await this.ensureConnected(context)
         if (turnId && context.activeTurnId && turnId !== context.activeTurnId) return
         const interruptedTurnId = context.activeTurnId
-        if (interruptedTurnId) {
-            getAgentControlBroker().revokePrincipal({ type: 'root', threadId: context.localThreadId, turnId: interruptedTurnId })
-        }
-        await context.worker.request('abort')
-        if (!interruptedTurnId || context.activeTurnId !== interruptedTurnId) return
+        if (!interruptedTurnId) return
+        getAgentControlBroker().revokePrincipal({ type: 'root', threadId: context.localThreadId, turnId: interruptedTurnId })
+        const result = await context.worker.request('abort', { turnId: interruptedTurnId })
+        if (result['aborted'] === false || context.activeTurnId !== interruptedTurnId) return
         markTurnCompleted(context, interruptedTurnId)
         this.emitRuntime({
             eventId: randomUUID(),
@@ -2319,7 +2337,7 @@ export class ZyraRuntime extends EventEmitter {
             threadId: context.localThreadId,
             providerThreadId: context.providerThreadId,
             turnId: interruptedTurnId,
-            payload: { outcome: 'interrupted' }
+            payload: { outcome: 'interrupted', interruption: { kind: 'stopped', source: 'user' } }
         })
         context.activeTurnId = null
     }
@@ -2359,6 +2377,7 @@ export class ZyraRuntime extends EventEmitter {
     }
 
     private releaseSessionContext(context: ZyraSessionContext): void {
+        context.assistantPhaseByItemId?.clear()
         void context.mcpPool?.close()
         void context.mcpPoolPromise?.then((pool) => pool.close()).catch(() => undefined)
         this.navigationBackgroundedThreadIds.delete(context.localThreadId)
@@ -2497,6 +2516,7 @@ export class ZyraRuntime extends EventEmitter {
     private getAgentServerConnection(root: string): DesktopAgentServerConnection {
         if (!this.agentServerConnection) {
             this.agentServerConnection = new DesktopAgentServerConnection(root, {
+                onChatAttention: (notice) => this.emit('chat.attention', notice),
                 openDesktopWorkspace: async (request) => {
                     if (!this.desktopWorkspaceHandler) throw Object.assign(new Error('Desktop workspace routing is unavailable.'), { code: 'DESKTOP_WORKSPACE_UNAVAILABLE' })
                     return this.desktopWorkspaceHandler(request)
@@ -2971,7 +2991,7 @@ export class ZyraRuntime extends EventEmitter {
         if (
             observedTurnId
             && metadata?.replay !== true
-            && (type === 'agent_start' || type === 'turn_start' || type === 'message_start' || type === 'message_update' || type === 'tool_execution_start')
+            && (type === 'zyra_server_prompt_accepted' || type === 'agent_start' || type === 'turn_start' || type === 'message_start' || type === 'message_update' || type === 'tool_execution_start')
             && context.activeTurnId !== observedTurnId
             && !context.completedTurnIds.has(observedTurnId)
         ) {
@@ -2984,6 +3004,7 @@ export class ZyraRuntime extends EventEmitter {
             context.toolArgsByCallId.clear()
             context.toolStartedAtByCallId.clear()
             context.assistantTextByItemId.clear()
+            context.assistantPhaseByItemId?.clear()
             context.assistantCompletedItemIds.clear()
             context.internalTextByItemId.clear()
             context.internalCompletedItemIds.clear()
@@ -2994,7 +3015,7 @@ export class ZyraRuntime extends EventEmitter {
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'turn.started',
-                createdAt: asString(event['timestamp']) || nowIso(),
+                createdAt: asString(event['timestamp']) || metadata?.occurredAt || nowIso(),
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId: observedTurnId,
@@ -3161,7 +3182,7 @@ export class ZyraRuntime extends EventEmitter {
             return
         }
 
-        if (type === 'message_start' || type === 'message_update' || type === 'message_end') {
+        if (type === 'zyra_server_prompt_accepted' || type === 'message_start' || type === 'message_update' || type === 'message_end') {
             const message = asRecord(event['message'])
             if (type === 'message_end' && message?.['role'] === 'custom' && message['customType'] === 'zyra_thread_message') {
                 const activity = projectThreadMessage(message['details'], nowIso())
@@ -3175,10 +3196,12 @@ export class ZyraRuntime extends EventEmitter {
                     metadata?.localThreadId
                     && metadata.localThreadId !== context.localThreadId
                 )
-                if (type !== 'message_start' || !turnId || !originatedOutsideThisDesktopThread) return
+                if (!turnId || !originatedOutsideThisDesktopThread) return
                 const content = extractAssistantEventContentParts(event, emptyAssistantContentParts(), type)
                 const sourceMessageId = asString(message?.['id'])
-                const messageId = `assistant-message-user-${sourceMessageId || turnId}`
+                const messageId = type === 'zyra_server_prompt_accepted'
+                    ? remoteAssistantPromptMessageId(turnId)
+                    : `assistant-message-user-${sourceMessageId || turnId}`
                 const parts = Array.isArray(message?.['content']) ? message['content'] : []
                 const imageSections = parts.flatMap((part, index) => {
                     const image = asRecord(part)
@@ -3191,7 +3214,7 @@ export class ZyraRuntime extends EventEmitter {
                 this.emitRuntime({
                     eventId: randomUUID(),
                     type: 'user.message.received',
-                    createdAt: asString(event['timestamp']) || nowIso(),
+                    createdAt: asString(event['timestamp']) || metadata?.occurredAt || nowIso(),
                     threadId: context.localThreadId,
                     providerThreadId: context.providerThreadId,
                     turnId,
@@ -3211,6 +3234,7 @@ export class ZyraRuntime extends EventEmitter {
                 hasThinkingBlock: context.internalTextByItemId.has(itemId)
             }
             const content = extractAssistantEventContentParts(event, currentContent, type)
+            const messagePhase = extractAssistantEventMessagePhase(event)
             const messageUsage = type === 'message_end' ? readUsage(message?.['usage']) : null
             const usageMessageId = resolveAssistantUsageMessageIdentity(message, turnId, itemId)
             const usageAccountedMessageIds = getUsageAccountedAssistantMessageIds(context)
@@ -3248,8 +3272,8 @@ export class ZyraRuntime extends EventEmitter {
             if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
                 this.streamInternalText(context, turnId, content.thinking || content.text, itemId)
             }
-            if ((hasAssistantContentText(content) || currentContent.text) && !isReasoningOnlyAssistantEvent(event)) {
-                this.streamAssistantText(context, turnId, content.text, itemId)
+            if ((hasAssistantContentText(content) || currentContent.text || messagePhase) && !isReasoningOnlyAssistantEvent(event)) {
+                this.streamAssistantText(context, turnId, content.text, itemId, messagePhase)
             }
             if (type === 'message_end') {
                 if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
@@ -3357,10 +3381,11 @@ export class ZyraRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_start') {
-            const startedAt = nowIso()
+            const startedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || 'threshold'
             const lifecycle: ActiveCompactionLifecycle = {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
+                startedSequence: metadata?.sequence,
                 startedAt,
                 reason,
                 turnId
@@ -3383,6 +3408,9 @@ export class ZyraRuntime extends EventEmitter {
                         category: 'context-compaction',
                         sourceMethod: 'pi-sdk',
                         status: 'running',
+                        replay: metadata?.replay === true,
+                        sourceSequence: metadata?.sequence,
+                        startedSequence: lifecycle.startedSequence,
                         reason,
                         startedAt
                     }
@@ -3392,7 +3420,7 @@ export class ZyraRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_end') {
-            const completedAt = nowIso()
+            const completedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || context.activeCompaction?.reason || 'threshold'
             const lifecycle = context.activeCompaction || {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
@@ -3432,6 +3460,9 @@ export class ZyraRuntime extends EventEmitter {
                         category: 'context-compaction',
                         sourceMethod: 'pi-sdk',
                         status,
+                        replay: metadata?.replay === true,
+                        sourceSequence: metadata?.sequence,
+                        startedSequence: 'startedSequence' in lifecycle ? lifecycle.startedSequence : undefined,
                         reason,
                         startedAt: lifecycle.startedAt,
                         completedAt,
@@ -3448,7 +3479,7 @@ export class ZyraRuntime extends EventEmitter {
                 ? result.estimatedTokensAfter
                 : null
             const activeCompactionTurnId = lifecycle.turnId || turnId
-            if (status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
+            if (metadata?.replay !== true && status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
                 context.sessionUsage = {
                     ...(context.sessionUsage || { threadId: context.localThreadId }),
                     threadId: context.localThreadId,
@@ -3473,13 +3504,16 @@ export class ZyraRuntime extends EventEmitter {
         }
     }
 
-    private streamAssistantText(context: ZyraSessionContext, turnId: string, text: string, itemId = `zyra-assistant-${turnId}`): void {
+    private streamAssistantText(context: ZyraSessionContext, turnId: string, text: string, itemId = `zyra-assistant-${turnId}`, phase?: 'commentary' | 'final_answer'): void {
         const previousText = context.assistantTextByItemId.get(itemId) || ''
         const nextText = text
         const update = assistantTextUpdate(previousText, nextText)
+        const phases = context.assistantPhaseByItemId ||= new Map()
+        const phaseChanged = phase !== undefined && phases.get(itemId) !== phase
+        if (phaseChanged) phases.set(itemId, phase)
         context.lastAssistantItemId = itemId
         context.assistantTextByItemId.set(itemId, nextText)
-        if (!update) return
+        if (!update && !phaseChanged) return
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'content.delta',
@@ -3490,7 +3524,8 @@ export class ZyraRuntime extends EventEmitter {
             itemId,
             payload: {
                 streamKind: 'assistant_text',
-                ...update
+                ...(update || { delta: '' }),
+                ...(phaseChanged ? { phase } : {})
             }
         })
     }
@@ -3598,6 +3633,7 @@ export class ZyraRuntime extends EventEmitter {
                     status,
                     toolName: 'bash',
                     jobId,
+                    background: typeof event['background'] === 'boolean' ? event['background'] : undefined,
                     command: asString(event['command']) || undefined,
                     output,
                     replaceOutput: true,
@@ -3606,7 +3642,8 @@ export class ZyraRuntime extends EventEmitter {
                     completedAt,
                     durationMs,
                     exitCode: event['exitCode'],
-                    errorMessage: asString(event['errorMessage']) || undefined
+                    errorMessage: asString(event['errorMessage']) || undefined,
+                    cleanupFailed: event['cleanupFailed'] === true
                 }
             }
         })
@@ -3657,6 +3694,7 @@ export class ZyraRuntime extends EventEmitter {
             if (source) {
                 classified.summary = `${state === 'running' ? 'Using' : state === 'error' ? 'Failed to use' : 'Used'} ${source.name}`
                 classified.data['pluginSlug'] = source.slug
+                classified.data['pluginName'] = source.name
             }
             const details = asRecord(resultRecord?.['details'])
             const view = asRecord(details?.['appView'])
@@ -3673,7 +3711,7 @@ export class ZyraRuntime extends EventEmitter {
                 }
             }
         }
-        const keepsSpecializedDesktopKind = classified.kind === 'command.checkpoint' || classified.kind.startsWith('subagent.')
+        const keepsSpecializedDesktopKind = classified.kind === 'plugin-mcp' || classified.kind === 'command.checkpoint' || classified.kind.startsWith('subagent.')
         if (agentSurface && !keepsSpecializedDesktopKind) {
             classified.kind = agentSurface.kind
             classified.summary = agentSurface.summary
@@ -3714,7 +3752,7 @@ export class ZyraRuntime extends EventEmitter {
                 || (state === 'error' ? 'failed' : state)
             classified.data['surface'] = {
                 ...agentSurface,
-                kind: keepsSpecializedDesktopKind ? agentSurface.kind : classified.kind,
+                kind: classified.kind === 'plugin-mcp' ? classified.kind : keepsSpecializedDesktopKind ? agentSurface.kind : classified.kind,
                 lifecycle: effectiveLifecycle,
                 summary: classified.summary
             }

@@ -14,7 +14,11 @@ export function desktopNamespaceId(userDataPath: string): string {
 let terminalEnvironment: Record<string, string> = {}
 export function configureDesktopTerminalEnvironment(userDataPath: string): void {
     const namespace = resolveDesktopAgentServerNamespace(userDataPath)
-    terminalEnvironment = { ZYRA_STATE_DIR: namespace.stateDirectory, ZYRA_AGENT_SERVER_CHANNEL: namespace.channel }
+    terminalEnvironment = {
+        ZYRA_STATE_DIR: namespace.stateDirectory,
+        ZYRA_AGENT_SERVER_CHANNEL: namespace.channel,
+        ...(process.env.ZYRA_DATA_ROOT ? { ZYRA_DATA_ROOT: process.env.ZYRA_DATA_ROOT } : {})
+    }
 }
 /** Discovery only. Never include Desktop authority secrets in a terminal environment. */
 export function desktopTerminalEnvironment(): Record<string, string> { return { ...terminalEnvironment } }

@@ -53,6 +53,7 @@ import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionServic
 import { createDesktopSetupServices } from './setup'
 import { initializeDesktopStartup } from './setup/startup-initialization'
 import { resolveZyraRoot } from './zyra/zyra-root'
+import { configurePreviewDataEnvironment } from './zyra/zyra-data-root'
 import { registerInstalledDesktop } from './desktop-install-registration'
 import { dispatchDesktopTui, isDesktopTuiDispatch } from './desktop-tui-dispatcher'
 import { createRendererHangRecorder } from './diagnostics/renderer-hang-recorder'
@@ -66,49 +67,20 @@ import { BROWSER_LOCAL_FILE_SCHEME } from '../shared/browser-view'
 import type { AccessoryWindowState } from '../shared/accessories'
 import { configureRuntimeInstallation } from './assistant/runtime-activation'
 import { configureDesktopTerminalEnvironment, desktopNamespaceId } from './assistant/agent-server-namespace'
+import { buildMetadata, isPreviewDistribution, resolveDistributionIdentity } from '../shared/distribution-identity'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 app.enableSandbox()
 
-const APP_NAME = "Zyra"
-const DEV_APP_NAME = `${APP_NAME}-dev`
-const APP_USER_MODEL_ID = 'app.zyra.desktop'
-const DEV_APP_USER_MODEL_ID = `${APP_USER_MODEL_ID}.dev`
-
-type RuntimeIdentity = {
-    appName: string
-    appUserModelId: string
-    userDataDirectoryName: string
-    isDevRuntime: boolean
-}
-
-function resolveRuntimeIdentity(): RuntimeIdentity {
-    if (is.dev) {
-        const instanceSuffix = String(process.env.ZYRA_DEV_INSTANCE_SUFFIX || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32)
-        const appName = instanceSuffix ? `${DEV_APP_NAME}-${instanceSuffix}` : DEV_APP_NAME
-        return {
-            appName,
-            appUserModelId: instanceSuffix ? `${DEV_APP_USER_MODEL_ID}.${instanceSuffix}` : DEV_APP_USER_MODEL_ID,
-            userDataDirectoryName: appName,
-            isDevRuntime: true
-        }
-    }
-
-    return {
-        appName: APP_NAME,
-        appUserModelId: APP_USER_MODEL_ID,
-        userDataDirectoryName: APP_NAME,
-        isDevRuntime: false
-    }
-}
-
-const runtimeIdentity = resolveRuntimeIdentity()
+type RuntimeIdentity = ReturnType<typeof resolveDistributionIdentity>
+const runtimeIdentity = resolveDistributionIdentity(is.dev, buildMetadata, process.env.ZYRA_DEV_INSTANCE_SUFFIX)
+const APP_NAME = runtimeIdentity.appName
 
 function applyRuntimeIdentity(identity: RuntimeIdentity): void {
     app.setName(identity.appName)
 
-    if (!identity.isDevRuntime) return
+    if (!identity.isolated) return
 
     const userDataPath = join(app.getPath('appData'), identity.userDataDirectoryName)
     app.setPath('userData', userDataPath)
@@ -116,11 +88,12 @@ function applyRuntimeIdentity(identity: RuntimeIdentity): void {
 }
 
 applyRuntimeIdentity(runtimeIdentity)
+configurePreviewDataEnvironment(app.getPath('userData'))
 configureDesktopTerminalEnvironment(app.getPath('userData'))
 configureRuntimeInstallation({
     kind: runtimeIdentity.isDevRuntime ? 'development' : 'installed',
     namespaceId: desktopNamespaceId(app.getPath('userData')),
-    label: runtimeIdentity.isDevRuntime ? runtimeIdentity.appName.replace('Zyra-dev', 'Development') : 'Installed Zyra',
+    label: runtimeIdentity.isDevRuntime ? runtimeIdentity.appName.replace('Zyra-dev', 'Development') : runtimeIdentity.appName,
     appVersion: app.getVersion()
 })
 
@@ -856,7 +829,7 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
         minWidth: 720,
         minHeight: 480,
         show: false,
-        title: 'Zyra',
+        title: APP_NAME,
         ...getWindowChromeOptions(),
         backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
@@ -928,7 +901,7 @@ function createBrowserPopupShellWindow(input: {
             minWidth: 420,
             minHeight: 520,
             show: false,
-            title: 'Zyra Browser',
+            title: `${APP_NAME} Browser`,
             ...getWindowChromeOptions(),
             backgroundColor: startupTheme().bg,
             ...(iconPath ? { icon: iconPath } : {}),
@@ -1124,7 +1097,12 @@ async function runPackagedLaunchSmoke(): Promise<void> {
         platform: process.platform,
         architecture: process.arch,
         resourcesPath: process.resourcesPath,
-        runtimeRoot: root
+        runtimeRoot: root,
+        distribution: buildMetadata.distribution,
+        sourceSha: buildMetadata.sourceSha,
+        appName: app.getName(),
+        userDataPath: app.getPath('userData'),
+        namespaceId: desktopNamespaceId(app.getPath('userData'))
     })}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
@@ -1192,7 +1170,9 @@ app.whenReady().then(async () => {
         return
     }
     void initializeProtectedMedia()
-    void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
+    if (!isPreviewDistribution()) {
+        void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
+    }
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     const initialOnboardingSnapshot = await initializeDesktopStartup({
@@ -1217,6 +1197,21 @@ app.whenReady().then(async () => {
         log.warn('[OpenAI] connection prewarm failed', error)
     })
     configureAssistantService({
+        openNotificationChat: async (canonicalChatId) => {
+            const chat = await resolveAssistantUtilityChat(canonicalChatId)
+            if (!chat) return
+            await getAssistantService().selectThread(chat.sessionId, chat.threadId)
+            const route = `/assistant/chat/${encodeURIComponent(chat.sessionId)}/thread/${encodeURIComponent(chat.threadId)}`
+            if (!mainWindow || mainWindow.isDestroyed()) {
+                mainWindow = createWindow(true, route)
+                ensureIpcHandlersRegistered(mainWindow)
+            } else {
+                loadRendererRoute(mainWindow, route)
+                if (mainWindow.isMinimized()) mainWindow.restore()
+                mainWindow.show()
+                mainWindow.focus()
+            }
+        },
         getDefaultProjectsFolder: () => setupServices.preferences.getConfiguredProjectsFolder(),
         getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults(),
         getNewChatPreparationModel: async () => String(

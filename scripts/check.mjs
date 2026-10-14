@@ -21,6 +21,8 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const syntaxTargets = [
+  "scripts/ci/relay/worker.mjs",
+  "scripts/test-ci-relay.mjs",
   "src/openai-model-catalog.mjs",
   "scripts/test-openai-model-catalog.mjs",
   "scripts/test-openai-model-runtime.mjs",
@@ -189,6 +191,11 @@ const syntaxTargets = [
 ];
 
 const coreTests = [
+  "scripts/test-ci-relay.mjs",
+  "scripts/test-agent-conversation-kind.mjs",
+  "scripts/test-agent-conversations.mjs",
+  "scripts/test-agent-conversation-owner.mjs",
+  "scripts/test-managed-bash.mjs",
   "scripts/test-chat-catalog-file-locks.mjs",
  "scripts/test-agent-bridge-pipe-errors.mjs",
  "scripts/test-dev-command.mjs",
@@ -273,6 +280,7 @@ const coreTests = [
   "scripts/test-zyra-version.mjs",
   "scripts/test-zyra-ui-render.mjs",
   "scripts/test-visualization-blocks.mjs",
+  "scripts/test-visualization-resources.mjs",
   "scripts/test-visualization-terminal.mjs",
   "scripts/test-visualization-skill.mjs",
   "scripts/test-zyra-subagents.mjs",
@@ -284,6 +292,7 @@ const coreTests = [
 // Quick mode stays deterministic and side-effect-light. Larger state, UI, and
 // orchestration suites remain in core/full so quick is useful during iteration.
 const quickCoreTests = [
+  "scripts/test-ci-relay.mjs",
   "scripts/test-zyra-task-ownership-prompt.mjs",
   "scripts/test-control-bridge-deadline.mjs",
   "scripts/test-permission-command-policy.mjs",
@@ -315,6 +324,7 @@ const quickCoreTests = [
 ];
 
 const serialCoreTests = new Set([
+  "scripts/test-agent-conversation-owner.mjs",
   "scripts/test-computer-tool-errors.mjs",
   "scripts/test-zyra-computer-control-tool.mjs",
   "scripts/test-zyra-plugin-revocation-bridge.mjs",
@@ -338,6 +348,7 @@ const desktopTasks = [
   { label: "desktop:test:renderer-bootstrap", bunArgs: ["run", "--cwd", "desktop", "test:renderer-bootstrap"] },
   { label: "desktop:test:browser-extension-startup", bunArgs: ["run", "--cwd", "desktop", "test:browser-extension-startup"] },
   { label: "desktop:test:visualizations", bunArgs: ["run", "--cwd", "desktop", "test:visualizations"] },
+  { label: "desktop:test:visualization-resources", bunArgs: ["run", "--cwd", "desktop", "test:visualization-resources"] },
   { label: "desktop:test:browser-surface-parity", bunArgs: ["run", "--cwd", "desktop", "test:browser-surface-parity"] },
   { label: "desktop:test:visualization-scroll", bunArgs: ["run", "--cwd", "desktop", "test:visualization-scroll"] },
   { label: "desktop:test:agent-control", bunArgs: ["run", "--cwd", "desktop", "test:agent-control"] },
@@ -358,7 +369,12 @@ const desktopTasks = [
   { label: "desktop:test:assistant-user-input", bunArgs: ["run", "--cwd", "desktop", "test:assistant-user-input"] },
   { label: "desktop:test:assistant-tool-approval", bunArgs: ["run", "--cwd", "desktop", "test:assistant-tool-approval"] },
   { label: "desktop:test:markdown-renderer", bunArgs: ["run", "--cwd", "desktop", "test:markdown-renderer"] },
+  { label: "desktop:test:compaction-replay", bunArgs: ["run", "--cwd", "desktop", "test:compaction-replay"] },
   { label: "desktop:test:assistant-response-media", bunArgs: ["run", "--cwd", "desktop", "test:assistant-response-media"] },
+  { label: "desktop:test:assistant-message-phase-persistence", bunArgs: ["run", "--cwd", "desktop", "test:assistant-message-phase-persistence"] },
+  { label: "desktop:test:assistant-voice-transcription", bunArgs: ["run", "--cwd", "desktop", "test:assistant-voice-transcription"] },
+  { label: "desktop:test:voice-conversation-settings", bunArgs: ["run", "--cwd", "desktop", "test:voice-conversation-settings"] },
+  { label: "desktop:test:voice-history-storage", bunArgs: ["run", "--cwd", "desktop", "test:voice-history-storage"] },
   { label: "desktop:test:voice-history-playback", bunArgs: ["run", "--cwd", "desktop", "test:voice-history-playback"] },
   { label: "desktop:test:assistant-force-interrupt", bunArgs: ["run", "--cwd", "desktop", "test:assistant-force-interrupt"] },
   { label: "desktop:test:theme-adaptive-surfaces", bunArgs: ["run", "--cwd", "desktop", "test:theme-adaptive-surfaces"] },

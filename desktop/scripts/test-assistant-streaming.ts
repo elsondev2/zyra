@@ -163,7 +163,6 @@ const assistantVirtualTimelineSource = readFileSync(new URL('../src/renderer/src
 const instructorConversationSource = readFileSync(new URL('../src/renderer/src/pages/assistant/InstructorVoiceConversation.tsx', import.meta.url), 'utf8')
 const instructorLiveTranscriptSource = readFileSync(new URL('../src/renderer/src/pages/assistant/InstructorVoiceLiveTranscript.tsx', import.meta.url), 'utf8')
 const strandsSource = readFileSync(new URL('../src/renderer/src/components/ui/strands/Strands.tsx', import.meta.url), 'utf8')
-const smoothScrollSource = readFileSync(new URL('../src/renderer/src/lib/useSmoothScroll.ts', import.meta.url), 'utf8')
 const desktopMainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
 assert.match(
     assistantMainServiceSource,
@@ -214,11 +213,6 @@ assert.match(
     strandsSource,
     /snapPresentationToProps[\s\S]*?rendererVisibility\.subscribe\(reconcileVisibility\)/,
     'decorative WebGL state must pause and snap current props on restore'
-)
-assert.match(
-    smoothScrollSource,
-    /rendererVisibility\.subscribe\(snapToTarget\)/,
-    'the reusable smooth-scroll queue must settle when visibility changes'
 )
 assert.match(
     desktopMainSource,
@@ -390,7 +384,7 @@ while (visible !== target && frames < 20) {
 assert.equal(visible, target)
 assert.ok(frames <= 5, 'completion should drain its remaining text quickly')
 assert.equal(revealAssistantStreamText('', '🙂 done', 'stream', false), '🙂', 'a frame must not split a surrogate pair')
-assert.ok(revealAssistantStreamText('', 'one complete phrase, then more', 'chunks', false).length >= 4)
+assert.equal(revealAssistantStreamText('', 'one complete phrase, then more', 'chunks', false), '', 'chunk mode waits for a complete paragraph/line or completion')
 
 assistantStreamPresentation.clear()
 console.log('Assistant streaming contracts passed.')

@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { MemoryRouter } from 'react-router-dom'
 import { AssistantChatSessionsRail } from '../../src/renderer/src/pages/assistant/AssistantChatSessionsRail'
+import { setAssistantSettlementOverrides } from '../../src/renderer/src/pages/assistant/assistant-settlement-store'
 import type { AssistantSession, AssistantThread } from '../../src/shared/assistant/contracts'
 
 const root = createRoot(document.getElementById('root')!)
@@ -24,6 +25,13 @@ function session(id: string, working = false, timestamp = now): AssistantSession
 }
 let sessions = [session('idle'), session('running', true), session('old', false, old), session('manual'), session('unread')]
 sessions[4].threads[0].lastSeenCompletedTurnId = null
+const privateWorker = session('private-review', true)
+privateWorker.threads[0].source = 'subagent'
+privateWorker.threads[0].providerParentThreadId = 'parent-canonical'
+sessions.push(privateWorker)
+const independent = session('independent', true)
+independent.threads[0].agentNickname = 'Independent workstream'
+sessions.push(independent)
 let selected = 'idle'
 let collapsed = false
 let mount = 0
@@ -73,9 +81,13 @@ async function action(id: string, label: string) {
 }
 async function run() {
     localStorage.removeItem(pinKey)
-    localStorage.setItem(settleKey, JSON.stringify({ manual: { state: 'settled', activityAt: now } }))
+    setAssistantSettlementOverrides({ manual: { state: 'settled', activityAt: now } })
     render(); await sleep(150)
-    check(section('idle') === 'Recent' && row('idle').getBoundingClientRect().height === 36, 'Idle unpinned starts in Recent')
+    check(!row('private-review'), 'Supporting subagents never become top-level sidebar cards')
+    check(section('independent') === 'Priority', 'An explicitly independent working conversation stays visible')
+    check(row('running').querySelector<HTMLButtonElement>('[aria-label="Working chat stays in Priority"]')?.disabled === true, 'Working chats cannot be manually hidden from Priority')
+    check(section('idle') === 'Recent' && row('idle').getBoundingClientRect().height > 60, 'Recent uses the same full-size cards as Priority')
+    check(row('idle').getBoundingClientRect().height === row('running').getBoundingClientRect().height, 'Recent and Priority share card geometry')
     check(section('old') === 'Settled' && section('manual') === 'Settled', 'Existing automatic and manual settlement respected')
     await action('idle', 'Pin chat')
     check(JSON.parse(localStorage.getItem(pinKey)!).includes('idle'), 'Actual pin action persists chat ID')
@@ -118,7 +130,7 @@ async function run() {
     await action('running', 'Unpin chat'); check(section('running') === 'Recent', 'Read stopped unpinned thread returns to Recent')
     await action('idle', 'Unpin chat'); check(section('idle') === 'Recent', 'Unpin immediately restores Recent while pointer remains inside sidebar')
     await move(550, 650)
-    check(section('unread') === 'Priority', 'Unpinned unread completion still uses large Priority card')
+    check(section('unread') === 'Recent' && row('unread').getBoundingClientRect().height > 60, 'Unpinned completed work stays readable in Recent without claiming Priority')
     sessions[4].threads[0].lastSeenCompletedTurnId = sessions[4].threads[0].latestTurn!.id
     sessions = structuredClone(sessions); render(); await sleep(100)
     check(section('unread') === 'Recent', 'Reading an unpinned completed turn still returns it to Recent')

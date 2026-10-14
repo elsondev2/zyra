@@ -1,4 +1,5 @@
 import log from 'electron-log'
+import type { AssistantUserInputResponseInput } from '../../shared/assistant/contracts'
 import type {
     AssistantClearLogsInput,
     AssistantConnectOptions,
@@ -21,7 +22,7 @@ import {
 } from '../../shared/assistant/session-project'
 import { normalizeAssistantRuntimePolicy } from '../../shared/assistant/runtime-policy'
 import { is } from '../utils'
-import { prepareAssistantPromptImages } from './prompt-images'
+import { prepareAssistantPromptImages, type PreparedAssistantPromptImage } from './prompt-images'
 import { isCanonicalPresenceActive } from './service-canonical-presence'
 import { leaveAssistantThreadForNavigation } from './service-navigation-runtime'
 import { buildDeleteMessagePlan } from './service-history'
@@ -43,6 +44,7 @@ import {
     requireSession
 } from './service-state'
 import { buildSessionHistoryMutationResult } from './session-mutation-utils'
+import { awaitCanonicalSessionTitleSaves, commitAssistantSessionTitle } from './session-title-updates'
 import { getAssistantCanonicalThreadId, matchesAssistantThreadId } from './thread-identity'
 import {
     queueGeneratedSessionTitle,
@@ -158,7 +160,6 @@ export async function selectAssistantSessionAction(deps: AssistantServiceActionD
     deps.appendEvent('session.selected', occurredAt, { sessionId }, sessionId)
     const session = requireSession(deps.getSnapshot(), sessionId)
     if (session.activeThreadId) deps.runtime.setNavigationBackgrounded?.(session.activeThreadId, false)
-    markThreadCompletionSeen(deps, session, occurredAt)
     return { success: true as const, sessionId }
 }
 
@@ -187,28 +188,28 @@ export async function selectAssistantThreadAction(deps: AssistantServiceActionDe
         deps.appendEvent('session.selected', occurredAt, { sessionId }, session.id, localThreadId)
     }
     deps.runtime.setNavigationBackgrounded?.(localThreadId, false)
-    const updatedSession = requireSession(deps.getSnapshot(), sessionId)
-    markThreadCompletionSeen(deps, updatedSession, occurredAt)
     return { success: true as const, sessionId, threadId: localThreadId }
 }
 
 export async function renameAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, title: string) {
     await deps.ensureReady()
-    const session = requireSession(deps.getSnapshot(), sessionId)
-    const nextTitle = title.trim() || session.title
-    const occurredAt = nowIso()
-    deps.appendEvent('session.updated', occurredAt, {
-        sessionId,
-        patch: {
-            title: nextTitle,
-            updatedAt: occurredAt
-        }
-    }, sessionId)
-    await Promise.allSettled(session.threads
-        .map((thread) => thread.providerThreadId)
-        .filter((threadId): threadId is string => Boolean(threadId))
-        .map((threadId) => deps.runtime.updateCanonicalChat(threadId, { title: nextTitle })))
-    return { success: true as const }
+    return commitAssistantSessionTitle(sessionId, async () => {
+        const session = requireSession(deps.getSnapshot(), sessionId)
+        const nextTitle = title.trim() || session.title
+        await awaitCanonicalSessionTitleSaves(session.threads
+            .map((thread) => thread.providerThreadId)
+            .filter((threadId): threadId is string => Boolean(threadId))
+            .map((threadId) => deps.runtime.updateCanonicalChat(threadId, { title: nextTitle })))
+        const occurredAt = nowIso()
+        deps.appendEvent('session.updated', occurredAt, {
+            sessionId,
+            patch: {
+                title: nextTitle,
+                updatedAt: occurredAt
+            }
+        }, sessionId)
+        return { success: true as const }
+    })
 }
 
 export async function archiveAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, archived = true) {
@@ -515,7 +516,8 @@ function triggerDevContextCompactionTestPrompt(
 export async function sendAssistantPromptAction(
     deps: AssistantServiceActionDeps,
     prompt: string,
-    options?: AssistantSendPromptOptions
+    options?: AssistantSendPromptOptions,
+    preparedImages?: PreparedAssistantPromptImage[]
 ) {
     await deps.ensureReady()
     const input = String(prompt || '').trim()
@@ -537,7 +539,7 @@ export async function sendAssistantPromptAction(
         return triggerDevContextCompactionTestPrompt(deps, session.id, thread, compactionTestCommand, occurredAt)
     }
 
-    const promptImages = await prepareAssistantPromptImages(options?.images)
+    const promptImages = preparedImages ?? await prepareAssistantPromptImages(options?.images)
     const runtimePolicy = normalizeAssistantRuntimePolicy(
         await deps.getRuntimePolicy?.().catch((error) => {
             log.warn('[Assistant] Failed to read the runtime policy preference', error)
@@ -574,6 +576,9 @@ export async function sendAssistantPromptAction(
 
     const runtimeCwd = deps.getSessionRuntimeCwd(session, thread)
     const runtimeThreadId = getAssistantCanonicalThreadId(thread)
+    // First Send can precede draft warmup. Resolve the saved default before
+    // attachment so an empty new thread cannot select the engine fallback.
+    const model = options?.model || thread.model || await deps.getNewChatPreparationModel?.() || ''
     let hasLiveRuntimeSession = deps.runtime.hasSession(runtimeThreadId)
     const previousRuntimeCwd = sanitizeOptionalPath(thread.cwd)
     if (
@@ -585,7 +590,7 @@ export async function sendAssistantPromptAction(
         hasLiveRuntimeSession = false
     }
     const updatedThreadPatch: Partial<AssistantThread> & Pick<AssistantThread, 'model' | 'runtimeMode' | 'interactionMode' | 'cwd' | 'state' | 'lastError' | 'activePlan' | 'updatedAt'> = {
-        model: options?.model || thread.model,
+        model,
         runtimeMode: options?.runtimeMode || thread.runtimeMode,
         interactionMode: 'default',
         cwd: runtimeCwd,
@@ -651,7 +656,7 @@ export async function sendAssistantPromptAction(
         }
         const result = await deps.runtime.sendPrompt(runtimeThreadId, input, {
             turnId: submittedTurnId,
-            model: options?.model,
+            model: model || undefined,
             runtimeMode: options?.runtimeMode,
             interactionMode: 'default',
             effort: options?.effort,
@@ -755,7 +760,7 @@ export async function respondAssistantApprovalAction(
 
 export async function respondAssistantUserInputAction(
     deps: AssistantServiceActionDeps,
-    input: { requestId: string; answers: Record<string, string | string[]> }
+    input: AssistantUserInputResponseInput
 ) {
     const activeRequests = activeUserInputResponses.get(deps) || new Set<string>()
     activeUserInputResponses.set(deps, activeRequests)
@@ -767,6 +772,9 @@ export async function respondAssistantUserInputAction(
         if (!target) throw new Error(`Unknown user-input request ${input.requestId}.`)
         const pendingInput = target.thread.pendingUserInputs.find((entry) => entry.requestId === input.requestId)
         if (!pendingInput) throw new Error(`Unknown user-input request ${input.requestId}.`)
+        const contextText = input.contextText ?? ''
+        if (typeof contextText !== 'string' || contextText.length > 256_000) throw new Error('Question attachments are too large.')
+        const questionImages = await prepareAssistantPromptImages(input.images)
         const continuationPrompt = await respondToAssistantUserInputWithRuntime({
             runtime: deps.runtime,
             thread: target.thread,
@@ -788,10 +796,11 @@ export async function respondAssistantUserInputAction(
                 resolvedAt: respondedAt
             }
         }, target.session.id, target.thread.id)
-        return sendAssistantPromptAction(deps, continuationPrompt, {
+        return sendAssistantPromptAction(deps, contextText.trim() ? `${continuationPrompt}\n\n${contextText.trim()}` : continuationPrompt, {
             sessionId: target.session.id,
+            images: input.images,
             userMessageId: responseMessageId
-        })
+        }, questionImages)
     } finally {
         activeRequests.delete(input.requestId)
         if (activeRequests.size === 0) activeUserInputResponses.delete(deps)
@@ -853,17 +862,4 @@ export async function getAssistantSessionTurnUsageAction(
         fetchedAt: nowIso()
     }
     return { success: true as const, usage }
-}
-
-function markThreadCompletionSeen(deps: AssistantServiceActionDeps, session: ReturnType<typeof requireSession>, occurredAt: string) {
-    const activeThread = getActiveThread(session)
-    if (!activeThread || !activeThread.latestTurn || !['completed', 'interrupted'].includes(activeThread.latestTurn.state)) return
-    if (activeThread.lastSeenCompletedTurnId === activeThread.latestTurn.id) return
-
-    deps.appendEvent('thread.updated', occurredAt, {
-        threadId: activeThread.id,
-        patch: {
-            lastSeenCompletedTurnId: activeThread.latestTurn.id
-        }
-    }, session.id, activeThread.id)
 }

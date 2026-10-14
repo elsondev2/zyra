@@ -83,6 +83,24 @@ const workerPreparedMarkup = renderToStaticMarkup(createElement(Fragment, null, 
 })))
 assert.equal(workerPreparedMarkup, markup, 'worker-prepared Markdown preserves the complete rendered output and sanitization')
 
+const renderMathCase = (source: string, cacheKey: string) => renderToStaticMarkup(createElement(Fragment, null, prepareMarkdownRender({
+    content: source,
+    cacheKey: `markdown-math-regression:${cacheKey}`,
+    filePath: 'C:/workspace/math.md'
+})))
+for (const [indent, label] of [['    ', 'four-space'], ['\t', 'tab']] as const) {
+    const indentedMathCode = renderMathCase(`${indent}\\[x^2\\]`, `indented-code:${label}`)
+    assert.match(indentedMathCode, /<code\b[^>]*>\\\[x\^2\\\]/, `${label}-indented TeX delimiters remain literal Markdown code`)
+    assert.doesNotMatch(indentedMathCode, /katex/, 'indented code is not rendered as math')
+    assert.doesNotMatch(indentedMathCode, /class="katex"/, 'indented TeX examples are never rendered as equations')
+}
+const currencyThenEquation = renderMathCase('It costs $5, then use $x$.', 'currency-followed-by-equation')
+assert.match(currencyThenEquation, /It costs \$5, then use /, 'a currency amount remains prose when a later equation follows')
+assert.equal((currencyThenEquation.match(/class="katex"/g) || []).length, 1, 'the later equation still renders after a currency amount')
+const malformedThenEquation = renderMathCase('Broken \\( text; then \\(x^2\\)', 'malformed-before-equation')
+assert.ok(malformedThenEquation.includes('Broken ( text; then '), 'an unmatched earlier opener remains prose rather than swallowing the later equation')
+assert.equal((malformedThenEquation.match(/class="katex"/g) || []).length, 1, 'a later valid equation renders after an unmatched opener')
+
 const semanticListContent = Array.from({ length: 600 }, (_, index) => `- Item ${index}`).join('\n')
 const semanticListSections = buildMarkdownPreviewSections(semanticListContent)
 const semanticListMarkup = semanticListSections.map((section, index) => renderToStaticMarkup(createElement(Fragment, null, prepareMarkdownRender({
@@ -187,7 +205,7 @@ assert.doesNotMatch(markup, /<iframe/i, 'raw embeds are stripped')
 
 const rendererSource = readFileSync(new URL('../src/renderer/src/components/ui/MarkdownRenderer.tsx', import.meta.url), 'utf8')
 const timelineRowsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineRows.tsx', import.meta.url), 'utf8')
-assert.equal((timelineRowsSource.match(/mediaMode="images-and-videos"/g) || []).length, 1, 'only the settled final assistant response opts into inline video rendering')
+assert.equal((timelineRowsSource.match(/mediaMode=\{presentationActive \? 'none' : 'images-and-videos'\}/g) || []).length, 1, 'only a settled final assistant response opts into image/video/audio rendering')
 assert.match(timelineRowsSource, /mediaMode="none"/, 'streaming and Work narration suppress assistant-authored media projection')
 const codeSource = readFileSync(new URL('../src/renderer/src/components/ui/markdown/CodeElements.tsx', import.meta.url), 'utf8')
 const timelineTextSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineText.tsx', import.meta.url), 'utf8')

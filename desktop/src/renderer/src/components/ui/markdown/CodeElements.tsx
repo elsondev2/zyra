@@ -6,6 +6,9 @@ import oneLight from 'react-syntax-highlighter/dist/esm/styles/prism/one-light'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { hasColorToken, renderColorAwareText } from './colorTokens'
 import { isMarkdownScrollBusy } from './markdownScrollActivity'
+import { copyTextToClipboard as copyCodeBlockText } from '@/lib/copy-text'
+import './diagram-canvas.css'
+import { ArtifactCreationState } from '../ArtifactCreationState'
 
 const MermaidDiagram = lazy(async () => ({
     default: (await import('./MermaidDiagram')).MermaidDiagram
@@ -213,32 +216,7 @@ function looksLikeFolderStructure(text: string): boolean {
     return TREE_GLYPH_REGEX.test(text)
 }
 
-export async function copyCodeBlockText(value: string): Promise<void> {
-    const bridge = typeof window !== 'undefined' ? window.devscope?.copyToClipboard : undefined
-    if (bridge) {
-        const result = await bridge(value)
-        if (result.success === false) throw new Error(result.error || 'Failed to copy code')
-        return
-    }
-
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value)
-        return
-    }
-
-    if (typeof document === 'undefined') throw new Error('Clipboard is unavailable')
-    const textarea = document.createElement('textarea')
-    textarea.value = value
-    textarea.setAttribute('readonly', 'true')
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    textarea.style.pointerEvents = 'none'
-    document.body.appendChild(textarea)
-    textarea.select()
-    const copied = document.execCommand('copy')
-    document.body.removeChild(textarea)
-    if (!copied) throw new Error('Failed to copy code')
-}
+export { copyTextToClipboard as copyCodeBlockText } from '@/lib/copy-text'
 
 export function prewarmCodeBlockHighlight(language: string | undefined, source: string, maxLines?: number): void {
     if (language === 'mermaid' || looksLikeFolderStructure(source) || hasColorToken(source)) return
@@ -256,7 +234,8 @@ export const CodeBlock = memo(function CodeBlock({
     theme = 'dark',
     children,
     maxLines,
-    deferHighlighting = false
+    deferHighlighting = false,
+    diagramStreaming = false
 }: {
     language?: string
     title?: string | null
@@ -264,6 +243,7 @@ export const CodeBlock = memo(function CodeBlock({
     children: string
     maxLines?: number
     deferHighlighting?: boolean
+    diagramStreaming?: boolean
 }) {
     const [copied, setCopied] = useState(false)
     const [expanded, setExpanded] = useState(false)
@@ -287,13 +267,10 @@ export const CodeBlock = memo(function CodeBlock({
     }
 
     if (language === 'mermaid') {
+        if (diagramStreaming) return <div className="my-4"><ArtifactCreationState kind="diagram" phase="creating"/></div>
         return (
             <div className="my-4">
-                <Suspense fallback={(
-                    <div className="flex min-h-40 items-center justify-center rounded-lg border border-white/10 bg-sparkle-card text-xs text-sparkle-text-muted">
-                        <span className="animate-pulse">Preparing diagram…</span>
-                    </div>
-                )}>
+                <Suspense fallback={<ArtifactCreationState kind="diagram" phase="loading"/>}>
                     <MermaidDiagram chart={children} />
                 </Suspense>
             </div>

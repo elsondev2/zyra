@@ -2,20 +2,24 @@ import type { Root } from 'hast'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import { normalizeMathDelimiters, remarkMathFallback, rehypeSafeMath } from './math'
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
+import { isUnclosedCodeFence } from './streaming-code-fence'
 
 type MarkdownAstNode = {
     type?: string
     meta?: unknown
+    lang?: string
     data?: { hProperties?: Record<string, unknown> }
-    position?: unknown
+    position?: { start: { offset?: number }; end: { offset?: number } }
     children?: MarkdownAstNode[]
 }
 
 function remarkPreserveCodeMeta() {
-    return (tree: MarkdownAstNode) => {
+    return (tree: MarkdownAstNode, file: { value: unknown }) => {
         const visitNode = (node: MarkdownAstNode) => {
             if (node.type === 'code' && typeof node.meta === 'string' && node.meta.trim()) {
                 node.data = {
@@ -25,6 +29,10 @@ function remarkPreserveCodeMeta() {
                         dataCodeMeta: node.meta.trim()
                     }
                 }
+            }
+            if (node.type === 'code' && node.lang === 'mermaid') {
+                const source = String(file.value).slice(node.position?.start.offset, node.position?.end.offset)
+                node.data = { ...node.data, hProperties: { ...node.data?.hProperties, dataCodeIncomplete: String(isUnclosedCodeFence(source)) } }
             }
             node.children?.forEach(visitNode)
         }
@@ -41,7 +49,7 @@ const MARKDOWN_SANITIZE_SCHEMA = {
             ...(defaultSchema.attributes?.['*'] || []).filter((attribute) => attribute !== 'title'),
             'align'
         ],
-        code: [...(defaultSchema.attributes?.code || []), 'dataCodeMeta'],
+        code: [...(defaultSchema.attributes?.code || []).filter(attribute => !Array.isArray(attribute) || attribute[0] !== 'className'), ['className', /^language-./, 'math-inline', 'math-display'], 'dataCodeMeta', 'dataCodeIncomplete'],
         details: [...(defaultSchema.attributes?.details || []), 'open'],
         div: [...(defaultSchema.attributes?.div || []), 'dataCacheRaw'],
         source: [...(defaultSchema.attributes?.source || []), 'src', 'srcSet', 'type', 'media']
@@ -55,14 +63,34 @@ const MARKDOWN_SANITIZE_SCHEMA = {
 
 const RAW_HTML_TAG_REGEX = /<\/?[A-Za-z][^>\n]*>/
 
+/** Drive letters are filesystem roots, not arbitrary URL protocols. Normalize
+ * them before the sanitizer checks schemes; leave its protocol allowlist intact. */
+function rehypeWindowsFileUrls() {
+    return (tree: Root) => {
+        const visit = (node: Root['children'][number]) => {
+            if (node.type !== 'element') return
+            for (const key of ['href', 'src']) {
+                const value = node.properties[key]
+                if (typeof value === 'string' && /^[a-z]:[\\/]/i.test(value)) {
+                    node.properties[key] = `file:///${value.replace(/\\/g, '/')}`
+                }
+            }
+            for (const child of node.children) visit(child as Root['children'][number])
+        }
+        for (const child of tree.children) visit(child)
+    }
+}
+
 function createMarkdownProcessor(hasRawHtml: boolean) {
     const processor = unified()
         .use(remarkParse)
         .use(remarkGfm)
+        .use(remarkMath)
+        .use(remarkMathFallback)
         .use(remarkPreserveCodeMeta)
         .use(remarkRehype, { allowDangerousHtml: hasRawHtml })
     if (hasRawHtml) processor.use(rehypeRaw)
-    return processor.use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA).freeze()
+    return processor.use(rehypeWindowsFileUrls).use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA).use(rehypeSafeMath).freeze()
 }
 
 const standardMarkdownProcessor = createMarkdownProcessor(false)
@@ -73,9 +101,10 @@ export function markdownContainsRawHtml(content: string): boolean {
 }
 
 export function parseMarkdownToHast(content: string, allowRawHtml = true): Root {
-    const hasRawHtml = allowRawHtml && markdownContainsRawHtml(content)
+    const normalized = normalizeMathDelimiters(content)
+    const hasRawHtml = allowRawHtml && markdownContainsRawHtml(normalized)
     const processor = hasRawHtml ? rawHtmlMarkdownProcessor : standardMarkdownProcessor
-    return processor.runSync(processor.parse(content)) as Root
+    return processor.runSync(processor.parse(normalized), { value: normalized }) as Root
 }
 
 export function stripMarkdownTreePositions(tree: Root): Root {
@@ -85,4 +114,17 @@ export function stripMarkdownTreePositions(tree: Root): Root {
     }
     visitNode(tree as MarkdownAstNode)
     return tree
+}
+
+export function applyDocumentMarkdownHeadingIds(tree: Root, headingIds: readonly string[] | undefined): void {
+    if (!headingIds?.length) return
+    const headings: Array<Extract<Root['children'][number], { type: 'element' }>> = []
+    const visitNode = (node: Root['children'][number]) => {
+        if (node.type !== 'element') return
+        if (/^h[1-6]$/.test(node.tagName) && !node.properties.id) headings.push(node)
+        for (const child of node.children) visitNode(child as Root['children'][number])
+    }
+    for (const child of tree.children) visitNode(child)
+    if (headings.length !== headingIds.length) return
+    for (let index = 0; index < headings.length; index += 1) headings[index].properties.id = headingIds[index]
 }

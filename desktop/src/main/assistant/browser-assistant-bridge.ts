@@ -45,6 +45,8 @@ import { BrowserDevscopeEventStream } from '../browser-devscope-event-stream'
 import { BrowserRealtimeVoiceEventStream } from '../browser-realtime-voice-event-stream'
 import type { AssistantService } from './service'
 
+import { VoiceTranscriptionJobs } from './voice-transcription-jobs'
+
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 const EVENT_HEARTBEAT_MS = 15_000
 const MAX_EVENT_CLIENTS = 4
@@ -80,7 +82,7 @@ type BrowserAssistantBridgeDependencies = {
     persistClipboardImage: (input: AssistantPersistClipboardImageInput) => Promise<string>
     resolveClipboardAttachment: (reference: string) => Promise<string | null>
     getVoiceTranscriptionState: () => Promise<AssistantVoiceTranscriptionState>
-    transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<string>
+    transcribeVoice: (input: AssistantTranscribeVoiceInput, signal?: AbortSignal) => Promise<string>
     saveVoiceHistory: (input: import('../../shared/assistant/contracts').AssistantSaveVoiceHistoryInput) => Promise<void>
     listVoiceHistory: () => Promise<import('../../shared/assistant/contracts').AssistantVoiceHistoryEntry[]>
     getFailedVoiceRecording: (id: string) => Promise<string | null>
@@ -101,7 +103,11 @@ export class BrowserAssistantBridge {
     private browserRealtimeVoiceOwnerClientId: string | null = null
     private browserRealtimeVoiceDisconnectTimer: NodeJS.Timeout | null = null
 
-    constructor(private readonly dependencies: BrowserAssistantBridgeDependencies) {}
+    private readonly voiceTranscriptionJobs: VoiceTranscriptionJobs
+
+    constructor(private readonly dependencies: BrowserAssistantBridgeDependencies) {
+        this.voiceTranscriptionJobs = new VoiceTranscriptionJobs((input, signal) => dependencies.transcribeVoice(input, signal))
+    }
 
     async start(): Promise<{ host: string; port: number }> {
         if (this.server) return this.address()
@@ -200,6 +206,7 @@ export class BrowserAssistantBridge {
     }
 
     async stop(): Promise<void> {
+        this.voiceTranscriptionJobs.cancelAll()
         const server = this.server
         this.server = null
         this.cleanupSubscriptions()
@@ -444,10 +451,14 @@ export class BrowserAssistantBridge {
             return
         }
 
-        const clientId = BROWSER_VOICE_METHODS.has(candidate.method)
+        const voiceInput = candidate.args[0] as Partial<AssistantTranscribeVoiceInput> | undefined
+        const needsIdentity = BROWSER_VOICE_METHODS.has(candidate.method) || candidate.method === 'setThreadView'
+            || candidate.method === 'cancelVoiceTranscription'
+            || (candidate.method === 'transcribeVoice' && Boolean(voiceInput?.requestId))
+        const clientId = needsIdentity
             ? this.readBrowserClientId(candidate.clientId)
             : null
-        if (BROWSER_VOICE_METHODS.has(candidate.method) && !clientId) {
+        if (needsIdentity && !clientId) {
             this.writeJson(response, 400, { ok: false, error: 'Browser Voice client identity is invalid.' })
             return
         }
@@ -524,6 +535,7 @@ export class BrowserAssistantBridge {
             case 'createSession': return service.createSession(args[0] as any)
             case 'seedDevelopmentChatFixtures': return service.seedDevelopmentChatFixtures()
             case 'selectSession': return service.selectSession(args[0] as string)
+            case 'setThreadView': return service.setThreadView(`browser:${clientId}`, args[0] as { threadId: string; viewing: boolean }, 'browser')
             case 'selectThread': {
                 const input = args[0] as { sessionId: string; threadId: string }
                 return service.selectThread(input.sessionId, input.threadId)
@@ -536,6 +548,8 @@ export class BrowserAssistantBridge {
             }
             case 'hydrateHistoryBody': return service.hydrateHistoryBody(args[0] as any)
             case 'getReviewIndex': return service.getReviewIndex((args[0] as { threadId: string }).threadId)
+            case 'listVisualizations': return service.listVisualizations(args[0] as import('../../shared/visualization-resources').ListVisualizationsInput)
+            case 'getVisualization': return service.getVisualization(args[0] as import('../../shared/visualization-resources').GetVisualizationInput)
             case 'getTurnDetail': {
                 const input = args[0] as { threadId: string; turnId: string }
                 return service.getTurnDetail(input.threadId, input.turnId)
@@ -571,6 +585,8 @@ export class BrowserAssistantBridge {
             case 'newThread': return service.newThread(args[0] as string | undefined)
             case 'sendPrompt': return service.sendPrompt(args[0] as string, args[1] as any)
             case 'interruptTurn': return service.interruptTurn(args[0] as string | undefined, args[1] as string | undefined)
+            case 'listBackgroundProcesses': return service.listBackgroundProcesses(args[0] as import('../../shared/assistant/contracts').AssistantBackgroundProcessesInput)
+            case 'stopBackgroundProcesses': return service.stopBackgroundProcesses(args[0] as import('../../shared/assistant/contracts').AssistantStopBackgroundProcessesInput)
             case 'respondApproval': return service.respondApproval(args[0] as any)
             case 'respondUserInput': return service.respondUserInput(args[0] as any)
             case 'startRealtimeVoice': {
@@ -623,7 +639,11 @@ export class BrowserAssistantBridge {
             }
             case 'transcribeVoice': return {
                 success: true,
-                text: await this.dependencies.transcribeVoice(args[0] as any)
+                text: await this.voiceTranscriptionJobs.run(`browser:${clientId || 'legacy'}`, args[0] as AssistantTranscribeVoiceInput)
+            }
+            case 'cancelVoiceTranscription': return {
+                success: true,
+                cancelled: this.voiceTranscriptionJobs.cancel(`browser:${this.requireVoiceClient(clientId)}`, String(args[0] || ''))
             }
             case 'saveVoiceHistory': {
                 await this.dependencies.saveVoiceHistory(args[0] as any)

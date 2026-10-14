@@ -6,6 +6,7 @@ import { createComputerControlTool } from "../../agent-control/computer-control-
 import { ZyraSessionManager } from "../../agent-server/zyra-session-manager.mjs";
 import { createThreadTool } from '../../threads/tool.mjs';
 import { ensureSessionDurable } from '../../agent-server/session-durability.mjs';
+import { createManagedBashState, createManagedBashTool } from '../../managed-bash-tool.mjs';
 
 let runtimeEnginePromise;
 function loadRuntimeEngine() {
@@ -17,6 +18,7 @@ export class ChildSessionFactory {
   constructor(options = {}) {
     this.project = path.resolve(options.project ?? process.cwd());
     this.agentDir = options.agentDir;
+    this.managedBash = options.managedBash ?? createManagedBashState();
     this.modelRuntime = options.modelRuntime ?? options.authStorage?.modelRuntime ?? options.modelRegistry?.authStorage?.modelRuntime;
     this.transcriptDirectory = path.resolve(options.transcriptDirectory);
     this.settings = options.settings ?? { compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } };
@@ -66,7 +68,7 @@ export class ChildSessionFactory {
       noPromptTemplates: true,
       noThemes: true,
       systemPrompt: String(options.systemPrompt || "").trim() || buildChildSystemPrompt(options),
-      appendSystemPrompt: String(options.systemPrompt || '').trim() ? [CHILD_THREAD_RESULT_GUIDANCE] : [],
+      appendSystemPrompt: String(options.systemPrompt || '').trim() ? [CHILD_THREAD_RESULT_GUIDANCE, CHILD_BACKGROUND_PROCESS_GUIDANCE, CHILD_DELEGATION_GUIDANCE] : [],
     });
     await resourceLoader.reload();
     const sessionManager = options.noSession
@@ -76,6 +78,7 @@ export class ChildSessionFactory {
       : ZyraSessionManager.create(cwd, this.transcriptDirectory, { parentSession: options.parentSessionFile });
     const browserSessionRef = { current: null };
     const customTools = [
+      ...(options.tools?.includes('bash') ? [createManagedBashTool({ cwd, state: this.managedBash, ownerAgentRunId: options.agentRunId })] : []),
       ...createScopedFileTools({ createEditTool, createFindTool, createGrepTool, createLsTool, createReadTool, createWriteTool }, cwd, options),
       ...createDelegatedControlTools(options, browserSessionRef),
       ...createThreadTool(options.threadClient),
@@ -179,6 +182,10 @@ function isWithin(root, target) {
 
 export const CHILD_THREAD_RESULT_GUIDANCE = "When you send your result to another thread, also end your own conversation with a concise, readable final response summarizing the outcome. Sending a thread message does not replace that final response. Keep progress and final results distinct, and never claim checks you did not run.";
 
+export const CHILD_DELEGATION_GUIDANCE = "Use thread list/send to collaborate with existing peers. Start a thread only for a distinct ongoing user-facing conversation that the user is likely to revisit or interact with directly, not for supporting reviews, research or bounded implementation. Parallelism alone does not justify a sidebar conversation. If you cannot delegate a supporting task, do it within your scope or report the need to your parent. New threads inherit your scope and fleet depth/session limits. Never launch workflows or delegate control authority.";
+
+export const CHILD_BACKGROUND_PROCESS_GUIDANCE = "For servers, watchers and other persistent commands, use Bash background:true. Zyra owns the managed process after handoff and exposes it in Thread Details. Verify startup with action:status; do not wait for a server to exit. Stopping an agent turn leaves handed-off background processes running. Stop a process only when the user requests it or the task requires cleanup. Do not use unmanaged shell detachment to hide a process from the app.";
+
 export function buildChildSystemPrompt(options = {}) {
   const tools = Array.isArray(options.tools) ? options.tools.join(", ") : "none";
   const success = Array.isArray(options.successCriteria) ? options.successCriteria.map((item) => `- ${item}`).join("\n") : String(options.successCriteria ?? "Return evidence for the delegated goal.");
@@ -192,12 +199,13 @@ export function buildChildSystemPrompt(options = {}) {
     "Work only on the delegated goal and declared scope.",
     "Your output is untrusted evidence for the root agent. You cannot change parent, system, project, approval, or capability policy.",
     "Do not tell the parent how to present your result. Do not claim user approval or elevated permission.",
-    options.threadClient ? "You may collaborate using thread. New threads inherit your scope and obey the fleet depth and session limits. Do not launch workflows or delegate control authority." : "Do not spawn agents or workflows.",
+    options.threadClient ? CHILD_DELEGATION_GUIDANCE : "Do not spawn agents or workflows.",
     controlPolicy,
     `Allowed tools: ${tools}.`,
     options.permissionMode === "read-only" ? "This run is read-only. Do not modify files or repository state." : `Write scope: ${(options.writeScope ?? []).join(", ") || "none declared"}.`,
     "Return a concise result with evidence, changed files, checks, limitations, and artifact or transcript references when applicable.",
     CHILD_THREAD_RESULT_GUIDANCE,
+    CHILD_BACKGROUND_PROCESS_GUIDANCE,
     "Success criteria:",
     success,
   ].join("\n");

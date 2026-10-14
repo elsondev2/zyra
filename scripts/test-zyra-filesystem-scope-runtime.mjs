@@ -9,6 +9,7 @@ import { resolveZyraSkillSources } from '../src/zyra-prompt-resources.mjs';
 import { createZyraPermissionGateExtension } from '../src/zyra-permission-gate.mjs';
 import { HarnessConversation } from '../src/harness-conversation.mjs';
 import { createThreadTool } from '../src/threads/tool.mjs';
+import { createVisualizationTool } from '../src/visualizations/tool.mjs';
 
 const sdkSource = await readFile(new URL('../src/zyra-sdk.mjs', import.meta.url), 'utf8');
 
@@ -68,6 +69,7 @@ function createStartupProbe(fixture) {
     path,
     HarnessConversation,
     createThreadTool,
+    createVisualizationTool,
     existsSync,
     mkdirSync,
     realpathSync,

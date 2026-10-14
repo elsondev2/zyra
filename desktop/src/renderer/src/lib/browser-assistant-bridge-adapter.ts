@@ -48,10 +48,13 @@ function getBrowserAssistantClientId(): string {
 }
 
 const browserAssistantClientId = getBrowserAssistantClientId()
+// Duplicated tabs can inherit sessionStorage; viewing identity must belong to this document.
+const browserChatViewClientId = crypto.randomUUID().replace(/-/g, '')
 
 async function invokeBrowserAssistantBridge<T>(method: BrowserAssistantBridgeMethod, args: unknown[]): Promise<T> {
     const response = await fetch(`${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
         method: 'POST',
+        keepalive: method === 'setThreadView' || method === 'cancelVoiceTranscription',
         headers: {
             'Content-Type': 'application/json',
             [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE
@@ -59,7 +62,7 @@ async function invokeBrowserAssistantBridge<T>(method: BrowserAssistantBridgeMet
         body: JSON.stringify({
             method,
             args,
-            ...(BROWSER_VOICE_METHODS.has(method) ? { clientId: browserAssistantClientId } : {})
+            ...(BROWSER_VOICE_METHODS.has(method) || method === 'transcribeVoice' || method === 'cancelVoiceTranscription' || method === 'setThreadView' ? { clientId: method === 'setThreadView' ? browserChatViewClientId : browserAssistantClientId } : {})
         })
     })
     const payload = await response.json() as BrowserAssistantBridgeInvokeResponse
@@ -70,7 +73,7 @@ async function invokeBrowserAssistantBridge<T>(method: BrowserAssistantBridgeMet
 }
 
 type RemoteAssistantMethod = BrowserAssistantBridgeMethod & keyof DevScopeAssistantApi
-type AssistantMethod<M extends RemoteAssistantMethod> = DevScopeAssistantApi[M] extends (...args: infer A) => infer R
+type AssistantMethod<M extends RemoteAssistantMethod> = NonNullable<DevScopeAssistantApi[M]> extends (...args: infer A) => infer R
     ? (...args: A) => R
     : never
 
@@ -358,11 +361,14 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         createSession: remoteAssistantMethod('createSession'),
         selectSession: remoteAssistantMethod('selectSession'),
         selectThread: remoteAssistantMethod('selectThread'),
+        setThreadView: remoteAssistantMethod('setThreadView') as NonNullable<DevScopeAssistantApi['setThreadView']>,
         getThreadDetailBootstrap: remoteAssistantMethod('getThreadDetailBootstrap'),
         getHistoryPage: remoteAssistantMethod('getHistoryPage'),
         getHistoryAroundMessage: remoteAssistantMethod('getHistoryAroundMessage'),
         hydrateHistoryBody: remoteAssistantMethod('hydrateHistoryBody'),
         getReviewIndex: remoteAssistantMethod('getReviewIndex'),
+        listVisualizations: remoteAssistantMethod('listVisualizations'),
+        getVisualization: remoteAssistantMethod('getVisualization'),
         getTurnDetail: remoteAssistantMethod('getTurnDetail'),
         searchChats: remoteAssistantMethod('searchChats'),
         searchTurns: remoteAssistantMethod('searchTurns'),
@@ -387,6 +393,8 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         newThread: remoteAssistantMethod('newThread'),
         sendPrompt: remoteAssistantMethod('sendPrompt'),
         interruptTurn: remoteAssistantMethod('interruptTurn'),
+        listBackgroundProcesses: remoteAssistantMethod('listBackgroundProcesses'),
+        stopBackgroundProcesses: remoteAssistantMethod('stopBackgroundProcesses'),
         respondApproval: remoteAssistantMethod('respondApproval'),
         respondUserInput: remoteAssistantMethod('respondUserInput'),
         startRealtimeVoice,
@@ -408,6 +416,7 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         },
         getVoiceTranscriptionState: remoteAssistantMethod('getVoiceTranscriptionState'),
         transcribeVoice: remoteAssistantMethod('transcribeVoice'),
+        cancelVoiceTranscription: remoteAssistantMethod('cancelVoiceTranscription'),
         saveVoiceHistory: remoteAssistantMethod('saveVoiceHistory'),
         listVoiceHistory: remoteAssistantMethod('listVoiceHistory'),
         getFailedVoiceRecording: remoteAssistantMethod('getFailedVoiceRecording'),

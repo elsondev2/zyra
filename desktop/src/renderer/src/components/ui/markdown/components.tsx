@@ -1,6 +1,6 @@
 import type { Components } from 'react-markdown'
 import { Children, Fragment, cloneElement, isValidElement, useEffect, useState, type HTMLAttributes, type ImgHTMLAttributes, type ReactNode } from 'react'
-import { AlertTriangle, ImageOff, Info, Lightbulb, Link2, ShieldAlert, Siren, VideoOff } from 'lucide-react'
+import { AlertTriangle, ImageOff, Info, Lightbulb, Link2, ShieldAlert, Siren, VideoOff, VolumeX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CodeBlock, InlineCode } from './CodeElements'
 import { renderColorAwareChildren } from './colorTokens'
@@ -9,6 +9,7 @@ import { MarkdownTable } from './MarkdownTable'
 import { looksLikeMarkdownFileReference, resolveMarkdownPackageReference } from './fileReferences'
 import { resolveImageSrc, resolveImageSrcSet } from './paths'
 import { resolveMarkdownLinkTarget } from './linkNavigation'
+import { renderMarkdownLinkLabel } from './linkLabels'
 
 type DivProps = HTMLAttributes<HTMLDivElement> & { align?: string }
 type SourceProps = HTMLAttributes<HTMLSourceElement> & { src?: string; srcSet?: string }
@@ -127,15 +128,18 @@ function HeadingPermalink({ id }: { id?: string }) {
 }
 
 const MARKDOWN_VIDEO_EXTENSION_PATTERN = /\.(?:mp4|webm|ogv|mov|m4v)(?:[?#].*)?$/i
+const MARKDOWN_AUDIO_EXTENSION_PATTERN = /\.(?:mp3|wav|ogg|oga|m4a|aac|flac|opus)(?:[?#].*)?$/i
+const MARKDOWN_IMAGE_EXTENSION_PATTERN = /\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico)(?:[?#].*)?$/i
 
 function isMarkdownVideoHref(value: string): boolean {
     return MARKDOWN_VIDEO_EXTENSION_PATTERN.test(value.trim())
 }
 
-function MarkdownVideo(props: {
+function MarkdownPlayableMedia(props: {
     href: string
     label: string
     filePath?: string
+    kind: 'audio' | 'video'
 }) {
     const resolvedSource = resolveImageSrc(props.href, props.filePath)
     const [failedSource, setFailedSource] = useState<string | null>(null)
@@ -144,29 +148,43 @@ function MarkdownVideo(props: {
         setFailedSource((current) => current === resolvedSource ? current : null)
     }, [resolvedSource])
 
+    const label = props.kind === 'audio' ? 'Audio' : 'Video'
+    const ErrorIcon = props.kind === 'audio' ? VolumeX : VideoOff
     if (failedSource === resolvedSource) {
         return (
-            <span className="markdown-video-unavailable" data-markdown-copy={`[${props.label}](${props.href})`}>
-                <VideoOff size={17} aria-hidden="true" />
-                <span>{props.label || 'Video unavailable'}</span>
+            <span className={`markdown-${props.kind}-unavailable`} data-markdown-copy={`[${props.label}](${props.href})`}>
+                <ErrorIcon size={17} aria-hidden="true" />
+                <span>{label} unavailable.</span>
+                <a href={props.href} data-markdown-file-link={resolveMarkdownLinkTarget(props.href, props.filePath) ? '' : undefined}>Open {props.label || label.toLowerCase()}</a>
             </span>
         )
     }
 
     return (
-        <span className="markdown-video-frame" data-markdown-copy={`[${props.label}](${props.href})`}>
-            <video
-                controls
-                preload="metadata"
-                playsInline
-                src={resolvedSource}
-                data-markdown-video-target={props.href}
-                aria-label={props.label || 'Video'}
-                onError={() => setFailedSource(resolvedSource)}
-            >
-                <a href={resolvedSource}>Open video</a>
-            </video>
-            {props.label ? <span className="markdown-video-caption">{props.label}</span> : null}
+        <span className={`markdown-${props.kind}-frame`} data-markdown-copy={`[${props.label}](${props.href})`}>
+            {props.kind === 'audio' ? (
+                <audio
+                    controls
+                    preload="metadata"
+                    src={resolvedSource}
+                    data-markdown-audio-target={props.href}
+                    aria-label={props.label || 'Audio'}
+                    onError={() => setFailedSource(resolvedSource)}
+                />
+            ) : (
+                <video
+                    controls
+                    preload="metadata"
+                    playsInline
+                    src={resolvedSource}
+                    data-markdown-video-target={props.href}
+                    aria-label={props.label || 'Video'}
+                    onError={() => setFailedSource(resolvedSource)}
+                >
+                    <a href={resolvedSource}>Open video</a>
+                </video>
+            )}
+            {props.label ? <span className={`markdown-${props.kind}-caption`}>{props.label}</span> : null}
         </span>
     )
 }
@@ -188,7 +206,7 @@ function MarkdownImage({
         setLoadedSource((current) => current === resolvedSource ? current : null)
     }, [resolvedSource])
 
-    if (failedSource === resolvedSource) {
+    if (!resolvedSource || failedSource === resolvedSource) {
         return (
             <span
                 role="img"
@@ -241,12 +259,13 @@ export function createMarkdownComponents(
         codeBlockMaxLines?: number
         plainCodeBlocks?: boolean
         deferCodeHighlighting?: boolean
+        streaming?: boolean
         visualTheme?: 'light' | 'dark'
         onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
         mediaMode?: MarkdownMediaMode
     }
 ): Components {
-    return {
+    const components: Components = {
         h1: ({ children, className, align, id, ...props }: HeadingProps) => (
             <h1 id={id} className={cn('group/heading scroll-mt-20 mt-8 mb-4 border-b border-white/10 pb-2 text-2xl font-bold text-sparkle-text first:mt-0', getAlignmentClass(align), className)} {...props}>
                 {children}<HeadingPermalink id={id} />
@@ -291,25 +310,29 @@ export function createMarkdownComponents(
             const isAnchorLink = rawHref.startsWith('#')
             const internalTarget = rawHref ? resolveMarkdownLinkTarget(rawHref, filePath) : null
             const childText = flattenNodeText(children).trim()
-            const renderedChildren = renderColorAwareChildren(children, 'a')
+            const renderedChildren = renderColorAwareChildren(renderMarkdownLinkLabel(children, components.code), 'a')
 
-            if (options?.mediaMode === 'images-and-videos' && isMarkdownVideoHref(rawHref)) {
-                return <MarkdownVideo href={rawHref} label={childText} filePath={filePath} />
+            if (options?.mediaMode === 'images-and-videos') {
+                if (isMarkdownVideoHref(rawHref)) return <MarkdownPlayableMedia kind="video" href={rawHref} label={childText} filePath={filePath} />
+                if (MARKDOWN_AUDIO_EXTENSION_PATTERN.test(rawHref)) return <MarkdownPlayableMedia kind="audio" href={rawHref} label={childText} filePath={filePath} />
+                if (childText && MARKDOWN_IMAGE_EXTENSION_PATTERN.test(rawHref)) return <MarkdownImage src={resolveImageSrc(rawHref, filePath)} rawSrc={rawHref} alt={childText} />
             }
+
+            if (!rawHref) return <span>{renderedChildren}</span>
 
             if (isAnchorLink) {
                 return (
                     <a
                         href={href}
                         draggable={false}
-                        className="text-[var(--accent-primary)] hover:text-white hover:underline"
+                        className="text-[var(--accent-primary)] hover:underline focus-visible:underline decoration-dotted underline-offset-4"
                     >
                         {renderedChildren}
                     </a>
                 )
             }
 
-            if (internalTarget) return (
+            if (internalTarget || looksLikeMarkdownFileReference(rawHref)) return (
                 <a
                     href={href}
                     draggable={false}
@@ -318,9 +341,9 @@ export function createMarkdownComponents(
                     className="markdown-inline-file-tag"
                 >
                     <MarkdownFileTagContent
-                        pathValue={internalTarget.path}
+                        pathValue={internalTarget?.path || rawHref}
                         theme={options?.visualTheme || 'dark'}
-                        focusLine={internalTarget.focusLine}
+                        focusLine={internalTarget?.focusLine}
                         displayPath={looksLikeMarkdownFileReference(childText) ? childText.replace(/:\d+(?::\d+)?$/, '') : undefined}
                     >
                         {renderedChildren}
@@ -355,7 +378,7 @@ export function createMarkdownComponents(
                     rel="noopener noreferrer"
                     draggable={false}
                     title={rawHref || undefined}
-                    className="text-blue-400 hover:text-blue-300 hover:underline"
+                    className="text-blue-400 hover:text-blue-300 hover:underline focus-visible:underline decoration-dotted underline-offset-4"
                 >
                     <MarkdownExternalLinkContent href={rawHref}>{renderedChildren}</MarkdownExternalLinkContent>
                 </a>
@@ -443,6 +466,7 @@ export function createMarkdownComponents(
                     theme={options?.visualTheme || 'dark'}
                     maxLines={options?.codeBlockMaxLines}
                     deferHighlighting={options?.deferCodeHighlighting}
+                    diagramStreaming={Boolean(options?.streaming && ((codeProps as Record<string, unknown>).dataCodeIncomplete ?? (codeProps as Record<string, unknown>)['data-code-incomplete']) === 'true')}
                 >
                     {String(children).replace(/\n$/, '')}
                 </CodeBlock>
@@ -577,4 +601,5 @@ export function createMarkdownComponents(
         },
         del: ({ children }) => <del className="text-sparkle-text-secondary line-through">{children}</del>
     }
+    return components
 }

@@ -1,4 +1,5 @@
 import type { RuntimeActivationStatus } from '../runtime-activation'
+import type { ChatGptAccountsUpdate, ChatGptPoolSnapshot } from '../onboarding/contracts'
 import type { BrowserExtensionRecord } from '../browser-extensions'
 import type { BrowserRecordingOverlayCommand, BrowserRecordingOverlayPresentation, BrowserRecordingOverlayState } from './browser-recording-overlay'
 import type { NativeOverlayApi } from './native-overlay'
@@ -64,6 +65,7 @@ import type {
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
+    AssistantThreadViewInput,
     AssistantSkillSourceOverviewPayload,
     AssistantSkillSourceSettings,
     AssistantStartRealtimeVoiceInput,
@@ -569,6 +571,8 @@ export interface DevScopeSecretsApi {
 }
 
 export interface DevScopeOnboardingApi {
+    getChatGptAccounts: (input?: { refreshUsage?: boolean }) => Promise<DevScopeResult<{ pool: ChatGptPoolSnapshot }>>
+    updateChatGptAccounts: (input: ChatGptAccountsUpdate) => Promise<DevScopeResult<{ pool: ChatGptPoolSnapshot }>>
     getState: () => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     connectModelProvider: (input: ModelProviderInput) => Promise<DevScopeResult<{ connection: ModelProviderConnection }>>
     disconnectModelProvider: (provider: string) => Promise<DevScopeResult<{ provider: string }>>
@@ -683,11 +687,14 @@ export interface DevScopeAssistantApi {
     createSession: (input?: AssistantCreateSessionInput) => Promise<DevScopeResult<{ sessionId: string }>>
     selectSession: (sessionId: string) => Promise<DevScopeResult<{ sessionId: string; snapshot?: AssistantShellSnapshot; status?: AssistantRuntimeStatus }>>
     selectThread: (input: AssistantSelectThreadInput) => Promise<DevScopeResult<{ sessionId: string; threadId: string; snapshot?: AssistantShellSnapshot; status?: AssistantRuntimeStatus }>>
+    setThreadView?: (input: AssistantThreadViewInput) => Promise<DevScopeResult>
     getThreadDetailBootstrap: (threadId: string) => Promise<DevScopeResult<AssistantThreadDetailResultPayload>>
     getHistoryPage: (input: AssistantGetHistoryPageInput) => Promise<DevScopeResult<AssistantHistoryPageResultPayload>>
     getHistoryAroundMessage: (input: AssistantGetHistoryAroundMessageInput) => Promise<DevScopeResult<AssistantHistoryAroundMessageResultPayload>>
     hydrateHistoryBody: (input: AssistantHydrateHistoryBodyInput) => Promise<DevScopeResult<AssistantHistoryBodyResultPayload>>
     getReviewIndex: (input: AssistantGetReviewIndexInput) => Promise<DevScopeResult<AssistantReviewIndexResultPayload>>
+    listVisualizations?: (input: import('../visualization-resources').ListVisualizationsInput) => Promise<DevScopeResult<{ resources: import('../visualization-resources').VisualizationResource[]; skippedCount?: number; indexingOlder?: boolean; readOnly?: boolean }>>
+    getVisualization?: (input: import('../visualization-resources').GetVisualizationInput) => Promise<DevScopeResult<{ resource: import('../visualization-resources').VisualizationResource }>>
     getTurnDetail: (input: AssistantGetTurnDetailInput) => Promise<DevScopeResult<AssistantTurnDetailResultPayload>>
     searchChats: (input: AssistantSearchChatsInput) => Promise<DevScopeResult<AssistantSearchChatsResultPayload>>
     searchTurns: (input: AssistantSearchTurnsInput) => Promise<DevScopeResult<AssistantSearchTurnsResultPayload>>
@@ -713,6 +720,8 @@ export interface DevScopeAssistantApi {
     sendPrompt: (prompt: string, options?: AssistantSendPromptOptions) =>
         Promise<DevScopeResult<{ sessionId: string; threadId: string; turnId: string }>>
     interruptTurn: (turnId?: string, sessionId?: string) => Promise<DevScopeResult>
+    listBackgroundProcesses: (input: import('../assistant/contracts').AssistantBackgroundProcessesInput) => Promise<DevScopeResult<import('../assistant/contracts').AssistantBackgroundProcessesPayload>>
+    stopBackgroundProcesses: (input: import('../assistant/contracts').AssistantStopBackgroundProcessesInput) => Promise<DevScopeResult<import('../assistant/contracts').AssistantBackgroundProcessesPayload>>
     respondApproval: (input: AssistantApprovalResponseInput) => Promise<DevScopeResult>
     respondUserInput: (input: AssistantUserInputResponseInput) => Promise<DevScopeResult>
     startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) => Promise<DevScopeResult<{
@@ -730,6 +739,7 @@ export interface DevScopeAssistantApi {
     onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
     getVoiceTranscriptionState: () => Promise<DevScopeResult<{ state: AssistantVoiceTranscriptionState }>>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<DevScopeResult<{ text: string }>>
+    cancelVoiceTranscription?: (requestId: string) => Promise<DevScopeResult<{ cancelled: boolean }>>
     saveVoiceHistory: (input: AssistantSaveVoiceHistoryInput) => Promise<DevScopeResult>
     listVoiceHistory: () => Promise<DevScopeResult<{ entries: AssistantVoiceHistoryEntry[] }>>
     getFailedVoiceRecording: (id: string) => Promise<DevScopeResult<{ audioBase64: string | null }>>

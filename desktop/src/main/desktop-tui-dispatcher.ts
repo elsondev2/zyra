@@ -27,7 +27,7 @@ export async function dispatchDesktopTui(argv = process.argv): Promise<number> {
             env: {
                 ...process.env,
                 ZYRA_ROOT: runtimeRoot,
-                ZYRA_DATA_ROOT: os.homedir(),
+                ZYRA_DATA_ROOT: process.env.ZYRA_DATA_ROOT || os.homedir(),
                 ZYRA_CALLER_CWD: process.cwd(),
                 ZYRA_DISTRIBUTION: 'desktop-bundle',
                 ZYRA_STATE_DIR: process.env.ZYRA_STATE_DIR || namespace.stateDirectory,

@@ -16,7 +16,7 @@ import { parseAssistantBrowserAnnotation } from './assistant-browser-annotation-
 import type { ComposerContextFile } from './assistant-composer-types'
 import type { MentionCandidate } from './assistant-composer-mentions'
 import { buildEffortSliderTicks } from './assistant-composer-controller-constants'
-import { AssistantFileAttachmentCard, AssistantPastedTextCard } from './AssistantAttachmentCards'
+import { AssistantAttachmentPill, AssistantFileAttachmentCard, AssistantPastedTextCard } from './AssistantAttachmentCards'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import { AssistantBrowserAnnotationCard } from './AssistantBrowserAnnotationCard'
 
@@ -60,6 +60,7 @@ export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
     contextFiles,
     compact,
     removingAttachmentIds,
+    presentation = 'compact',
     onOpenAttachmentPreview,
     onPreview,
     onRemove
@@ -67,6 +68,7 @@ export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
     contextFiles: ComposerContextFile[]
     compact: boolean
     removingAttachmentIds: string[]
+    presentation?: 'compact' | 'compact-pills'
     onOpenAttachmentPreview?: (
         file: { name: string; path: string },
         ext: string,
@@ -178,7 +180,15 @@ export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
                         data-composer-attachment-layout-id={file.id}
                         className="shrink-0 will-change-transform"
                     >
-                        {browserAnnotation && file.previewDataUrl ? (
+                        {presentation === 'compact-pills' ? (
+                            <AssistantAttachmentPill
+                                name={meta.name}
+                                previewDataUrl={isImageAttachment ? file.previewDataUrl : undefined}
+                                removing={isRemoving || isEntering}
+                                onOpen={() => onPreview(file)}
+                                onRemove={() => onRemove(file.id)}
+                            />
+                        ) : browserAnnotation && file.previewDataUrl ? (
                             <AssistantBrowserAnnotationCard
                                 annotation={browserAnnotation}
                                 previewDataUrl={file.previewDataUrl}

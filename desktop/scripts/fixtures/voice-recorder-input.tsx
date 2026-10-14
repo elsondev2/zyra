@@ -20,6 +20,10 @@ export async function checkVoiceRecorderInput(root: Root): Promise<string[]> {
         await wait(() => request.done, 'Chromium applies the recording focus style without a foreground window')
     }
     let processor: any, stops = 0, closes = 0, apiCalls = 0
+    const payloads: any[] = [], cancelledRequests: string[] = []
+    let clockOffset = 0
+    const realNow = performance.now.bind(performance)
+    Object.defineProperty(performance, 'now', { configurable: true, value: () => realNow() + clockOffset })
     let voice!: ReturnType<typeof useAssistantSpeechInput>, setDraft!: (value: string) => void
     let draft = '', scope = 'one', deferred = false, transcriptFails = false, sendFails = false
     let release!: (value: unknown) => void
@@ -35,7 +39,8 @@ export async function checkVoiceRecorderInput(root: Root): Promise<string[]> {
     }
     ;(window as any).AudioContext = SyntheticAudioContext
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stops++ } }] }) } })
-    ;(window as any).devscope = { assistant: { transcribeVoice: () => {
+    ;(window as any).devscope = { assistant: { cancelVoiceTranscription: async (id: string) => { cancelledRequests.push(id); return { success: true, cancelled: true } }, transcribeVoice: (payload: any) => {
+        payloads.push(payload)
         apiCalls++
         check(stops >= apiCalls && closes >= apiCalls, 'Microphone and audio context stop before transcription')
         if (deferred) return new Promise(resolve => { release = resolve })
@@ -89,6 +94,18 @@ export async function checkVoiceRecorderInput(root: Root): Promise<string[]> {
     await wait(() => !voice.isRecording && !voice.isTranscribing, 'Stop finishes transcription')
     check(draft === 'typed draft spoken words' && sent.length === 0, 'Stop leaves the transcript in the draft without sending')
 
+    await start('long draft')
+    const longSamples = new Float32Array(24000 * 130).fill(.1)
+    processor.onaudioprocess({ inputBuffer: { numberOfChannels: 1, length: longSamples.length, getChannelData: () => longSamples } })
+    clockOffset = 130_000
+    await new Promise(resolve => setTimeout(resolve, 180))
+    check(voice.isRecording && !voice.isTranscribing && voice.durationMs > 120_000, 'Recording continues beyond the old two-minute auto-stop')
+    action('Stop and transcribe voice note').click()
+    await wait(() => !voice.isRecording && !voice.isTranscribing, 'Long recording finishes normally')
+    check(payloads.at(-1).durationMs > 130_000 && payloads.at(-1).durationMs < 480_000, 'The complete long PCM recording reaches transcription, without truncation at two minutes')
+    check(draft === 'long draft spoken words' && sent.length === 0, 'A long Stop result remains a draft, not an automatic send')
+    clockOffset = 0
+
     await start()
     action('Transcribe and send voice note').click()
     voice.submitAndSendRecording()
@@ -121,6 +138,7 @@ export async function checkVoiceRecorderInput(root: Root): Promise<string[]> {
     action('Cancel transcription').click()
     release({ success: true, text: 'discard cancelled result' }); await sleep(); await sleep()
     check(sent.length === 3 && draft === 'keep cancelled draft', 'Cancellation suppresses late transcription and sending')
+    check(cancelledRequests.at(-1) === payloads.at(-1).requestId, 'Cancel targets the exact active backend upload/chunk job')
 
     release = undefined as any
     await start('keep thread draft')
@@ -129,6 +147,8 @@ export async function checkVoiceRecorderInput(root: Root): Promise<string[]> {
     scope = 'other-thread'; render(); await sleep()
     release({ success: true, text: 'discard previous thread result' }); await sleep(); await sleep()
     check(sent.length === 3 && draft === 'keep thread draft', 'Switching chats cannot send an old recording into the new thread')
+    check(cancelledRequests.at(-1) === payloads.at(-1).requestId && cancelledRequests.length === 2, 'Switching chats also cancels the previous backend transcription')
     root.unmount()
-    return ['recording Stop preserves draft; Send and Enter submit full text once with chat configuration; focus ring, failure recovery, cancellation, and thread-switch isolation pass (synthetic audio/API, actual hook and composer handlers)']
+    delete (performance as any).now
+    return ['long recording continues past two minutes with complete PCM; backend cancel ownership and recording Stop preserves draft; Send and Enter submit full text once with chat configuration; focus ring, failure recovery, cancellation, and thread-switch isolation pass (synthetic audio/API, actual hook and composer handlers)']
 }

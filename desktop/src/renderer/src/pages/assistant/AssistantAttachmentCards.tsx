@@ -4,6 +4,38 @@ import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useThemeRevision } from '@/lib/use-theme-revision'
 import { cn } from '@/lib/utils'
 
+export function AssistantAttachmentPill({
+    name,
+    previewDataUrl,
+    removing,
+    onOpen,
+    onRemove
+}: {
+    name: string
+    previewDataUrl?: string
+    removing: boolean
+    onOpen: () => void
+    onRemove: () => void
+}) {
+    useThemeRevision()
+    const theme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
+    return (
+        <article
+            data-composer-attachment-item="true"
+            data-composer-attachment-pill="true"
+            className={cn('group flex h-7 max-w-56 items-center overflow-hidden rounded-md border border-[var(--surface-divider)] bg-sparkle-card transition-[opacity,transform] duration-200 motion-reduce:transition-none', removing && 'scale-95 opacity-0')}
+        >
+            <button type="button" disabled={removing} onClick={onOpen} title={name} aria-label={`Open preview for ${name}`} className="flex h-full min-w-0 items-center gap-1.5 pl-2 pr-1 text-left hover:bg-[var(--surface-hover)] disabled:pointer-events-none">
+                {previewDataUrl ? <img src={previewDataUrl} alt="" className="size-4 shrink-0 rounded-sm object-cover" /> : <FileEntryIcon pathValue={name} kind="file" theme={theme} size={14} className="shrink-0" />}
+                <span className="truncate text-[11px] text-sparkle-text-secondary">{name}</span>
+            </button>
+            <button type="button" disabled={removing} onClick={onRemove} title={`Remove ${name}`} aria-label={`Remove ${name}`} className="inline-flex h-full w-6 shrink-0 items-center justify-center text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:pointer-events-none">
+                <X size={11} />
+            </button>
+        </article>
+    )
+}
+
 type AssistantAttachmentCardBaseProps = {
     widthClassName: string
     onClick?: () => void

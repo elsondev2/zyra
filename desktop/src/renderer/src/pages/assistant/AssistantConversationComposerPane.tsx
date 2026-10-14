@@ -6,6 +6,7 @@ import type { ControlPendingActionApproval, ControlPendingGrant, ControlTarget }
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { cn } from '@/lib/utils'
 import { AssistantComposer } from './AssistantComposer'
+import { AssistantNewChatGreeting } from './AssistantNewChatGreeting'
 import { AssistantPendingApprovalPanel } from './AssistantPendingApprovalPanel'
 import { AssistantPendingControlApprovalPanel } from './AssistantPendingControlApprovalPanel'
 import { AssistantPendingPlaygroundLabPanel } from './AssistantPendingPlaygroundLabPanel'
@@ -21,6 +22,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     placement?: 'bottom' | 'center'
     paneRef?: RefObject<HTMLDivElement | null>
     newChatPrompt?: string | null
+    settled?: boolean
     pendingPlaygroundLabRequest: AssistantPlaygroundPendingLabRequest | null
     pendingApprovals: AssistantPendingApproval[]
     pendingControlActions: ControlPendingActionApproval[]
@@ -90,7 +92,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     ) => Promise<boolean>
     refreshModels: () => void
     respondApproval: (requestId: string, decision: AssistantApprovalDecision) => Promise<void>
-    respondUserInput: (requestId: string, answers: Record<string, string | string[]>) => Promise<void>
+    respondUserInput: (requestId: string, answers: Record<string, string | string[]>, files?: ComposerContextFile[]) => Promise<void>
     setPlaygroundTerminalAccess: (enabled: boolean) => void
     setPlaygroundTerminalAccessRequestMuted: (muted: boolean) => void
     approvePendingPlaygroundLabRequest: (input: { title?: string; source: 'empty' | 'git-clone'; repoUrl?: string }) => Promise<void>
@@ -162,6 +164,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
             ) : null}
             {!isWaitingForControlApproval && !isWaitingForApproval && !pendingTerminalAccessRequest && hasPendingQuestions ? (
                 <AssistantPendingUserInputPanel
+                    key={pendingQuestionInputs[0]?.requestId}
                     pendingUserInputs={pendingQuestionInputs}
                     responding={props.userInputResponding}
                     onRespond={props.respondUserInput}
@@ -196,16 +199,9 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     data-assistant-composer-hitbox="true"
                 >
                     {placement === 'center' ? (
-                        <div className="pointer-events-none mb-5 px-2 text-center">
-                            <p
-                                className="mx-auto max-w-[680px] text-[30px] font-medium leading-[1.08] tracking-[-0.035em] text-sparkle-text/90"
-                                data-assistant-new-chat-prompt="true"
-                                style={{ fontFamily: 'var(--font-ui, "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif)' }}
-                            >
-                                {props.newChatPrompt || ''}
-                            </p>
-                        </div>
+                        <AssistantNewChatGreeting prompt={props.newChatPrompt} />
                     ) : null}
+                    {props.settled && placement === 'bottom' ? <div role="status" className="mx-3 -mb-2 rounded-t-xl border border-b-0 border-[var(--surface-divider)] bg-[var(--surface-hover)] px-4 pb-4 pt-2 text-center text-[11px] leading-4 text-sparkle-text-muted">Send a message to unsettle this thread</div> : null}
                     <AssistantComposer
                         sessionId={props.selectedSessionId}
                         configurationThreadId={props.configurationThreadId}

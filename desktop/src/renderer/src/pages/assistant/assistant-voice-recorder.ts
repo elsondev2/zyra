@@ -1,7 +1,9 @@
 import type { AssistantTranscribeVoiceInput } from '@shared/assistant/contracts'
 
+import { VOICE_RECORDING_MAX_DURATION_MS } from '@shared/assistant/voice-recording-limits'
+
 export const ASSISTANT_VOICE_SAMPLE_RATE_HZ = 24_000
-export const ASSISTANT_VOICE_MAX_DURATION_MS = 120_000
+export const ASSISTANT_VOICE_MAX_DURATION_MS = VOICE_RECORDING_MAX_DURATION_MS
 export const ASSISTANT_VOICE_MAX_WAVEFORM_SAMPLES = 160
 
 const ASSISTANT_VOICE_WAVEFORM_NOISE_FLOOR_RMS = 0.001
@@ -113,6 +115,25 @@ export function createAssistantVoicePayload(
         mimeType: 'audio/wav',
         sampleRateHz: ASSISTANT_VOICE_SAMPLE_RATE_HZ,
         durationMs: Math.max(1, Math.round((resampled.length / ASSISTANT_VOICE_SAMPLE_RATE_HZ) * 1000))
+    }
+}
+
+export function createAssistantVoicePcmPayload(chunks: readonly Int16Array[]): AssistantTranscribeVoiceInput | null {
+    const sampleCount = chunks.reduce((count, chunk) => count + chunk.length, 0)
+    if (!sampleCount) return null
+    const wav = new ArrayBuffer(44 + sampleCount * 2)
+    const view = new DataView(wav)
+    new Uint8Array(wav).set(new Uint8Array(encodeAssistantVoiceWav(new Float32Array(0))))
+    view.setUint32(4, wav.byteLength - 8, true)
+    view.setUint32(40, sampleCount * 2, true)
+    let offset = 44
+    for (const chunk of chunks) for (const sample of chunk) {
+        view.setInt16(offset, sample, true)
+        offset += 2
+    }
+    return {
+        audioBase64: arrayBufferToBase64(wav), mimeType: 'audio/wav', sampleRateHz: ASSISTANT_VOICE_SAMPLE_RATE_HZ,
+        durationMs: Math.max(1, Math.round(sampleCount / ASSISTANT_VOICE_SAMPLE_RATE_HZ * 1000))
     }
 }
 

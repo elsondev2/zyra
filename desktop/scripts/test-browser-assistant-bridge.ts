@@ -74,7 +74,9 @@ let realtimeVoiceEventListener: ((event: AssistantRealtimeVoiceEvent) => void) |
 let devscopeEventListener: ((event: BrowserDevscopeRelayEvent) => void) | null = null
 const browserClientCounts: number[] = []
 const devscopeInvocations: Array<{ methodPath: string[]; args: unknown[] }> = []
+const threadViewReports: unknown[][] = []
 const service = {
+    async setThreadView(...args: unknown[]) { threadViewReports.push(args); return { success: true } },
     subscribeExternalEvents(listener: (payload: AssistantEventStreamPayload) => void) {
         eventListener = listener
         return () => { eventListener = null }
@@ -133,6 +135,9 @@ const service = {
     }
 } as unknown as AssistantService
 
+let transcriptionStarted!: () => void
+const transcriptionPending = new Promise<void>(resolve => { transcriptionStarted = resolve })
+const transcriptionRequestId = '11111111-1111-4111-8111-111111111111'
 const bridge = new BrowserAssistantBridge({
     service,
     allowedOrigins: new Set([allowedOrigin]),
@@ -158,7 +163,13 @@ const bridge = new BrowserAssistantBridge({
         signedIn: true,
         message: null
     }),
-    transcribeVoice: async () => 'transcript'
+    transcribeVoice: async (input, signal) => {
+        if (input.requestId !== transcriptionRequestId) return 'transcript'
+        return new Promise((_resolve, reject) => {
+            signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+            transcriptionStarted()
+        })
+    }
 })
 
 const address = await bridge.start()
@@ -187,6 +198,21 @@ try {
     assert.equal(bootstrap.value.snapshot.sessions[0].title, 'Shared browser session', 'browser bootstrap must use the live AssistantService')
     assert.equal(typeof eventListener, 'function', 'the first protected Browser request binds live Assistant events')
     assert.equal(bootstrapResponse.headers.get('access-control-allow-origin'), allowedOrigin)
+
+    for (const clientId of ['browser-view-tab-0001', 'browser-view-tab-0002']) {
+        const viewed = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+            method: 'POST', headers, body: JSON.stringify({ method: 'setThreadView', clientId, args: [{ threadId: 'thread:real', viewing: true }] })
+        })
+        assert.equal(viewed.status, 200)
+    }
+    assert.deepEqual(threadViewReports, [
+        ['browser:browser-view-tab-0001', { threadId: 'thread:real', viewing: true }, 'browser'],
+        ['browser:browser-view-tab-0002', { threadId: 'thread:real', viewing: true }, 'browser']
+    ], 'protected browser view reports retain independent document identity and surface')
+    const invalidView = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST', headers, body: JSON.stringify({ method: 'setThreadView', args: [{ threadId: 'thread:real', viewing: true }] })
+    })
+    assert.equal(invalidView.status, 400, 'anonymous view reports cannot overwrite a tab reader')
 
     const pluginCatalogResponse = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
         method: 'POST',
@@ -432,6 +458,17 @@ try {
         })
     }).then((response) => response.json()) as any
     assert.equal(sendAfterReconnect.value.success, true, 'a brief Voice event-stream reconnect must preserve tab ownership')
+    const pendingTranscription = fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST', headers, body: JSON.stringify({ method: 'transcribeVoice', clientId: voiceClientId, args: [{ requestId: transcriptionRequestId, audioBase64: 'fixture', mimeType: 'audio/wav', sampleRateHz: 24000, durationMs: 1000 }] })
+    })
+    await transcriptionPending
+    const cancelFor = async (clientId: string) => (await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST', headers, body: JSON.stringify({ method: 'cancelVoiceTranscription', clientId, args: [transcriptionRequestId] })
+    })).json()
+    assert.equal((await cancelFor('browser-voice-client-0002')).value.cancelled, false, 'another browser client cannot cancel a dictation upload')
+    assert.equal((await cancelFor(voiceClientId)).value.cancelled, true, 'the owning browser client can cancel a long transcription')
+    assert.match((await (await pendingTranscription).json()).value.error, /cancelled/)
+
     const stopVoice = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
         method: 'POST',
         headers,

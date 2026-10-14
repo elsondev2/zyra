@@ -1,3 +1,5 @@
+import { parseVisualizationReferences } from './references.mjs';
+
 export const MAX_VISUALIZATION_HTML = 64 * 1024;
 
 function attribute(tag, name, fallback, limit) {
@@ -54,7 +56,11 @@ export function parseVisualizationBlocks(value) {
 
 export function visualizationTerminalText(content, streaming = false) {
   return parseVisualizationBlocks(content).map(part => {
-    if (part.kind === 'text') return part.text;
+    if (part.kind === 'text') return parseVisualizationReferences(part.text).map(reference => {
+      if (reference.kind === 'text') return reference.text;
+      const status = reference.state === 'complete' ? `Saved visualization · v${reference.version}` : streaming ? 'Preparing saved visualization…' : 'Saved visualization reference incomplete.';
+      return `\n${status}\n${reference.state === 'complete' ? 'Open Resources in Zyra chat to view this saved version.\n' : ''}`;
+    }).join('');
     const title = part.title.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
     const summary = part.summary.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
     const status = part.state === 'complete' ? 'Visualization' : part.state === 'too-large' ? 'Visualization too large' : streaming ? 'Creating visualization…' : 'Visualization incomplete';

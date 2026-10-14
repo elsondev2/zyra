@@ -217,6 +217,7 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
         }
         return wrapCapsuleSurface(
             <><AssistantResourcesWorkspace
+                threadId={tab.threadId}
                 turns={turns}
                 projectPath={tab.projectPath || null}
                 onOpenPreview={preview.openPreview}

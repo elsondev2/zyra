@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { readVisualizationCandidatesFromDb } from './visualization-candidates'
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { rename as renameFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -375,6 +376,13 @@ export class AssistantPersistence {
         this.clearPendingEventTimer()
         await this.processPendingEvents()
         return this.enqueue(() => readAssistantHistoryPage(this.requireDb(), input))
+    }
+
+    async readVisualizationCandidates(threadId: string, after = 0, limit = 80) {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readVisualizationCandidatesFromDb(this.requireDb(), threadId, after, limit))
     }
 
     async readHistoryAroundMessage(input: AssistantGetHistoryAroundMessageInput): Promise<AssistantHistoryAroundMessageResult> {

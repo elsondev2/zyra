@@ -19,6 +19,7 @@ import { AssistantQuestionResponse } from './AssistantQuestionResponse'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import {
     CollapsibleUserMessageBody,
+    AssistantMessageMarkdown,
     CompletedAssistantMarkdown,
     StreamingAssistantMarkdown,
     StreamingAssistantText
@@ -663,7 +664,7 @@ export const TimelineMessage = memo(({
     ])
 
     if (isAssistant) {
-        const presentationActive = !usesProviderNativeStreaming && assistantTextPresentation.presenting
+        const presentationActive = usesProviderNativeStreaming ? Boolean(message.streaming) : assistantTextPresentation.presenting
         const assistantText = usesProviderNativeStreaming ? (message.text || ' ') : (assistantTextPresentation.text || ' ')
         const renderedAssistantText = stripProposedPlanBlocks(assistantText) || (presentationActive ? ' ' : '')
         const assistantCopyValue = renderedAssistantText.trim() ? renderedAssistantText : copyValue
@@ -717,6 +718,7 @@ export const TimelineMessage = memo(({
                         <StreamingAssistantMarkdown
                             content={renderedAssistantText || ' '}
                             cacheKey={`${message.id}:inline-work-stream`}
+                            fadeStreamingText={assistantTextStreamingMode === 'stream'}
                             filePath={filePath || undefined}
                             onInternalLinkClick={onInternalLinkClick}
                             onLinkNotice={onLinkNotice}
@@ -742,6 +744,7 @@ export const TimelineMessage = memo(({
                                 <StreamingAssistantMarkdown
                                     content={compactLiveNarrationText(renderedAssistantText) || ' '}
                                     cacheKey={`${message.id}:compact-stream`}
+                                    fadeStreamingText={assistantTextStreamingMode === 'stream'}
                                     className={ASSISTANT_MARKDOWN_CLASS_NAME}
                                     mediaMode="none"
                                 />
@@ -778,22 +781,12 @@ export const TimelineMessage = memo(({
                             </div>
                         </div>
                     ) : null
-                ) : presentationActive ? (
-                    <StreamingAssistantMarkdown
-                        content={renderedAssistantText || ' '}
-                        cacheKey={`${message.id}:stream`}
-                        timestamp={timestamp}
-                        renderFooter={renderMessageFooter}
-                        filePath={filePath || undefined}
-                        onInternalLinkClick={onInternalLinkClick}
-                        onLinkNotice={onLinkNotice}
-                        className={ASSISTANT_MARKDOWN_CLASS_NAME}
-                        mediaMode="none"
-                    />
                 ) : (
-                    <CompletedAssistantMarkdown
-                        content={renderedAssistantText}
-                        cacheKey={`${message.id}:${message.updatedAt}:${renderedAssistantText.length}`}
+                    <AssistantMessageMarkdown
+                        content={renderedAssistantText || ' '}
+                        cacheKey={message.id}
+                        streaming={presentationActive}
+                        fadeStreamingText={assistantTextStreamingMode === 'stream'}
                         timestamp={timestamp}
                         renderFooter={renderMessageFooter}
                         filePath={filePath || undefined}
@@ -801,7 +794,7 @@ export const TimelineMessage = memo(({
                         onInternalLinkClick={onInternalLinkClick}
                         onLinkNotice={onLinkNotice}
                         className={ASSISTANT_MARKDOWN_CLASS_NAME}
-                        mediaMode="images-and-videos"
+                        mediaMode={presentationActive ? 'none' : 'images-and-videos'}
                     />
                 )}
             </div>

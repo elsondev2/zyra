@@ -58,6 +58,8 @@ import {
     handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
+    handleAssistantListVisualizations,
+    handleAssistantGetVisualization,
     handleAssistantGetUsageSummary,
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
@@ -70,6 +72,8 @@ import {
     handleAssistantGetSnapshot,
     handleAssistantGetStatus,
     handleAssistantInterruptTurn,
+    handleAssistantListBackgroundProcesses,
+    handleAssistantStopBackgroundProcesses,
     handleAssistantIngestRealtimeVoiceEvent,
     handleAssistantStartPluginDownload,
     handleAssistantGetPluginDownload,
@@ -101,6 +105,7 @@ import {
     handleAssistantStopRealtimeVoice,
     handleAssistantSubscribeRealtimeVoice,
     handleAssistantTranscribeVoice,
+    handleAssistantCancelVoiceTranscription,
     handleAssistantUnsubscribeRealtimeVoice,
     handleAssistantUpdateProject,
     handleAssistantUpdateSkillSourceSettings,
@@ -109,6 +114,7 @@ import {
     handleAssistantSearchTurns,
     handleAssistantSelectSession,
     handleAssistantSelectThread,
+    handleAssistantSetThreadView,
     handleAssistantSendPrompt,
     handleAssistantSetPlaygroundRoot,
     handleAssistantSetSessionProject,
@@ -464,11 +470,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.createSession, requireCompletedSetup(handleAssistantCreateSession))
     ipcMain.handle(ASSISTANT_IPC.selectSession, requireCompletedSetup(handleAssistantSelectSession))
     ipcMain.handle(ASSISTANT_IPC.selectThread, requireCompletedSetup(handleAssistantSelectThread))
+    ipcMain.handle(ASSISTANT_IPC.setThreadView, requireCompletedSetup(handleAssistantSetThreadView))
     ipcMain.handle(ASSISTANT_IPC.getThreadDetailBootstrap, requireCompletedSetup(handleAssistantGetThreadDetailBootstrap))
     ipcMain.handle(ASSISTANT_IPC.getHistoryPage, requireCompletedSetup(handleAssistantGetHistoryPage))
     ipcMain.handle(ASSISTANT_IPC.getHistoryAroundMessage, requireCompletedSetup(handleAssistantGetHistoryAroundMessage))
     ipcMain.handle(ASSISTANT_IPC.hydrateHistoryBody, requireCompletedSetup(handleAssistantHydrateHistoryBody))
     ipcMain.handle(ASSISTANT_IPC.getReviewIndex, requireCompletedSetup(handleAssistantGetReviewIndex))
+    ipcMain.handle(ASSISTANT_IPC.listVisualizations, requireCompletedSetup(handleAssistantListVisualizations))
+    ipcMain.handle(ASSISTANT_IPC.getVisualization, requireCompletedSetup(handleAssistantGetVisualization))
     ipcMain.handle(ASSISTANT_IPC.getTurnDetail, requireCompletedSetup(handleAssistantGetTurnDetail))
     ipcMain.handle(ASSISTANT_IPC.searchChats, requireCompletedSetup(handleAssistantSearchChats))
     ipcMain.handle(ASSISTANT_IPC.searchTurns, requireCompletedSetup(handleAssistantSearchTurns))
@@ -492,6 +501,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.newThread, requireCompletedSetup(handleAssistantNewThread))
     ipcMain.handle(ASSISTANT_IPC.sendPrompt, requireCompletedSetup(handleAssistantSendPrompt))
     ipcMain.handle(ASSISTANT_IPC.interruptTurn, requireCompletedSetup(handleAssistantInterruptTurn))
+    ipcMain.handle(ASSISTANT_IPC.listBackgroundProcesses, requireCompletedSetup(handleAssistantListBackgroundProcesses))
+    ipcMain.handle(ASSISTANT_IPC.stopBackgroundProcesses, requireCompletedSetup(handleAssistantStopBackgroundProcesses))
     ipcMain.handle(ASSISTANT_IPC.respondApproval, requireCompletedSetup(handleAssistantRespondApproval))
     ipcMain.handle(ASSISTANT_IPC.respondUserInput, requireCompletedSetup(handleAssistantRespondUserInput))
     ipcMain.handle(ASSISTANT_IPC.subscribeRealtimeVoice, requireCompletedSetup(handleAssistantSubscribeRealtimeVoice))
@@ -502,6 +513,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.stopRealtimeVoice, requireCompletedSetup(handleAssistantStopRealtimeVoice))
     ipcMain.handle(ASSISTANT_IPC.getVoiceTranscriptionState, requireCompletedSetup(handleAssistantGetVoiceTranscriptionState))
     ipcMain.handle(ASSISTANT_IPC.transcribeVoice, requireCompletedSetup(handleAssistantTranscribeVoice))
+    ipcMain.handle(ASSISTANT_IPC.cancelVoiceTranscription, requireCompletedSetup(handleAssistantCancelVoiceTranscription))
     ipcMain.handle(ASSISTANT_IPC.saveVoiceHistory, requireCompletedSetup(handleAssistantSaveVoiceHistory))
     ipcMain.handle(ASSISTANT_IPC.listVoiceHistory, requireCompletedSetup(handleAssistantListVoiceHistory))
     ipcMain.handle(ASSISTANT_IPC.getFailedVoiceRecording, requireCompletedSetup(handleAssistantGetFailedVoiceRecording))

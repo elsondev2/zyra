@@ -157,7 +157,7 @@ export function VoiceHistorySettings() {
     const actionClassName = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--settings-text-muted)] transition-colors hover:bg-[var(--settings-control-hover)] hover:text-[var(--settings-text)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--accent-primary)] disabled:opacity-45'
 
     return <>
-        <SettingsSection title="Voice history" titleAction={<SettingsInfoTooltip label="About voice history">Successful dictation is saved as text. If transcription fails, the recording is kept here so you can listen to it. Deleting an entry removes it permanently.</SettingsInfoTooltip>}>
+        <SettingsSection title="Voice history" titleAction={<SettingsInfoTooltip label="About voice history">Successful dictation is saved as text. Failed recordings are kept for playback while storage is below 64 MiB and 20 recordings. Existing recordings are never removed automatically. If storage is full, new failures save the error without audio. Delete old recordings to free space; deletion is permanent.</SettingsInfoTooltip>}>
             {loading ? <p className="px-4 py-4 text-[12px] text-[var(--settings-text-muted)]">Loading voice history…</p> : null}
             {error ? <p role="alert" className="px-4 py-3 text-[12px] text-[var(--status-danger)]">{error}</p> : null}
             {!loading && entries.length === 0 && !error ? <p className="px-4 py-4 text-[12px] text-[var(--settings-text-muted)]">No voice input yet.</p> : null}

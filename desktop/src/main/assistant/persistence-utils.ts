@@ -20,6 +20,7 @@ export interface AssistantMetaRow {
     knownModels: AssistantSnapshot['knownModels']
 }
 
+// Additive columns are ensured in place; changing this version resets Development history.
 export const PERSISTENCE_VERSION = 7
 export const PERSISTENCE_FLUSH_DEBOUNCE_MS = 1500
 
@@ -42,6 +43,10 @@ export function sqlBool(value: boolean): number {
 
 export function toNullableString(value: SqlValue): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+export function toAssistantMessagePhase(value: SqlValue): 'final_answer' | 'commentary' | undefined {
+    return value === 'final_answer' || value === 'commentary' ? value : undefined
 }
 
 export function toNumber(value: SqlValue, fallback = 0): number {
@@ -175,6 +180,7 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
             timeline_sequence INTEGER,
             provider_item_id TEXT,
             modality TEXT,
+            phase TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(thread_id) REFERENCES assistant_threads(id) ON DELETE CASCADE
@@ -335,6 +341,7 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_messages', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_messages', 'provider_item_id', 'TEXT')
     ensureTableColumn(db, 'assistant_messages', 'modality', 'TEXT')
+    ensureTableColumn(db, 'assistant_messages', 'phase', 'TEXT')
     ensureTableColumn(db, 'assistant_pending_user_inputs', 'response_message_id', 'TEXT')
     ensureTableColumn(db, 'assistant_activities', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_activities', 'turn_terminal_outcome', 'TEXT')

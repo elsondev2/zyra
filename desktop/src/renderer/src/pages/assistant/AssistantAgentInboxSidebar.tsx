@@ -3,14 +3,17 @@ import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Check, CheckCircle2, ChevronDown, CircleDashed, Folder, FolderPlus, MessageSquare, MoreHorizontal, Pin, Search, Undo2, X } from 'lucide-react'
-import type { AssistantSession, AssistantThread } from '@shared/assistant/contracts'
+import type { AssistantProject, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { cn } from '@/lib/utils'
+import { isAssistantUserFacingSession } from '@/lib/assistant/selectors'
 import { SettingsProviderIcon } from '../settings/SettingsProviderIcon'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { useStableSidebarGroups } from './useStableSidebarGroups'
-import { getSidebarSettlementActivityKey, isSidebarSettlementCurrent, upgradeSidebarSettlementOverrides, type SettlementOverride, type SettlementOverrides } from './assistant-sidebar-settlement'
+import { getSidebarSettlementActivityKey, isAssistantChatSettled, upgradeSidebarSettlementOverrides, type SettlementOverride, type SettlementOverrides } from './assistant-sidebar-settlement'
+import { useAssistantSettlementOverrides } from './assistant-settlement-store'
+import { createChatSettlementMenuItem } from './assistant-chat-actions-menu'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
 import { AssistantAgentPresenceIndicator } from './AssistantAgentPresenceIndicator'
 import { assistantSessionMobileDevices, isAssistantSessionOpenInTui } from './assistant-tui-presence'
@@ -24,17 +27,14 @@ import {
     getSortableTimestamp,
     groupSessionsByProject,
     isAssistantDraftSession,
-    resolveAssistantThreadStatusPill,
-    resolveSessionProjectPath,
+    resolveAssistantSidebarRowStatus as resolveRowStatus,
+    type AssistantSidebarRowStatus as RowStatus,
     type SessionProjectGroup
 } from './assistant-sessions-rail-utils'
 
 const ALL_PROJECTS = '__assistant-agent-inbox-all-projects__'
-const SETTLED_OVERRIDES_KEY = 'assistant:agent-inbox-settled-overrides:v1'
-const AUTO_SETTLE_AFTER_MS = 3 * 24 * 60 * 60 * 1000
 const SETTLED_PAGE_COUNT = 25
 
-type RowStatus = 'approval' | 'input' | 'working' | 'failed' | 'stopped' | 'done' | 'ready'
 type SidebarItem = {
     session: AssistantSession
     thread: AssistantThread | null
@@ -51,6 +51,7 @@ type SidebarItem = {
 
 type Props = {
     sessions: AssistantSession[]
+    projects?: readonly AssistantProject[]
     pinnedSessionIds?: ReadonlySet<string>
     activeSessionId: string | null
     activeThreadId: string | null
@@ -65,51 +66,20 @@ type Props = {
     onOpenContextMenu: (event: ReactMouseEvent<HTMLElement>, session: AssistantSession, items: FileActionsMenuItem[]) => void
 }
 
-function readSettlementOverrides(): SettlementOverrides {
-    try {
-        const value = JSON.parse(localStorage.getItem(SETTLED_OVERRIDES_KEY) || '{}') as unknown
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-        return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, SettlementOverride] => {
-            const override = entry[1] as Partial<SettlementOverride> | null
-            return Boolean(override && (override.state === 'active' || override.state === 'settled') && typeof override.activityAt === 'string'
-                && (override.activityKey === undefined || typeof override.activityKey === 'string'))
-        }))
-    } catch {
-        return {}
-    }
-}
-
-function writeSettlementOverrides(value: SettlementOverrides): void {
-    try { localStorage.setItem(SETTLED_OVERRIDES_KEY, JSON.stringify(value)) } catch { /* keep in memory */ }
-}
-
 function getStatusThread(session: AssistantSession): AssistantThread | null {
     return session.threads.find((thread) => thread.id === session.activeThreadId) || getPrimarySessionThread(session)
 }
 
-function resolveRowStatus(thread: AssistantThread | null, isSelectedThread: boolean): RowStatus {
-    const pill = resolveAssistantThreadStatusPill(thread, isSelectedThread)
-    switch (pill?.label) {
-        case 'Pending': return 'approval'
-        case 'Input needed': return 'input'
-        case 'Working':
-        case 'Background':
-        case 'Connecting': return 'working'
-        case 'Failed':
-        case 'Stale': return 'failed'
-        case 'Done': return 'done'
-        case 'Stopped': return 'stopped'
-        default: return 'ready'
-    }
+function isWorkingItem(item: Pick<SidebarItem, 'status'>): boolean {
+    return item.status === 'working' || item.status === 'approval' || item.status === 'input'
+}
+
+function isPriorityItem(item: Pick<SidebarItem, 'pinned' | 'status'>): boolean {
+    return item.pinned || isWorkingItem(item)
 }
 
 function isEffectivelySettled(item: Omit<SidebarItem, 'settled'>, overrides: SettlementOverrides): boolean {
-    if (item.pinned) return false
-    const override = overrides[item.session.id]
-    if (override && isSidebarSettlementCurrent(item.session, override)) return override.state === 'settled'
-    if (item.status !== 'ready') return false
-    const activity = getSortableTimestamp(item.activityAt)
-    return activity > 0 && Date.now() - activity >= AUTO_SETTLE_AFTER_MS
+    return isAssistantChatSettled(item.session, overrides, { priority: isPriorityItem(item), ready: item.status === 'ready', activityAt: item.activityAt })
 }
 
 function formatWorkingDuration(startedAt: string | null): string {
@@ -164,17 +134,11 @@ function topStatus(item: SidebarItem): ReactNode {
 }
 
 function getAgentInboxMenuItems(item: SidebarItem, onToggleSettlement: (item: SidebarItem) => void, props: Props): FileActionsMenuItem[] {
-    const settle = !item.settled
-    return [
-        {
-            id: settle ? 'settle' : 'unsettle',
-            label: item.pinned ? 'Unpin chat to settle' : settle ? 'Settle chat' : 'Un-settle chat',
-            disabled: item.pinned,
-            icon: settle ? <Check size={13} /> : <Undo2 size={13} />,
-            onSelect: () => onToggleSettlement(item)
-        },
-        ...props.getSessionMenuItems(item.session)
-    ]
+    const settlement = createChatSettlementMenuItem({ pinned: item.pinned, settled: item.settled, settlementDisabled: isPriorityItem(item), disabled: props.commandPending, onToggleSettlement: () => onToggleSettlement(item) })
+    const actions = props.getSessionMenuItems(item.session)
+    return actions.some(action => action.id === 'settle' || action.id === 'unsettle')
+        ? actions.map(action => action.id === 'settle' || action.id === 'unsettle' ? settlement : action)
+        : [settlement, ...actions]
 }
 
 function InboxRowActions({ item, action, onAction, props, showLabel = false, inFlow = false }: {
@@ -197,9 +161,9 @@ function InboxRowActions({ item, action, onAction, props, showLabel = false, inF
             <div className="relative flex min-w-0 items-center gap-0.5 overflow-hidden">
                 <button
                     type="button"
-                    aria-label={item.pinned ? 'Unpin chat to settle' : action === 'settle' ? 'Settle chat' : 'Un-settle chat'}
-                    title={item.pinned ? 'Unpin chat to settle' : undefined}
-                    disabled={item.pinned}
+                    aria-label={item.pinned ? 'Unpin chat to settle' : isWorkingItem(item) ? 'Working chat stays in Priority' : action === 'settle' ? 'Settle chat' : 'Un-settle chat'}
+                    title={item.pinned ? 'Unpin chat to settle' : isWorkingItem(item) ? 'Working chat stays in Priority' : undefined}
+                    disabled={isPriorityItem(item)}
                     onClick={(event) => {
                         event.preventDefault()
                         event.stopPropagation()
@@ -217,6 +181,7 @@ function InboxRowActions({ item, action, onAction, props, showLabel = false, inF
                     presentation="portal"
                     rootClassName="flex shrink-0 items-center"
                     density="compact"
+                    revealSecondaryOnHover
                     buttonClassName="h-6 w-6 rounded-md text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                     openButtonClassName="rounded-md bg-[var(--surface-hover)] text-sparkle-text opacity-100"
                 />
@@ -237,7 +202,7 @@ function AgentInboxCard({ item, onSettle, props }: { item: SidebarItem; onSettle
                 <div className="relative z-10 h-[4.875rem] px-2.5 py-2">
                     <div className="flex h-5 min-w-0 items-center gap-1.5">
                         <ProjectMark group={item.project} />
-                        <span className={cn('min-w-0 flex-1 truncate text-xs text-sparkle-text-secondary/85', receded ? 'font-normal' : 'font-medium')}>{item.project.label}</span>
+                        <span className={cn('min-w-0 flex-1 truncate text-xs text-sparkle-text-secondary/85', receded ? 'font-normal' : 'font-medium')}>{item.project.path ? item.project.label : 'Chat'}</span>
                         <div className="relative ml-auto flex h-6 min-w-0 shrink-0 items-center justify-end gap-1 pl-1 text-xs">
                             <span className="shrink-0">
                                 <span className="whitespace-nowrap tabular-nums text-sparkle-text-muted/65">{topStatus(item)}</span>
@@ -252,7 +217,7 @@ function AgentInboxCard({ item, onSettle, props }: { item: SidebarItem; onSettle
                         {model.provider ? <span role="img" aria-label={`${model.provider} model provider`} className="inline-flex shrink-0"><SettingsProviderIcon provider={model.provider === 'anthropic' ? 'claude' : model.provider === 'google' ? 'gemini' : model.provider} size={13} /></span> : null}
                         <span className="min-w-0 flex-1 truncate whitespace-nowrap">{model.modelName || 'Assistant'}</span>
                         {item.pinned ? <span aria-label="Pinned chat" title="Pinned chat" className="inline-flex shrink-0"><Pin size={12} /></span> : null}
-                        {item.thread?.source === 'subagent' || item.tuiOpen || item.mobileDevices.length > 0 ? <span className="inline-flex shrink-0 items-center" data-assistant-presence-group>
+                        {item.thread?.agentNickname || item.thread?.source === 'subagent' || item.tuiOpen || item.mobileDevices.length > 0 ? <span className="inline-flex shrink-0 items-center" data-assistant-presence-group>
                             <AssistantAgentPresenceIndicator thread={item.thread} />
                             {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
                             {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
@@ -277,7 +242,7 @@ function AgentInboxSlimRow({ item, action, onAction, props }: { item: SidebarIte
                     {item.status !== 'ready' ? <span className="mr-1 inline-flex shrink-0 text-sparkle-text-muted" title={item.status === 'done' ? 'New response' : item.status}>
                         {item.status === 'working' ? <CircleDashed size={13} /> : item.status === 'done' ? <CheckCircle2 size={13} /> : <span className="text-[10px]">{item.status}</span>}
                     </span> : null}
-                    {item.thread?.source === 'subagent' || item.tuiOpen || item.mobileDevices.length > 0 ? (
+                    {item.thread?.agentNickname || item.thread?.source === 'subagent' || item.tuiOpen || item.mobileDevices.length > 0 ? (
                         <span className="mr-1.5 inline-flex shrink-0 items-center" data-assistant-presence-group>
                             <AssistantAgentPresenceIndicator thread={item.thread} />
                             {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
@@ -301,7 +266,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
     const [settledExpanded, setSettledExpanded] = useState(true)
     const [settledInitialCount, setSettledInitialCount] = useState(1)
     const [settledAdditionalCount, setSettledAdditionalCount] = useState(0)
-    const [settlementOverrides, setSettlementOverrides] = useState<SettlementOverrides>(readSettlementOverrides)
+    const [settlementOverrides, setSettlementOverrides] = useAssistantSettlementOverrides()
     const menuRef = useRef<HTMLDivElement | null>(null)
     const projectTriggerRef = useRef<HTMLButtonElement | null>(null)
     const projectSearchRef = useRef<HTMLInputElement | null>(null)
@@ -311,20 +276,20 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
     const previousLayoutRectsRef = useRef(new Map<string, { top: number; height: number }>())
     const layoutAnimationsRef = useRef(new Map<string, Animation>())
 
-    const visibleSessions = useMemo(() => props.sessions.filter((session) => !session.archived && !isAssistantDraftSession(session)), [props.sessions])
+    const visibleSessions = useMemo(() => props.sessions.filter((session) => isAssistantUserFacingSession(session) && !session.archived && !isAssistantDraftSession(session)), [props.sessions])
     useEffect(() => {
         setSettlementOverrides(current => {
             const next = upgradeSidebarSettlementOverrides(current, visibleSessions)
-            if (next !== current) writeSettlementOverrides(next)
             return next
         })
     }, [visibleSessions])
-    const projectGroups = useMemo(() => groupSessionsByProject(visibleSessions, props.projectIconOverrides), [props.projectIconOverrides, visibleSessions])
+    const projectGroups = useMemo(() => groupSessionsByProject(visibleSessions, props.projectIconOverrides, props.projects), [props.projectIconOverrides, props.projects, visibleSessions])
     const projectQuery = projectSearch.trim().toLocaleLowerCase()
     const filteredProjectGroups = projectGroups.filter((group) => !projectQuery || [group.label, group.path].join(' ')
         .toLocaleLowerCase().includes(projectQuery))
-    const projectByPath = useMemo(() => new Map(projectGroups.map((group) => [group.path, group])), [projectGroups])
-    useEffect(() => { if (scope !== ALL_PROJECTS && !projectByPath.has(scope)) setScope(ALL_PROJECTS) }, [projectByPath, scope])
+    const projectByKey = useMemo(() => new Map(projectGroups.map((group) => [group.key, group])), [projectGroups])
+    const projectBySession = useMemo(() => new Map(projectGroups.flatMap(group => group.sessions.map(session => [session.id, group] as const))), [projectGroups])
+    useEffect(() => { if (scope !== ALL_PROJECTS && !projectByKey.has(scope)) setScope(ALL_PROJECTS) }, [projectByKey, scope])
     useEffect(() => setSettledAdditionalCount(0), [scope])
     useEffect(() => {
         if (!projectMenuOpen) {
@@ -344,7 +309,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
     }, [projectMenuOpen])
 
     const items = useMemo(() => visibleSessions
-        .filter((session) => scope === ALL_PROJECTS || resolveSessionProjectPath(session) === scope)
+        .filter((session) => scope === ALL_PROJECTS || projectBySession.get(session.id)?.key === scope)
         .map((session): SidebarItem => {
             const thread = getStatusThread(session)
             const active = session.id === props.activeSessionId
@@ -357,21 +322,21 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 activityAt,
                 tuiOpen: isAssistantSessionOpenInTui(session),
                 mobileDevices: assistantSessionMobileDevices(session),
-                projectPath: resolveSessionProjectPath(session),
-                project: projectByPath.get(resolveSessionProjectPath(session))!
+                projectPath: projectBySession.get(session.id)!.path,
+                project: projectBySession.get(session.id)!
             }
             const status = session.threads.some((entry) => props.pendingControlThreadIds.has(entry.id))
                 ? 'approval'
                 : resolveRowStatus(thread, active && thread?.id === props.activeThreadId)
             const unsettled = { ...base, status }
             return { ...unsettled, settled: isEffectivelySettled(unsettled, settlementOverrides) }
-        }), [props.activeSessionId, props.activeThreadId, props.pendingControlThreadIds, props.pinnedSessionIds, projectByPath, scope, settlementOverrides, visibleSessions])
+        }), [props.activeSessionId, props.activeThreadId, props.pendingControlThreadIds, props.pinnedSessionIds, projectBySession, scope, settlementOverrides, visibleSessions])
 
     const desiredPriority = useMemo(() => items
-        .filter((item) => !item.settled && (item.pinned || item.status !== 'ready'))
+        .filter((item) => !item.settled && isPriorityItem(item))
         .sort((left, right) => Number(right.pinned) - Number(left.pinned) || getSortableTimestamp(right.session.createdAt) - getSortableTimestamp(left.session.createdAt) || left.session.id.localeCompare(right.session.id)), [items])
     const desiredRecent = useMemo(() => items
-        .filter((item) => !item.pinned && !item.settled && item.status === 'ready')
+        .filter((item) => !item.settled && !isPriorityItem(item))
         .sort((left, right) => getSortableTimestamp(right.activityAt) - getSortableTimestamp(left.activityAt) || left.session.id.localeCompare(right.session.id)), [items])
     const settledItems = useMemo(() => items.filter((item) => item.settled).sort((left, right) => getSortableTimestamp(right.activityAt) - getSortableTimestamp(left.activityAt) || left.session.id.localeCompare(right.session.id)), [items])
     const settledVisibleCount = settledInitialCount + settledAdditionalCount
@@ -382,7 +347,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
     // An explicit pin/unpin must move immediately, even while hover holds status-driven moves.
     useLayoutEffect(() => stableLayout.release(), [props.pinnedSessionIds, stableLayout.release])
     const hiddenSettledCount = settledItems.length - visibleSettled.length
-    const scopedProject = scope === ALL_PROJECTS ? null : projectByPath.get(scope) || null
+    const scopedProject = scope === ALL_PROJECTS ? null : projectByKey.get(scope) || null
     const layoutKey = [
         priorityItems.map((item) => `${item.session.id}:card:${item.status}`).join(','),
         recentItems.map((item) => `${item.session.id}:recent`).join(','),
@@ -498,7 +463,6 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
         stableLayout.release()
         setSettlementOverrides((current) => {
             const next = { ...current, [item.session.id]: { state, activityAt: item.activityAt, activityKey: getSidebarSettlementActivityKey(item.session) } }
-            writeSettlementOverrides(next)
             return next
         })
     }
@@ -533,7 +497,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                             </div>
                             <div className="assistant-chat-scrollbar min-h-0 overflow-y-auto">
                                 <button type="button" onClick={() => { setScope(ALL_PROJECTS); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><Folder size={16} /><span className="min-w-0 flex-1 truncate">All projects</span>{scope === ALL_PROJECTS ? <Check size={13} /> : null}</button>
-                                {filteredProjectGroups.map((group) => <button key={group.key} type="button" onClick={() => { setScope(group.path); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><ProjectMark group={group} /><span className="min-w-0 flex-1 truncate">{group.label}</span>{scope === group.path ? <Check size={13} /> : null}</button>)}
+                                {filteredProjectGroups.map((group) => <button key={group.key} type="button" onClick={() => { setScope(group.key); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><ProjectMark group={group} /><span className="min-w-0 flex-1 truncate">{group.label}</span>{scope === group.key ? <Check size={13} /> : null}</button>)}
                                 {filteredProjectGroups.length === 0 ? <p role="status" className="px-2 py-3 text-center text-xs text-sparkle-text-muted/70">No projects found</p> : null}
                             </div>
                         </div></AnchoredNativeOverlay>
@@ -562,7 +526,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                             </div>
                         </li>
                     ) : null}
-                    {recentItems.map((item) => <AgentInboxSlimRow key={`${item.session.id}:recent`} item={item} action="settle" onAction={(target) => setSettlement(target, 'settled')} props={props} />)}
+                    {recentItems.map((item) => <AgentInboxCard key={`${item.session.id}:recent`} item={item} onSettle={(target) => setSettlement(target, 'settled')} props={props} />)}
                     {settledItems.length > 0 ? <li ref={settledHeaderRef} className="list-none"><button type="button" onClick={() => setSettledExpanded((expanded) => !expanded)} aria-expanded={settledExpanded} className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5 text-left"><span className="text-xs font-medium text-sparkle-text-muted/50">{settledExpanded ? 'Settled' : `Settled (${settledItems.length})`}</span><span className="h-px flex-1 bg-[var(--surface-divider)]/60" /><ChevronDown size={12} className={cn('text-sparkle-text-muted/50 transition-transform', settledExpanded && 'rotate-180')} /></button></li> : null}
                     {renderedSettled.map((item) => <AgentInboxSlimRow key={`${item.session.id}:settled`} item={item} action="unsettle" onAction={(target) => setSettlement(target, 'active')} props={props} />)}
                     {settledExpanded && hiddenSettledCount > 0 ? <li className="list-none"><button type="button" onClick={() => setSettledAdditionalCount((count) => count + SETTLED_PAGE_COUNT)} className="mt-1 flex h-[30px] w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-[var(--surface-divider)] font-mono text-[11px] text-sparkle-text-muted transition-colors hover:border-solid hover:bg-[var(--surface-hover)] hover:text-sparkle-text">See {Math.min(hiddenSettledCount, SETTLED_PAGE_COUNT)} more</button></li> : null}

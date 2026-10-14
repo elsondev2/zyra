@@ -1,4 +1,4 @@
-import { createRef, type ComponentProps } from 'react'
+import { createRef, useEffect, useState, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import type { LegendListRef } from '@legendapp/list/react'
@@ -12,6 +12,13 @@ import { useAssistantQueuedComposer } from '../../src/renderer/src/pages/assista
 import { TimelineWorkingIndicator } from '../../src/renderer/src/pages/assistant/AssistantTimelineWorkingIndicator'
 import { hasActiveAssistantCompaction } from '../../src/shared/assistant/compaction-state'
 import { useNonPassiveWheel } from '../../src/renderer/src/lib/useNonPassiveWheel'
+import { TimelineMessage } from '../../src/renderer/src/pages/assistant/AssistantTimelineRows'
+import { projectVoiceLiveTimelineMessages } from '../../src/renderer/src/pages/assistant/assistant-voice-live-timeline'
+import { TimelineVoiceTaskStatus } from '../../src/renderer/src/pages/assistant/AssistantTimelineVoiceTask'
+import { AssistantTimeline } from '../../src/renderer/src/pages/assistant/AssistantTimeline'
+import { VoiceAgentStatusSetting } from '../../src/renderer/src/pages/settings/VoiceAgentStatusSetting'
+import { VOICE_AGENT_STATUS_STORAGE_KEY, writeVoiceAgentStatusPreference } from '../../src/renderer/src/pages/assistant/voice-agent-status-preference'
+import { getTimelineEntries, buildTimelineRows } from '../../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 
 const container = document.getElementById('root')!
 const root = createRoot(container)
@@ -69,6 +76,16 @@ async function expectVisible(key: string, label: string) {
     results.push(label)
 }
 
+function DelayedLiveWork() {
+    const [measured, setMeasured] = useState(false)
+    useEffect(() => {
+        const timer = window.setTimeout(() => setMeasured(true), 80)
+        return () => window.clearTimeout(timer)
+    }, [])
+    return <TimelineTurnWorkSummary startedAt="2026-01-01T00:00:00Z" completedAt={null} running hasWork
+        renderChildren={() => <div data-delayed-work-ready={measured} style={{ height: measured ? 6_000 : 120 }}>Late live work measurement</div>} />
+}
+
 async function run() {
     // Real React, LegendList, layout and animation frames; no mocked readiness state.
     render('first')
@@ -78,6 +95,32 @@ async function run() {
     render('second')
     await expectVisible('second', 'Switching the reused timeline completes the new presentation')
     check(originalList === listRef.current, 'Chat switching must preserve the virtual list instance')
+
+    const rapidLongRows = Array.from({ length: 80 }, (_, index) => rows(`rapid-long-${index}`)).flat()
+    const rapidShortRows: TimelineDisplayRow[] = [...rows('rapid-short'), {
+        kind: 'turn-work-summary', id: 'rapid-short-work', createdAt: '2026-01-01T00:00:01.000Z', turnId: 'rapid-short',
+        startedAt: '2026-01-01T00:00:00.000Z', completedAt: null, running: true, terminalResponseVisible: false, outcome: null, rows: [], liveNarrationRow: null
+    }]
+    const rapidRenderer = (row: TimelineDisplayRow) => row.kind === 'turn-work-summary'
+        ? <TimelineTurnWorkSummary startedAt={row.startedAt} completedAt={null} running hasWork renderChildren={() => <p>Current short-chat action</p>} />
+        : <div style={{ height: 100 }}>{row.kind === 'message' ? row.message.text : ''}</div>
+    for (let index = 0; index < 12; index++) {
+        render('rapid-long', { rows: rapidLongRows, renderRow: rapidRenderer, coldStart: false })
+        await new Promise(resolve => setTimeout(resolve, index % 3))
+        render('rapid-short', { rows: rapidShortRows, renderRow: rapidRenderer, coldStart: false, isWorking: true })
+        await new Promise(resolve => setTimeout(resolve, index % 2))
+    }
+    await waitFor(() => {
+        const user = container.querySelector<HTMLElement>('[data-assistant-timeline-row-id="rapid-short-user"]')
+        const assistant = container.querySelector<HTMLElement>('[data-assistant-timeline-row-id="rapid-short-assistant"]')
+        const viewport = scrollContainerRef.current
+        return Boolean(user && assistant && viewport && getComputedStyle(user).visibility === 'visible'
+            && user.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top
+            && assistant.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top
+            && viewport.scrollHeight <= viewport.clientHeight + 2 && !loading())
+    }, 'Rapid long/working-short switches retain the conversation and discard old virtual-list space')
+    check(listRef.current === originalList, 'Rapid switching continues reusing the list without a remount workaround')
+    results.push('Repeated rapid switches preserve messages, live work, and current-chat list geometry')
 
     render('hydrating', { rows: [], selectionHydrating: true })
     await pause()
@@ -162,6 +205,16 @@ async function run() {
     render('send-regression', { rows: [...responseRows, ...rows('second-send'), rows('after-latest')[1]!], renderRow: renderTallRow, coldStart: false, isWorking: true, followLatestRequestKey: 'send:two' })
     await waitFor(() => distanceFromEnd() < 2, 'Updates keep following after clicking the latest button')
     results.push('The latest button restores ongoing follow rather than behaving like a history jump')
+
+    render('focused-history', { rows: historyRows, renderRow: renderTallRow, coldStart: false, focusMessageId: 'send-history-20-user' })
+    await listRef.current?.scrollToIndex({ index: 40, viewPosition: 0.5, animated: false })
+    await new Promise(resolve => setTimeout(resolve, 150))
+    check(distanceFromEnd() > 500, 'Opening an explicit search result cannot be overridden by startup end alignment')
+    const focused = container.querySelector<HTMLElement>('[data-assistant-timeline-row-id="send-history-20-user"]')!
+    check(focused && focused.getBoundingClientRect().bottom > scrollContainerRef.current!.getBoundingClientRect().top
+        && focused.getBoundingClientRect().top < scrollContainerRef.current!.getBoundingClientRect().bottom, 'The requested older message remains in view')
+    results.push('Explicit message-search navigation keeps ownership instead of snapping to the live end')
+
     viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true }))
     viewport.scrollTop = 1_000
     await pause()
@@ -181,6 +234,25 @@ async function run() {
     await new Promise(resolve => setTimeout(resolve, 500))
     check(distanceFromEnd() < 2, 'Opening actual live work does not replay its disclosure or leave the viewport at the prompt')
     results.push('Reopening real expanded work lands at its latest end after layout settles')
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+        scrollContainerRef.current!.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true }))
+        scrollContainerRef.current!.scrollTop = 1_000
+        await pause()
+        render('other-chat', { coldStart: false })
+        await expectVisible('other-chat', 'The intervening chat is readable')
+        render('reopened-delayed-work', { rows: liveRows, isWorking: true, coldStart: false,
+            renderRow: row => row.id === 'live-working-assistant' ? <DelayedLiveWork /> : liveRenderer(row) })
+        await waitFor(() => Boolean(container.querySelector('[data-delayed-work-ready="true"]')), 'Delayed work content has mounted')
+        await waitFor(() => {
+            const work = container.querySelector<HTMLElement>('[data-assistant-timeline-row-id="live-working-assistant"]')
+            return Boolean(work && work.getBoundingClientRect().height >= 6_000 && distanceFromEnd() < 2)
+        }, 'Repeated reopening follows the actual end after late work measurements settle')
+        await new Promise(resolve => setTimeout(resolve, 100))
+        check(distanceFromEnd() < 2, 'Settled late work cannot reclaim the old prompt position')
+        check(listRef.current === originalList, 'Working-chat reopening preserves the list instance')
+    }
+    results.push('Eight working-chat reopens abandon old reading positions and follow delayed 6000px work layouts')
 
     for (const working of [false, true]) {
         const key = `late-history-${working}`
@@ -215,6 +287,44 @@ async function run() {
     check(presentation!.text === 'The work so far.' && presentation!.presenting, 'New live updates still animate')
     await waitFor(() => presentation!.text === 'The work so far. New live update.', 'New live updates drain normally')
     results.push('Completed history is immediate, reopened live text catches up, and new deltas keep streaming')
+
+    const voiceStartedAt = '2026-10-04T10:00:00.000Z'
+    const firstSpeech = projectVoiceLiveTimelineMessages({ transcript: [{ id: 'voice-intro', role: 'assistant', text: 'I will check', final: false }], canonicalMessages: [], voiceStartedAt, nowMs: Date.parse(voiceStartedAt) + 1000 })
+    const task = { id: 'primary-task', kind: 'voice.strong-task', tone: 'tool' as const, summary: 'Primary agent working', turnId: 'primary-task', createdAt: '2026-10-04T10:00:02.000Z', payload: { status: 'running' } }
+    const showVoice = (speech: typeof firstSpeech) => render('voice-stream', {
+        rows: buildTimelineRows(getTimelineEntries(speech.messages, [task]), false, null),
+        renderRow: row => row.kind === 'message' ? <TimelineMessage message={row.message} /> : row.kind === 'activity' ? <TimelineVoiceTaskStatus activity={row.activity} /> : null
+    })
+    showVoice(firstSpeech)
+    await waitFor(() => Boolean(container.querySelector('[data-assistant-streaming-markdown]')) && container.textContent!.includes('I will check'), 'Assistant speech renders before completion in the real chat rail')
+    const continuedSpeech = projectVoiceLiveTimelineMessages({ transcript: [{ id: 'voice-intro', role: 'assistant', text: 'I will check the available plugins.', final: false }], canonicalMessages: [], activities: [task], voiceStartedAt, previousAnchors: firstSpeech.anchors, nowMs: Date.parse(voiceStartedAt) + 3000 })
+    showVoice(continuedSpeech)
+    await waitFor(() => container.textContent!.includes('I will check the available plugins.'), 'Assistant speech grows live as more words arrive')
+    check(container.textContent!.indexOf('I will check') < container.textContent!.indexOf('Primary agent working'), 'The primary task stays below its spoken introduction')
+    results.push('Real Voice message rows stream unfinished assistant words above primary-agent activity')
+
+    localStorage.removeItem(VOICE_AGENT_STATUS_STORAGE_KEY)
+    const completedTask = { ...task, payload: { status: 'completed', startedAt: task.createdAt, completedAt: '2026-10-04T10:00:06.000Z' } }
+    function VoiceStatusHarness() {
+        return <><VoiceAgentStatusSetting /><div style={{ height: 500 }}><AssistantTimeline messages={continuedSpeech.messages} activities={[completedTask]} windowKey="voice-status-preference" /></div></>
+    }
+    flushSync(() => root.render(<VoiceStatusHarness />))
+    await pause()
+    check(!container.textContent!.includes('Primary agent finished'), 'Voice agent completion rows are absent by default in the actual timeline')
+    check(container.textContent!.includes('I will check the available plugins.'), 'Hiding agent status preserves the spoken reply')
+    const statusToggle = container.querySelector<HTMLButtonElement>('button[aria-label="Show voice agent status"]')
+    check(statusToggle && statusToggle.getAttribute('aria-checked') === 'false', 'The real Settings toggle starts off')
+    flushSync(() => statusToggle!.click())
+    await waitFor(() => container.textContent!.includes('Primary agent finished'), 'Opting in immediately reveals retained statuses in the actual timeline')
+    check(localStorage.getItem(VOICE_AGENT_STATUS_STORAGE_KEY) === 'true', 'Settings opt-in persists on this device')
+    flushSync(() => root.render(<div />))
+    flushSync(() => root.render(<VoiceStatusHarness />))
+    await waitFor(() => container.textContent!.includes('Primary agent finished'), 'Opt-in survives leaving and reopening the voice chat')
+    flushSync(() => container.querySelector<HTMLButtonElement>('button[aria-label="Show voice agent status"]')!.click())
+    await waitFor(() => !container.textContent!.includes('Primary agent finished'), 'Turning status off removes the rows immediately')
+    check(container.textContent!.includes('I will check the available plugins.'), 'Toggle changes never remove conversation text')
+    writeVoiceAgentStatusPreference(false)
+    results.push('Voice status defaults off; the real Settings toggle persists and changes actual timeline rows without removing speech')
 
     const sent: string[] = []
     let interrupted = 0

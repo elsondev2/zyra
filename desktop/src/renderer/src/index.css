@@ -1,10 +1,41 @@
-@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;600;700&family=Hanken+Grotesk:wght@300;400;500;600;700&display=swap');
 @import './styles/theme-tokens.css';
 @import 'xterm/css/xterm.css';
+@import 'katex/dist/katex.min.css';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.markdown-math:has(.katex-display) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown-math .katex { font-size: 1.08em; }
+
+@keyframes assistant-token-in {
+  from { opacity: 0.12; }
+  to { opacity: 1; }
+}
+.assistant-stream-token { animation: assistant-token-in 280ms ease-out both; }
+/* Reserve all three dots so the 3 → 2 → 1 → 2 → 3 cycle never moves text. */
+@keyframes creation-dot-two {
+  0%, 20%, 60%, 80%, 100% { opacity: 1; }
+  40% { opacity: 0; }
+}
+@keyframes creation-dot-three {
+  0%, 80%, 100% { opacity: 1; }
+  20%, 40%, 60% { opacity: 0; }
+}
+.creation-dots > :nth-child(2) { animation: creation-dot-two 2.4s ease-in-out infinite; }
+.creation-dots > :nth-child(3) { animation: creation-dot-three 2.4s ease-in-out infinite; }
+.zyra-reduce-motion .creation-text { animation: none; background: none; color: inherit; }
+.zyra-reduce-motion .creation-dots > span { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-stream-token { animation: none; }
+  .creation-dots > span { animation: none; }
+}
 
 /* ============================================================================
    Base Styles
@@ -1788,7 +1819,8 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
   border-color: color-mix(in srgb, var(--accent-primary), transparent 55%);
   background: color-mix(in srgb, var(--accent-primary), transparent 90%);
   color: var(--color-text);
-  text-decoration: none;
+  text-decoration: underline dotted;
+  text-underline-offset: 4px;
 }
 
 .markdown-body .markdown-inline-package-tag {
@@ -1974,7 +2006,8 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
   to { background-position-x: -220%; }
 }
 
-.markdown-video-frame {
+.markdown-video-frame,
+.markdown-audio-frame {
   display: block;
   width: min(100%, 52rem);
   margin-block: 1rem;
@@ -1992,7 +2025,24 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
   object-fit: contain;
 }
 
-.markdown-video-caption {
+.markdown-audio-frame {
+  max-width: 32rem;
+  padding-top: 0.5rem;
+}
+
+.markdown-audio-frame audio {
+  display: block;
+  width: calc(100% - 1rem);
+  margin: 0 0.5rem 0.5rem;
+  color-scheme: dark;
+}
+
+body.light .markdown-audio-frame audio {
+  color-scheme: light;
+}
+
+.markdown-video-caption,
+.markdown-audio-caption {
   display: block;
   overflow: hidden;
   border-top: 1px solid var(--color-border-secondary);
@@ -2004,7 +2054,8 @@ html[data-file-preview-titlebar-navigator='true'] [data-file-preview-local-navig
   white-space: nowrap;
 }
 
-.markdown-video-unavailable {
+.markdown-video-unavailable,
+.markdown-audio-unavailable {
   display: flex;
   min-height: 5rem;
   max-width: 32rem;

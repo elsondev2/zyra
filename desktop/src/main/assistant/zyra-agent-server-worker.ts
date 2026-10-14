@@ -18,6 +18,7 @@ export type PluginAuthorityUpdate = {
 
 export type ZyraWorkerEventMetadata = {
     sequence?: number
+    occurredAt?: string
     turnId?: string
     localThreadId?: string
     replay?: boolean
@@ -35,6 +36,7 @@ export type ZyraWorkerLike = {
 }
 
 type AgentServerClient = EventEmitter & {
+    serverMethods?: string[]
     connect(): Promise<void>
     attach(params: Record<string, unknown>): Promise<Record<string, unknown>>
     detach(sessionKey: string): Promise<Record<string, unknown>>
@@ -49,6 +51,7 @@ type AgentServerClient = EventEmitter & {
 
 type ReplayEntry = {
     sequence?: number
+    occurredAt?: string
     event?: unknown
     requestContext?: { turnId?: string; localThreadId?: string } | null
 }
@@ -57,6 +60,7 @@ export type CanonicalAgentChatPresence = {
     state: 'detached' | 'ready' | 'running' | 'background'
     activeTurnId: string | null
     clients: Array<{ clientId: string; surface: string; displayName?: string }>
+    viewers?: Array<{ clientId: string; surface: string }>
     backgroundWorkActive: boolean
     attention?: 'approval' | 'input' | 'user-input' | null
     latestTurn?: {
@@ -71,9 +75,11 @@ export type CanonicalAgentChatPresence = {
 }
 
 export type CanonicalAgentChat = {
+    agentConversationKind?: 'thread' | 'subagent' | null
     agentCreatedBy?: string | null
     agentLabel?: string | null
     canonicalChatId: string
+    lastSeenCompletedTurnId?: string | null
     sessionPath: string
     storageProject?: string
     project: string
@@ -113,6 +119,7 @@ export type CanonicalAgentChatHistory = {
 }
 
 type DesktopAgentServerConnectionOptions = {
+    onChatAttention?: (notice: import('./chat-notifications').ChatAttentionNotice) => void
     stateDirectory?: string
     channel?: string
     autoStart?: boolean
@@ -170,6 +177,12 @@ export class DesktopAgentServerConnection {
     async updatePluginAuthority(input: PluginAuthorityUpdate): Promise<void> {
         const client = await this.getClient()
         await client.request('session.pluginAuthority', input, { timeoutMs: 20_000 })
+    }
+
+    async reportChatView(session: string, input: Record<string, unknown>): Promise<void> {
+        const client = await this.getClient()
+        if (!client.serverMethods?.includes('session.view')) throw new Error('Restart the updated agent server to synchronize chat viewing state.')
+        await client.request('session.view', { session, ...input })
     }
 
     async prepareRuntime(model: string | null): Promise<void> {
@@ -463,6 +476,7 @@ export class DesktopAgentServerConnection {
             this.detachedControlAbortControllers.get(requestId)?.abort(new Error('Detached Browser control was cancelled.'))
         })
         client.on('runtime-status', publishRuntimeActivation)
+        client.on('chat-attention', (notice: import('./chat-notifications').ChatAttentionNotice) => this.options.onChatAttention?.(notice))
         client.on('session-event', (message: Record<string, unknown>) => this.handleSessionEvent(message))
         client.on('disconnect', () => this.handleClientDisconnect())
         client.on('catalog-changed', (message: Record<string, unknown>) => {
@@ -478,6 +492,7 @@ export class DesktopAgentServerConnection {
         if (!sessionKey) return
         const entry: ReplayEntry = {
             sequence: Number(message['sequence']) || undefined,
+            occurredAt: typeof message['occurredAt'] === 'string' ? message['occurredAt'] : undefined,
             event: message['event'],
             requestContext: asRecord(message['requestContext']) as ReplayEntry['requestContext']
         }
@@ -575,6 +590,7 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
         if (sequence) this.latestSequence = sequence
         const metadata: ZyraWorkerEventMetadata = {
             ...(sequence ? { sequence } : {}),
+            ...(entry.occurredAt ? { occurredAt: entry.occurredAt } : {}),
             ...(entry.requestContext?.turnId ? { turnId: entry.requestContext.turnId } : {}),
             ...(entry.requestContext?.localThreadId ? { localThreadId: entry.requestContext.localThreadId } : {}),
             ...(replay ? { replay: true } : {})

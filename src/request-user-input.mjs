@@ -50,7 +50,7 @@ export function normalizeRequestUserInputQuestions(value) {
       type,
       options,
       required: record.required !== false,
-      allowOther: record.allowOther === true || record.allow_other === true,
+      allowOther: type === "single_select" || type === "multi_select" || record.allowOther === true || record.allow_other === true,
       placeholder: stringValue(record.placeholder),
       multiple: record.multiple === true,
       ...(min !== undefined ? { min } : {}),

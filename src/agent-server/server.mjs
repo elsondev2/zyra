@@ -20,6 +20,7 @@ import { agentEndOutcome } from './agent-end-outcome.mjs';
 import { ServerPluginAuthority } from "./plugin-authority.mjs";
 import { AgentEventJournal } from "./event-journal.mjs";
 import { CanonicalChatCatalog } from "./catalog.mjs";
+import { CanonicalChatAttention } from "./chat-attention.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { isNetworkRecoveryError } from "../network-recovery.mjs";
 import {
@@ -41,7 +42,7 @@ const DESKTOP_WORKSPACE_TIMEOUT_MS = 15_000;
 const DESKTOP_WORKSPACE_KINDS = new Set(["browser", "details", "explorer", "resources", "agents", "diff", "terminal"]);
 const DESKTOP_WORKSPACE_OPERATIONS = new Set(["open", "list", "show"]);
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "blocked", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|thread_message\.receive|configure|preferences\.get|memory\.configure|memory\.global\.configure|auth\.refresh|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|user_input\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|thread_message\.receive|configure|preferences\.get|memory\.configure|memory\.global\.configure|auth\.refresh|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|managed_bash\.(?:list|stop)|approval\.respond|user_input\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");
@@ -77,6 +78,7 @@ export class ZyraAgentServer extends EventEmitter {
     this.sessionWorkerPool = options.createWorker ? null : new SessionWorkerPool(this.root);
     this.harnessTransport = new HarnessTransport(this.root);
     this.catalog = options.catalog || new CanonicalChatCatalog(options);
+    this.chatAttention = new CanonicalChatAttention(this);
     this.catalog.index?.on?.("modelsChanged", change => this.broadcastCatalogChanged(change));
     this.clients = new Map();
     this.sessions = new Map();
@@ -460,6 +462,14 @@ export class ZyraAgentServer extends EventEmitter {
       return { revoked: affected.map((session) => session.sessionKey) };
     }
     if (method === "session.attach") return this.attachSession(client, params);
+    if (method === "session.view") {
+      const chat = await this.catalog.find(params.session, { allProjects: true });
+      if (!chat || chat.deleted) throw new AgentServerProtocolError("Chat is unavailable.", "AGENT_SERVER_SESSION_NOT_FOUND");
+      if (typeof params.viewing !== 'boolean' || typeof params.viewId !== 'string' || !/^[\w:.-]{1,128}$/.test(params.viewId)) {
+        throw new AgentServerProtocolError('Chat view report is invalid.');
+      }
+      return this.chatAttention.report(client, chat.canonicalChatId, params);
+    }
     if (method === "session.join") {
       const chat = await this.catalog.find(params.session, { allProjects: true });
       if (!chat || chat.deleted) throw new AgentServerProtocolError("Chat is unavailable.", "AGENT_SERVER_SESSION_NOT_FOUND");
@@ -626,6 +636,7 @@ export class ZyraAgentServer extends EventEmitter {
       state: "detached",
       activeTurnId: null,
       clients: [],
+      viewers: this.chatAttention.viewers(sessionKey),
       backgroundWorkActive: false,
       attention: null,
       latestTurn: null
@@ -633,9 +644,10 @@ export class ZyraAgentServer extends EventEmitter {
     const activeTurnId = session.activeRequestContext?.turnId || null;
     const turnRunning = Boolean(activeTurnId && session.latestTurn?.id === activeTurnId && session.latestTurn.state === "running");
     return {
-      state: turnRunning ? "running" : session.hasBackgroundWork() ? "background" : "ready",
+      state: turnRunning ? "running" : session.hasBackgroundAgentWork() ? "background" : "ready",
       activeTurnId: turnRunning ? activeTurnId : null,
       clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface, ...(client.displayName ? { displayName: client.displayName } : {}) })),
+      viewers: this.chatAttention.viewers(sessionKey),
       backgroundWorkActive: session.hasBackgroundWork(),
       attention: session.pendingUserInputRequestIds.size > 0 ? "user-input" : session.pendingApprovalRequestIds.size > 0 ? "approval" : null,
       latestTurn: session.latestTurn ? { ...session.latestTurn } : null,
@@ -676,7 +688,19 @@ export class ZyraAgentServer extends EventEmitter {
     }
     const requested = requestedCandidate;
     if (requested?.agentThread || requested?.agentCreatedBy) {
-      const linked = this.findAgentOwner(requested.canonicalChatId);
+      let linked = this.findAgentOwner(requested.canonicalChatId);
+      if (!linked && requested.agentConversationKind === 'thread' && requested.agentCreatedBy) {
+        // Explicit independent conversations retain their durable creator ID.
+        // Reconnect that parent from the catalog before creating the child view,
+        // so opening the sidebar row works after an agent-server restart.
+        const ownerChat = await this.catalog.find(requested.agentCreatedBy, { project, allProjects: true });
+        if (ownerChat && !ownerChat.deleted) {
+          const restored = await this.attachSession(client, { ...params, session: ownerChat.canonicalChatId, localThreadId: undefined });
+          const owner = this.sessions.get(restored.canonicalChatId);
+          if (owner) owner.detach(client);
+          linked = this.findAgentOwner(requested.canonicalChatId);
+        }
+      }
       if (!linked) throw new AgentServerProtocolError('Open the owning chat to restore this agent thread.', 'AGENT_SERVER_SESSION_NOT_FOUND');
       const view = this.ensureAgentView(linked.owner, linked.agent);
       const connected = await view.connect({ ...params, noSession: true, memoryEnabled: false });
@@ -856,6 +880,7 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   dropClient(client) {
+    this.chatAttention.drop(client);
     this.externalTools.dropClient(client);
     clearTimeout(client.handshakeTimer);
     client.cleanupReader?.();
@@ -1111,6 +1136,10 @@ class ServerOwnedSession {
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.clients.add(client);
+    if (this.parentOwner) {
+      clearTimeout(this.parentOwner.idleTimer);
+      this.parentOwner.idleTimer = null;
+    }
     if (client.surface === 'tui' && (!this.foregroundTuiClient || !this.clients.has(this.foregroundTuiClient))) this.foregroundTuiClient = client;
     client.attachedSessionIds.add(this.sessionKey);
     this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
@@ -1132,6 +1161,7 @@ class ServerOwnedSession {
     }
     this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     this.scheduleIdleStop();
+    this.parentOwner?.scheduleIdleStop();
   }
 
   async appendCanonicalMessage(input) {
@@ -1165,6 +1195,10 @@ class ServerOwnedSession {
       this.server.pluginAuthority.assertAllowed(this.sessionKey, this.pluginSkillSources);
     }
     const requestContext = normalizeRequestContext(requestContextValue);
+    const stoppingTurnId = type === 'abort' ? this.activeRequestContext?.turnId || null : null;
+    if (type === 'abort' && payload?.turnId && String(payload.turnId) !== stoppingTurnId) {
+      return { aborted: false, reason: 'The requested turn is no longer active.' };
+    }
     const approvalResponsePromise = type === "approval.respond" ? this.approvalResponses.respond(client.clientId, payload, () => this.worker.request(type, payload)) : null;
     const continuationEpoch = this.userInputContinuationEpoch;
     const userInputResponsePromise = type === "user_input.respond"
@@ -1222,6 +1256,13 @@ class ServerOwnedSession {
     }
     try {
       const result = await (approvalResponsePromise || userInputResponsePromise || this.worker.request(type, payload));
+      if (type === 'abort' && result?.aborted !== false && stoppingTurnId
+        && this.activeRequestContext?.turnId === stoppingTurnId
+        && this.latestTurn?.id === stoppingTurnId && this.latestTurn.state === 'running') {
+        // An acknowledged Stop is itself a completion boundary. Providers may
+        // omit or deliver agent_end later; neither can keep this turn running.
+        this.publish({ type: 'zyra_server_turn_completed', turnId: stoppingTurnId, outcome: 'interrupted', interruption: { kind: 'stopped', source: 'user' } });
+      }
       if (ownsTurn && !this.isTurnTerminal(requestContext.turnId)) {
         this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
       }
@@ -1343,6 +1384,7 @@ class ServerOwnedSession {
     for (const client of this.clients) {
       this.server.send(client, { type: "session.event", sessionKey: this.sessionKey, ...entry });
     }
+    this.server.chatAttention.observe(this, event);
     if (
       publishedRequestContext
       && this.activeRequestContext === publishedRequestContext
@@ -1446,6 +1488,7 @@ class ServerOwnedSession {
       this.latestTurn = { ...this.latestTurn, assistantMessageId: String(event.message.id) };
     }
     if (event?.type === "auto_retry_end" && event.success === false && this.latestTurn) {
+      if (this.isTurnTerminal(this.latestTurn.id)) return;
       this.latestTurn = {
         ...this.latestTurn,
         state: isNetworkRecoveryError(event.finalError) ? "interrupted" : "error",
@@ -1456,7 +1499,7 @@ class ServerOwnedSession {
     if (event?.type === "agent_end" && event.willRetry === true) return;
     if (event?.type !== "zyra_server_turn_completed" && event?.type !== "agent_end") return;
     const completedTurnId = turnId || this.latestTurn?.id;
-    if (!completedTurnId) return;
+    if (!completedTurnId || this.isTurnTerminal(completedTurnId)) return;
     const base = this.latestTurn?.id === completedTurnId
       ? this.latestTurn
       : {
@@ -1476,7 +1519,7 @@ class ServerOwnedSession {
   updateBackgroundWork(event) {
     if (!event || typeof event !== "object") return;
     if (event.type === "managed_bash_job_update" && event.jobId) {
-      if (event.status === "running") this.managedJobIds.add(String(event.jobId));
+      if (event.status === "running" || event.cleanupFailed === true) this.managedJobIds.add(String(event.jobId));
       else this.managedJobIds.delete(String(event.jobId));
     }
     const fleet = event.fleet || event.fleetSnapshot;
@@ -1493,10 +1536,15 @@ class ServerOwnedSession {
     this.server.memoryQueue.observe(this, busy, this.memoryEligible === true);
   }
 
-  hasBackgroundWork() {
-    return this.backgroundFleetActive || this.managedJobIds.size > 0 || !this.parentOwner && [...this.server.sessions.values()].some(view => view.parentOwner === this && !view.disposed && (
+  hasBackgroundAgentWork() {
+    return this.backgroundFleetActive || !this.parentOwner && [...this.server.sessions.values()].some(view => view.parentOwner === this && !view.disposed && (
       view.latestTurn?.state === 'running' || view.pendingApprovalRequestIds.size > 0 || view.pendingUserInputRequestIds.size > 0
     ));
+  }
+
+  hasBackgroundWork() {
+    // Process ownership retains the worker, but does not mean an agent turn is running.
+    return this.managedJobIds.size > 0 || this.hasBackgroundAgentWork();
   }
 
   replay(afterSequence) {
@@ -1517,11 +1565,15 @@ class ServerOwnedSession {
     };
   }
 
+  hasAttachedChildClients() {
+    return !this.parentOwner && [...this.server.sessions.values()].some(view => view.parentOwner === this && !view.disposed && view.clients.size > 0);
+  }
+
   scheduleIdleStop() {
-    if (this.disposed || this.clients.size > 0 || this.activeRequests > 0 || this.hasBackgroundWork() || this.idleTimer) return;
+    if (this.disposed || this.clients.size > 0 || this.hasAttachedChildClients() || this.activeRequests > 0 || this.hasBackgroundWork() || this.idleTimer) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null;
-      if (this.clients.size > 0 || this.activeRequests > 0 || this.hasBackgroundWork()) return;
+      if (this.clients.size > 0 || this.hasAttachedChildClients() || this.activeRequests > 0 || this.hasBackgroundWork()) return;
       this.dispose("Detached session reached its idle timeout.");
       this.server.removeSession(this);
     }, this.idleTimeoutMs);

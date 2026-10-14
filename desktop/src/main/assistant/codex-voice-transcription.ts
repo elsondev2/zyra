@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import { VOICE_RECORDING_MAX_DURATION_MS, VOICE_RECORDING_MAX_AUDIO_BYTES } from '../../shared/assistant/voice-recording-limits'
+import { splitVoiceWav } from './voice-wav-chunks'
 import type {
     AssistantTranscribeVoiceInput,
     AssistantVoiceTranscriptionState
@@ -7,10 +9,10 @@ import { getSharedProviderWorkerClient } from '../setup/provider-worker-client'
 
 export const CODEX_VOICE_TRANSCRIPTION_URL = 'https://chatgpt.com/backend-api/transcribe'
 export const CODEX_VOICE_SAMPLE_RATE_HZ = 24_000
-export const CODEX_VOICE_MAX_DURATION_MS = 120_000
-export const CODEX_VOICE_MAX_AUDIO_BYTES = 10 * 1024 * 1024
+export const CODEX_VOICE_MAX_DURATION_MS = VOICE_RECORDING_MAX_DURATION_MS
+export const CODEX_VOICE_MAX_AUDIO_BYTES = VOICE_RECORDING_MAX_AUDIO_BYTES
 
-const CODEX_VOICE_MAX_MULTIPART_BYTES = CODEX_VOICE_MAX_AUDIO_BYTES + 64 * 1024
+const CODEX_VOICE_MAX_MULTIPART_BYTES = 10 * 1024 * 1024 + 64 * 1024
 const CODEX_VOICE_MAX_RESPONSE_BYTES = 1024 * 1024
 const CODEX_VOICE_MAX_TRANSCRIPT_CHARS = 100_000
 const CODEX_VOICE_REQUEST_TIMEOUT_MS = 30_000
@@ -167,7 +169,7 @@ function validateWav(audio: Buffer, claimedDurationMs: number): void {
 
     const audioDurationMs = (dataBytes / (CODEX_VOICE_SAMPLE_RATE_HZ * 2)) * 1000
     if (audioDurationMs > CODEX_VOICE_MAX_DURATION_MS + 1) {
-        throw new Error('Voice notes are limited to 120 seconds.')
+        throw new Error('Voice notes are limited to eight minutes.')
     }
     if (Math.abs(audioDurationMs - claimedDurationMs) > 2_000) {
         throw new Error('The recorded audio duration is invalid.')
@@ -188,14 +190,14 @@ export function decodeCodexVoiceInput(input: AssistantTranscribeVoiceInput): Buf
         throw new Error('Voice notes must include a positive duration.')
     }
     if (input.durationMs > CODEX_VOICE_MAX_DURATION_MS) {
-        throw new Error('Voice notes are limited to 120 seconds.')
+        throw new Error('Voice notes are limited to eight minutes.')
     }
 
     const normalizedBase64 = normalizeVoiceBase64(input.audioBase64)
     const audio = Buffer.from(normalizedBase64, 'base64')
     if (!audio.length || audio.length > CODEX_VOICE_MAX_AUDIO_BYTES || audio.toString('base64') !== normalizedBase64) {
         throw new Error(audio.length > CODEX_VOICE_MAX_AUDIO_BYTES
-            ? 'Voice notes are limited to 10 MB.'
+            ? 'The voice recording is too large.'
             : 'The recorded audio could not be decoded.')
     }
     validateWav(audio, input.durationMs)
@@ -367,6 +369,8 @@ function readStatusError(response: Response): string {
     return `Voice transcription failed with status ${response.status}.`
 }
 
+class NoSpeechError extends Error {}
+
 export async function transcribeCodexVoiceWithDependencies(
     input: AssistantTranscribeVoiceInput,
     dependencies: CodexVoiceDependencies,
@@ -374,6 +378,38 @@ export async function transcribeCodexVoiceWithDependencies(
 ): Promise<string> {
     signal?.throwIfAborted()
     const audio = decodeCodexVoiceInput(input)
+    let credentials: CodexVoiceCredentials | null = null
+    const chunkDependencies: CodexVoiceDependencies = {
+        ...dependencies,
+        resolveCredentials: async refresh => {
+            if (!credentials || refresh) credentials = await dependencies.resolveCredentials(refresh)
+            return credentials
+        }
+    }
+    const texts: string[] = []
+    let characters = 0
+    for (const chunk of splitVoiceWav(audio)) {
+        signal?.throwIfAborted()
+        try {
+            const text = await transcribeCodexVoiceChunk(chunk, chunkDependencies, signal)
+            characters += text.length + (texts.length ? 1 : 0)
+            if (characters > CODEX_VOICE_MAX_TRANSCRIPT_CHARS) throw new Error('ChatGPT returned an invalid transcription response.')
+            texts.push(text)
+        } catch (error) {
+            // A quiet segment in a long note is not a failure of the recording.
+            if (!(error instanceof NoSpeechError)) throw error
+        }
+    }
+    if (!texts.length) throw new NoSpeechError('No speech was detected. Try a longer recording.')
+    return texts.join(' ')
+}
+
+async function transcribeCodexVoiceChunk(
+    audio: Buffer,
+    dependencies: CodexVoiceDependencies,
+    signal?: AbortSignal
+): Promise<string> {
+    signal?.throwIfAborted()
     let credentials = await dependencies.resolveCredentials(false)
     signal?.throwIfAborted()
     let response = await dependencies.requestTranscription({
@@ -424,7 +460,7 @@ export async function transcribeCodexVoiceWithDependencies(
     }
     const returnedTranscript = payload?.['text'] ?? payload?.['transcript']
     if (typeof returnedTranscript === 'string' && !returnedTranscript.trim()) {
-        throw new Error('No speech was detected. Try a longer recording.')
+        throw new NoSpeechError('No speech was detected. Try a longer recording.')
     }
     const text = readNonEmptyString(payload?.['text']) || readNonEmptyString(payload?.['transcript'])
     if (!text || text.length > CODEX_VOICE_MAX_TRANSCRIPT_CHARS) {
