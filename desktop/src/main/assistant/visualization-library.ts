@@ -93,10 +93,7 @@ export class VisualizationLibrary {
         },
     ) {
         const skipped: string[] = []
-        if (
-            context.canImport === false ||
-            (!message.text.includes('visualization') && !message.text.includes('mermaid'))
-        )
+        if (context.canImport === false || !/(?:visualization|mermaid)/i.test(message.text))
             return skipped
         const store = createVisualizationStore(context)
         for (const block of extractLegacyVisualizationSources(message.text)) {

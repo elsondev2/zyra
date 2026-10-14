@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import initSqlJs from 'sql.js/dist/sql-asm.js'
+import { readVisualizationCandidatesFromDb } from '../src/main/assistant/visualization-candidates'
 import { mkdtemp, mkdir, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +10,43 @@ import {
     resolveVisualizationLibraryContext,
 } from '../src/main/assistant/visualization-library'
 import { embedVisualizationReference } from '../src/shared/visualization-resources'
+
+const SQL = await initSqlJs()
+const db = new SQL.Database()
+try {
+    db.run(
+        'CREATE TABLE assistant_messages(id TEXT, text TEXT, created_at TEXT, turn_id TEXT, thread_id TEXT, role TEXT, streaming INTEGER)',
+    )
+    for (const [id, text, thread, role, streaming] of [
+        ['upper', '```Mermaid\ngraph LR\nA --> B\n```', 'owner', 'assistant', 0],
+        ['lower', '```mermaid\ngraph LR\nA --> B\n```', 'owner', 'assistant', 0],
+        ['user', '```Mermaid\nA --> B\n```', 'owner', 'user', 0],
+        ['streaming', '```Mermaid\nA --> B\n```', 'owner', 'assistant', 1],
+        ['foreign', '```Mermaid\nA --> B\n```', 'foreign', 'assistant', 0],
+        ['ordinary', 'No diagram here', 'owner', 'assistant', 0],
+    ])
+        db.run('INSERT INTO assistant_messages VALUES(?, ?, ?, ?, ?, ?, ?)', [
+            id,
+            text,
+            '2026-01-01T12:00:00.000Z',
+            'turn',
+            thread,
+            role,
+            streaming,
+        ])
+    assert.deepEqual(
+        readVisualizationCandidatesFromDb(db, 'owner').map((row) => row.id),
+        ['upper', 'lower'],
+        'actual SQLite candidate filtering accepts fence case variants and excludes foreign/user/streaming messages',
+    )
+    assert.deepEqual(
+        readVisualizationCandidatesFromDb(db, 'owner', 1, 1).map((row) => row.id),
+        ['lower'],
+        'candidate cursor and limit remain intact',
+    )
+} finally {
+    db.close()
+}
 
 const cwd = await mkdtemp(join(tmpdir(), 'zyra-visualization-library-'))
 try {
@@ -165,6 +204,19 @@ try {
                 item.versions.every((revision) => revision.source === ''),
         ),
         'associated references also remain metadata-only',
+    )
+    const mixedCaseContext = { cwd, threadId: 'mixed-case-fence' }
+    const mixedCase = {
+        ...legacy,
+        cursor: 1,
+        id: 'mixed-case-mermaid',
+        text: '```Mermaid\ngraph LR\nA --> B\n```',
+    }
+    assert.equal(
+        (await library.list(mixedCaseContext, async (after) => (after < 1 ? [mixedCase] : [])))
+            .length,
+        1,
+        'completed-message import and historical indexing preserve mixed-case Mermaid fences',
     )
     console.log(
         'Visualization library: legacy import, reopen, pins, explicit reuse, stable Project home, scope changes and completion passed',

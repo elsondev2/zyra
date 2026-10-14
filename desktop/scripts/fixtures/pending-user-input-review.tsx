@@ -15,6 +15,7 @@ const wait = async (fn: () => boolean, label: string) => {
 let questionId = 'choices',
     required = true,
     choice = true
+let extraQuestions: any[] = []
 const responses: any[] = [],
     saved: any[] = []
 let clipText = 'My own pasted explanation',
@@ -109,6 +110,7 @@ const render = (empty = false) =>
                                           allowOther: false,
                                           placeholder: 'Type another answer',
                                       },
+                                      ...extraQuestions,
                                   ],
                               },
                           ] as any)
@@ -265,6 +267,47 @@ const input = () =>
         'Complete file content and image path accompany the answer',
     )
     results.push('File picker, clipboard image, attachment shelf and file-only response')
+    questionId = 'optional-after-evidence'
+    extraQuestions = [
+        {
+            id: 'optional',
+            header: 'Optional',
+            question: 'Anything else?',
+            type: 'single_select',
+            options: [{ label: 'One' }, { label: 'Two' }],
+            required: false,
+            allowOther: false,
+        },
+    ]
+    render()
+    await sleep()
+    await sleep()
+    const multiFileInput = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(multiFileInput, 'files', { configurable: true, value: files.files })
+    multiFileInput.dispatchEvent(new Event('change', { bubbles: true }))
+    await wait(
+        () => document.body.textContent!.includes('notes.txt'),
+        'Evidence attaches to the first question',
+    )
+    button('Continue').click()
+    await wait(
+        () => Boolean(button('Skip')),
+        'An unrelated empty optional question remains skippable with request-wide evidence',
+    )
+    check(
+        !button('Continue'),
+        'Earlier evidence does not force a file-only caption for the optional answer',
+    )
+    button('Skip').click()
+    await wait(() => Boolean(button('Submit')), 'Optional skip reaches review')
+    button('Submit').click()
+    await wait(() => responses.length === 4, 'Multi-question response submits once')
+    check(
+        responses[3].answers.optional === '' && responses[3].files.length === 1,
+        'Optional answer remains explicitly empty while supporting files survive',
+    )
+    results.push('Optional questions remain skippable after another answer attaches evidence')
+    extraQuestions = []
     questionId = 'long-paste'
     render()
     await sleep()

@@ -387,6 +387,7 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         !stepQuestion || !String(activeDraftAnswers[stepQuestion.id] || '').trim()
     const attachmentAnswer =
         stepQuestion &&
+        stepQuestion.required !== false &&
         hasAttachments &&
         emptyStepAnswer &&
         (stepQuestion.type === 'text' || stepQuestion.allowOther)
@@ -399,7 +400,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         attachmentAnswer &&
         isAssistantUserInputAnswerComplete(stepQuestion, attachmentAnswer, true),
     )
-    const canSkipStep = stepQuestion?.required === false && emptyStepAnswer && !hasAttachments
+    // Evidence belongs to the whole response, not every later blank field.
+    const canSkipStep = stepQuestion?.required === false && emptyStepAnswer
     const canAdvanceStep = Boolean(
         !attaching && (progress?.hasAnswer || attachmentAnswerComplete || canSkipStep),
     )
