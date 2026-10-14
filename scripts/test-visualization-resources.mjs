@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -146,6 +146,14 @@ try {
   check(() => assert.equal(toolRead.selectedVersion.source, input.source));
   check(() => assert.ok(toolRead.versions.every(version => !('source' in version)), 'only the requested source is sent back to the agent'));
   check(() => assert.equal(path.resolve(toolRead.sourceFile), path.join(cwd, '.zyra', 'visualizations', toolCreated.id, 'v1.html')));
+  const toolSource = path.join(cwd, '.zyra', 'visualizations', toolCreated.id, 'v1.html');
+  await rename(toolSource, toolSource + '.unavailable');
+  try {
+    const listed = JSON.parse((await tool.execute('metadata-list', { action: 'list', threadOnly: true })).content[0].text);
+    check(() => assert.ok(listed.some(item => item.id === toolCreated.id && item.versionCount === 2)));
+    check(() => assert.ok(listed.every(item => item.sourceLoaded === false && !('versions' in item) && !('source' in item)), 'tool list does not transport sources'));
+    await rejection(() => tool.execute('missing-source-read', { action: 'read', id: toolCreated.id }), /ENOENT/);
+  } finally { await rename(toolSource + '.unavailable', toolSource); }
   const directScene = JSON.parse((await tool.execute('direct-scene', { action: 'create', title: 'Typed scene', scene })).content[0].text);
   check(() => assert.equal(directScene.kind, 'scene3d'));
   check(() => assert.equal(directScene.versionCount, 1));

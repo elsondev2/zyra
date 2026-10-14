@@ -75,7 +75,7 @@ export function createVisualizationTool({ getContext, authorize } = {}) {
       let result;
       switch (params.action) {
         case 'list': {
-          const resources = await store.list({ threadOnly: params.threadOnly, query: params.query });
+          const resources = await store.list({ threadOnly: params.threadOnly, query: params.query, metadataOnly: true });
           result = resources.map(({ versions, ...resource }) => ({ ...resource, versionCount: versions.length })); break;
         }
         case 'read': {
