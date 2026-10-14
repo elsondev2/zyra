@@ -32,7 +32,7 @@ const listVisualizations = async ({ scope }: { scope: string }) => { (window as 
 Object.assign(window, { devscope: {
     assistant: {
         listVisualizations,
-        getVisualization: async ({ id }: { id: string }) => { (window as any).fixtureGetCalls = ((window as any).fixtureGetCalls || 0) + 1; return { success: true, resource: resources.find(resource => resource.id === id) } },
+        getVisualization: async ({ id }: { id: string }) => { (window as any).fixtureGetCalls = ((window as any).fixtureGetCalls || 0) + 1; if ((window as any).fixtureFailNextGet) { (window as any).fixtureFailNextGet = false; return { success: false, error: 'Fixture detail failure' } }; return { success: true, resource: resources.find(resource => resource.id === id) } },
     },
     copyToClipboard: async (text: string) => { (window as any).fixtureCopied = text; return { success: true } },
     preferences: {

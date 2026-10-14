@@ -149,6 +149,16 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
     const indexOlderRequest = useRef(false)
     const listRequest = useRef(0)
     const detailRequest = useRef(0)
+    const selectResource = useCallback((id: string | null) => {
+        if (id !== selectedResourceId) {
+            // Selection owns its detail/error state. Ignore a late result from
+            // the previous resource before starting this metadata-only load.
+            ++detailRequest.current
+            setOpeningResourceId(null)
+            setError(null)
+        }
+        setSelectedResourceId(id)
+    }, [selectedResourceId])
     const listIdentity = useRef('')
     const completedTurnsKey = turns.filter((turn) => turn.state !== 'running').map((turn) => `${turn.id}:${turn.state}`).join('|')
     useEffect(() => {
@@ -404,7 +414,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
                     turnOptions={turnOptions}
                     renderPreview={renderResourcePreview}
                     renderDetails={(resource) => resource.visualization ? <VisualizationResourceView key={resource.id} resource={resource.visualization} relatedResources={visualizations} threadId={threadId} onOpenTurn={onOpenTurn} onClose={() => setSelectedResourceId(null)}/> : null}
-                    onSelectResource={setSelectedResourceId}
+                    onSelectResource={selectResource}
                     onKindFilterChange={setFilter}
                     onSourceFilterChange={setSourceFilter}
                     onTurnFilterChange={setTurnFilter}
