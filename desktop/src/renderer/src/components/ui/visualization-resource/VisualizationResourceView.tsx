@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Copy, Download, Expand, GitCompareArrows, Info, MessageSquare, X } from 'lucide-react'
-import { useSavedVisualization } from '@/pages/assistant/visualization-context'
+import { getVisualizationThreadAliases, useSavedVisualization } from '@/pages/assistant/visualization-context'
 import {
     type VisualizationResource,
     type VisualizationRevision,
@@ -410,7 +410,7 @@ export function VisualizationResourceView({
                     Use in chat
                 </button>
                 <span className="ml-auto flex items-center gap-0.5">
-                    {onOpenTurn && revision?.origin?.turnId && revision.origin.threadId === threadId && (
+                    {onOpenTurn && revision?.origin?.turnId && getVisualizationThreadAliases(threadId).includes(revision.origin.threadId) && (
                         <button
                             type="button"
                             title="Source turn"

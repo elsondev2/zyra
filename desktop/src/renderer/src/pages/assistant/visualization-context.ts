@@ -35,6 +35,15 @@ export function visualizationContextFile(detail: VisualizationUseDetail): Compos
     }
 }
 
+export function getVisualizationThreadAliases(threadId?: string): string[] {
+    if (!threadId) return []
+    for (const session of assistantStore.getState().snapshot.sessions) {
+        const thread = session.threads.find(item => item.id === threadId || item.providerThreadId === threadId)
+        if (thread) return [...new Set([thread.id, thread.providerThreadId || thread.id])]
+    }
+    return [threadId]
+}
+
 function sessionForThread(threadId: string): string | null {
     return assistantStore.getState().snapshot.sessions.find(session =>
         session.threads.some(thread => thread.id === threadId))?.id || null

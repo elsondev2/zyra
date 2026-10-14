@@ -7,7 +7,7 @@ import type { VisualizationResource } from '../src/shared/visualization-resource
 import { nextVisualizationVersion, revisionLineDiff, visualizationDate, visualizationEmbed, visualizationExport } from '../src/renderer/src/components/ui/visualization-resource/visualization-resource-utils'
 
 // Keep this component test away from the application store and native overlay runtime.
-mock.module('../src/renderer/src/pages/assistant/visualization-context', () => ({ useSavedVisualization() {} }))
+mock.module('../src/renderer/src/pages/assistant/visualization-context', () => ({ useSavedVisualization() {}, getVisualizationThreadAliases: (id?: string) => id === 'local-thread' ? ['local-thread', 'canonical-thread'] : id ? [id] : [] }))
 mock.module('../src/renderer/src/pages/settings/settings-layout', () => ({ SettingsDialog() { return null } }))
 const { VisualizationResourceView } = await import('../src/renderer/src/components/ui/visualization-resource/VisualizationResourceView')
 const { VisualizationSource } = await import('../src/renderer/src/components/ui/visualization-resource/VisualizationSource')
@@ -50,6 +50,11 @@ const noExpand = renderToStaticMarkup(createElement(VisualizationResourceView, {
 assert.doesNotMatch(noExpand, /aria-label="Expand visualization"/, 'dedicated workspace suppresses nested Expand')
 assert.match(noExpand, /Close visualization details/)
 assert.match(noExpand, /datetime="2026-01-02T00:00:00Z"/i)
+const imported = { ...resource, versions: resource.versions.map(version => ({ ...version, origin: { threadId: 'canonical-thread', messageId: 'source-message', offset: 0, turnId: 'source-turn' } })) }
+const ownOrigin = renderToStaticMarkup(createElement(VisualizationResourceView, { resource: imported, threadId: 'local-thread', onOpenTurn() {} }))
+assert.match(ownOrigin, /Source turn/, 'a local alias exposes its canonical origin turn')
+const foreignOrigin = renderToStaticMarkup(createElement(VisualizationResourceView, { resource: imported, threadId: 'foreign-thread', onOpenTurn() {} }))
+assert.doesNotMatch(foreignOrigin, /Source turn/, 'foreign origin cannot navigate the current chat')
 assert.equal(nextVisualizationVersion(2, 2, 3), 3, 'selected head follows the new head')
 assert.equal(nextVisualizationVersion(1, 2, 3), 1, 'older selection stays selected')
 assert.equal(nextVisualizationVersion(2, 2, 3, 2), 2, 'explicit reference pin stays immutable')
