@@ -6,6 +6,7 @@ import type { Database } from 'sql.js/dist/sql-asm.js'
 import type { AssistantTranscribeVoiceInput, AssistantVoiceHistoryEntry } from '../../shared/assistant/contracts'
 import { openNativeSqliteDatabase } from './native-sqlite-adapter'
 import { decodeCodexVoiceInput, transcribeVoiceWithCodex } from './codex-voice-transcription'
+import { insertVoiceHistoryEntry, MAX_FAILED_VOICE_HISTORY_RECORDINGS } from './voice-history-storage'
 
 let databasePromise: Promise<Database> | null = null
 
@@ -39,18 +40,25 @@ export async function saveVoiceHistory(input: {
 }): Promise<void> {
     const audio = decodeCodexVoiceInput(input.recording)
     const transcript = input.transcript?.trim() || null
-    const failed = !transcript
     const db = await database()
-    db.run('INSERT INTO voice_history (id, created_at, engine, status, duration_ms, transcript, error, failed_audio) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
-        randomUUID(), new Date().toISOString(), input.engine, failed ? 'failed' : 'success',
-        input.recording.durationMs, transcript, failed ? input.error?.slice(0, 1000) || 'Transcription failed.' : null,
-        failed ? audio : null
-    ])
+    insertVoiceHistoryEntry(db, {
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        engine: input.engine,
+        durationMs: input.recording.durationMs,
+        transcript,
+        error: input.error || null,
+        audio: transcript ? null : audio
+    })
 }
 
 export async function listVoiceHistory(): Promise<AssistantVoiceHistoryEntry[]> {
     const db = await database()
-    const rows = db.exec('SELECT id, created_at, engine, status, duration_ms, transcript, error, failed_audio IS NOT NULL FROM voice_history ORDER BY created_at DESC LIMIT 200')[0]?.values || []
+    // Keep retained recordings reachable for playback/deletion even after 200 newer transcripts.
+    const rows = db.exec(`SELECT id, created_at, engine, status, duration_ms, transcript, error, failed_audio IS NOT NULL
+        FROM voice_history WHERE id IN (SELECT id FROM voice_history ORDER BY created_at DESC LIMIT 200)
+        OR id IN (SELECT id FROM voice_history WHERE failed_audio IS NOT NULL ORDER BY created_at DESC LIMIT ?)
+        ORDER BY created_at DESC`, [MAX_FAILED_VOICE_HISTORY_RECORDINGS])[0]?.values || []
     return rows.map(row => ({
         id: String(row[0]), createdAt: String(row[1]), engine: row[2] === 'browser' ? 'browser' : 'codex',
         status: row[3] === 'success' ? 'success' : 'failed', durationMs: Number(row[4]),

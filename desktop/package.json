@@ -168,6 +168,7 @@
         "test:markdown-renderer": "bun scripts/test-markdown-renderer-features.tsx",
         "test:assistant-response-media": "bun scripts/test-assistant-response-media.tsx",
         "test:assistant-response-media-playback": "bun scripts/test-assistant-response-media-playback.ts",
+        "test:voice-history-storage": "bun scripts/test-voice-history-storage.ts && node scripts/test-voice-history-storage-integration.mjs",
         "test:voice-history-playback": "node scripts/test-voice-history-playback.mjs",
         "test:assistant-force-interrupt": "bun scripts/test-assistant-force-interrupt.ts && node scripts/test-assistant-force-send.mjs",
         "test:assistant-performance": "bun scripts/test-assistant-history-performance.ts",

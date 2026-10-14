@@ -368,6 +368,7 @@ const desktopTasks = [
   { label: "desktop:test:assistant-response-media", bunArgs: ["run", "--cwd", "desktop", "test:assistant-response-media"] },
   { label: "desktop:test:assistant-voice-transcription", bunArgs: ["run", "--cwd", "desktop", "test:assistant-voice-transcription"] },
   { label: "desktop:test:voice-conversation-settings", bunArgs: ["run", "--cwd", "desktop", "test:voice-conversation-settings"] },
+  { label: "desktop:test:voice-history-storage", bunArgs: ["run", "--cwd", "desktop", "test:voice-history-storage"] },
   { label: "desktop:test:voice-history-playback", bunArgs: ["run", "--cwd", "desktop", "test:voice-history-playback"] },
   { label: "desktop:test:assistant-force-interrupt", bunArgs: ["run", "--cwd", "desktop", "test:assistant-force-interrupt"] },
   { label: "desktop:test:theme-adaptive-surfaces", bunArgs: ["run", "--cwd", "desktop", "test:theme-adaptive-surfaces"] },
