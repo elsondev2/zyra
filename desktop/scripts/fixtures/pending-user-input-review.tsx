@@ -283,6 +283,12 @@ const paste = () => {
         pills.every((pill) => pill.getBoundingClientRect().width <= 226),
         'Attachment pills remain bounded',
     )
+    await wait(
+        () =>
+            !button('Open preview for notes.txt').disabled &&
+            !button('Open preview for pasted-image.png').disabled,
+        'Attachment entry animation finishes before opening a pill',
+    )
     button('Open preview for notes.txt').click()
     await wait(
         () => (window as any).fixtureAttachmentPreview?.content === 'Complete supporting notes',
@@ -442,6 +448,56 @@ const paste = () => {
     await sleep()
     check(input(), 'Empty pending state restores without a hooks-order error')
     results.push('Long text paste and empty-prompt lifecycle')
+    questionId = 'offline-draft'
+    choice = true
+    props.assistantConnected = false
+    render()
+    await sleep()
+    await sleep()
+    check(
+        !input().disabled && button('Attach files').disabled,
+        'Disconnected forms permit drafts but lock attachments',
+    )
+    clipImage = false
+    clipText = 'Draft while disconnected'
+    paste()
+    await wait(
+        () => input().value === clipText,
+        'Plain text paste remains available while attachments are locked',
+    )
+    clipImage = true
+    paste()
+    await sleep()
+    check(
+        !document.querySelector('[data-composer-attachment-item]'),
+        'Disconnected clipboard images remain blocked',
+    )
+    clipImage = false
+    clipText = 'Long disconnected evidence\n'.repeat(150)
+    paste()
+    await sleep()
+    check(
+        input().value === 'Draft while disconnected' &&
+            !document.querySelector('[data-composer-attachment-item]'),
+        'Disconnected long-text attachments remain blocked without replacing the draft',
+    )
+    check(
+        document.querySelector('[role="alert"]'),
+        'Locked attachment paste explains the restriction',
+    )
+    props.responding = true
+    render()
+    await sleep()
+    clipText = 'Cannot paste during Submit'
+    paste()
+    await sleep()
+    check(
+        input().disabled && input().value === 'Draft while disconnected',
+        'Submission locks block paste into disabled inputs',
+    )
+    props.responding = false
+    props.assistantConnected = true
+    results.push('Disconnected plain-text drafts remain editable without permitting attachments')
     questionId = 'visual-direct-entry'
     choice = true
     render()

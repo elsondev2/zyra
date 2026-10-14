@@ -681,12 +681,20 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     }
 
     const handleAnswerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
-        if (composerCapabilities.inputDisabled || composerCapabilities.attachDisabled) {
+        if (composerCapabilities.inputDisabled) {
             event.preventDefault()
             return
         }
         setPasteError(null)
         const files = Array.from(event.clipboardData.items).filter((item) => item.kind === 'file')
+        const text = event.clipboardData.getData('text/plain')
+        if (composerCapabilities.attachDisabled && (files.length > 0 || isLargeTextPaste(text))) {
+            event.preventDefault()
+            setPasteError(
+                composerCapabilities.detailLabel || 'Attachments are unavailable right now.',
+            )
+            return
+        }
         if (files.length > 0) {
             event.preventDefault()
             for (const item of files) {
@@ -695,7 +703,6 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             }
             return
         }
-        const text = event.clipboardData.getData('text/plain')
         if (text) {
             event.preventDefault()
             pasteAnswerText(text)
