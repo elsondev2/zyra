@@ -174,7 +174,7 @@ export function validateVisualizationTimestamp(value) {
   return new Date(value).toISOString();
 }
 /** Validate persisted state before any source reaches a caller/renderer. */
-export function validateVisualizationResource(value) {
+export function validateVisualizationResource(value, { metadataOnly = false } = {}) {
   const resource = record(value, 'Resource');
   keys(resource, ['id', 'title', 'kind', 'summary', 'threadId', 'createdAt', 'updatedAt', 'latestVersion', 'versions'], 'resource');
   validateVisualizationId(resource.id);
@@ -192,7 +192,14 @@ export function validateVisualizationResource(value) {
       if (!shortText(origin.threadId, 'origin threadId', 256).trim() || !shortText(origin.messageId, 'origin messageId', 256).trim() || !Number.isSafeInteger(origin.offset) || origin.offset < 0) throw new Error('Invalid persisted provenance.');
       if (origin.turnId !== undefined) shortText(origin.turnId, 'origin turnId', 256);
     }
-    normalizeVisualizationInput({ kind: resource.kind, title: version.title, summary: version.summary, source: version.source, height: version.height }, { legacy: version.origin !== undefined });
+    if (metadataOnly) {
+      if (!shortText(version.title, 'title', 160).trim()) throw new Error('Title is required.');
+      shortText(version.summary, 'summary', 1200);
+      boundedNumber(version.height, 'height', 160, 640);
+      if (!Number.isInteger(version.height) || version.source !== '') throw new Error('Invalid visualization revision metadata.');
+    } else {
+      normalizeVisualizationInput({ kind: resource.kind, title: version.title, summary: version.summary, source: version.source, height: version.height }, { legacy: version.origin !== undefined });
+    }
     shortText(version.changeNote, 'changeNote', 1200); validateVisualizationTimestamp(version.createdAt);
   }
   const latest = resource.versions.at(-1);

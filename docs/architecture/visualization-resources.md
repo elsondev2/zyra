@@ -10,6 +10,8 @@ Resources live under `<resource-root>/.zyra/visualizations/<uuid>/`, where resou
 
 Writes use exclusive source-file creation, a project writer lock, durable temporary manifests and atomic manifest replacement. Revisions identify their parent and require an observed current head to prevent lost concurrent edits. Branching from an older version changes the parent, not older snapshots. Crashed locks recover only with a sufficiently old, proven dead owner. Unsafe symlink/hardlink destinations, corrupted records, modified source snapshots and exceeded bounds fail closed. Reads check that the bounded source files still match their committed revisions. Defaults limit one source to 64 KiB, one resource to 128 revisions, one workspace to 500 resources, and workspace manifests to 16 MiB.
 
+Desktop list responses contain revision metadata with empty source strings and `sourceLoaded: false`, including explicit references in associated workspaces. Listing parses bounded existing manifests, filters thread/query metadata first and does not open immutable revision files or validate their bodies. Detail reads still perform complete source validation and immutable-file verification before rendering. The retained manifest format includes source bodies for compatibility; listing is not a source-integrity check.
+
 The permission gate authorizes the trusted resource destination from the executor. Read/list/embed and create/revise use separate read/write handling. Read-only roots and explicit resource ceilings remain enforced even in full-access mode. Rendering never grants filesystem or app control.
 
 ## Messages and old history

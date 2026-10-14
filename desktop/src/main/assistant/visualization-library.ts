@@ -15,9 +15,16 @@ export type VisualizationMessageCandidate = {
     createdAt: string
     turnId?: string | null
 }
-export type VisualizationLibraryContext = { cwd: string; threadId: string; canImport?: boolean; readRoots?: string[] }
+export type VisualizationLibraryContext = {
+    cwd: string
+    threadId: string
+    canImport?: boolean
+    readRoots?: string[]
+}
 export async function resolveVisualizationLibraryContext(
-    input: VisualizationLibraryContext & { roots?: Array<{ path: string; access: string }> },
+    input: VisualizationLibraryContext & {
+        roots?: Array<{ path: string; access: string }>
+    },
 ): Promise<VisualizationLibraryContext> {
     const actual = await realpath(input.cwd)
     let canImport = true
@@ -38,8 +45,15 @@ export async function resolveVisualizationLibraryContext(
         )
             canImport = false
     }
-    const readRoots = await Promise.all((input.readRoots || []).slice(0, 20).map(root => realpath(root).catch(() => null)))
-    return { cwd: actual, threadId: input.threadId, canImport, readRoots: [...new Set(readRoots.filter((root): root is string => Boolean(root)))] }
+    const readRoots = await Promise.all(
+        (input.readRoots || []).slice(0, 20).map((root) => realpath(root).catch(() => null)),
+    )
+    return {
+        cwd: actual,
+        threadId: input.threadId,
+        canImport,
+        readRoots: [...new Set(readRoots.filter((root): root is string => Boolean(root)))],
+    }
 }
 export type VisualizationCandidateReader = (
     after: number,
@@ -71,7 +85,12 @@ export class VisualizationLibrary {
 
     async importMessage(
         context: VisualizationLibraryContext,
-        message: { id: string; text: string; createdAt: string; turnId?: string | null },
+        message: {
+            id: string
+            text: string
+            createdAt: string
+            turnId?: string | null
+        },
     ) {
         const skipped: string[] = []
         if (
@@ -114,7 +133,13 @@ export class VisualizationLibrary {
             scan = undefined
         }
         if (!scan) {
-            scan = { cursor: 0, referenced: new Set(), skipped: new Set(), hasMore: false, canImport }
+            scan = {
+                cursor: 0,
+                referenced: new Set(),
+                skipped: new Set(),
+                hasMore: false,
+                canImport,
+            }
             this.scans.set(key, scan)
             // Session switching must not retain an unbounded history cache.
             if (this.scans.size > 48) this.scans.delete(this.scans.keys().next().value!)
@@ -135,7 +160,8 @@ export class VisualizationLibrary {
                             if (part.kind === 'reference' && part.state === 'complete') {
                                 state.referenced.delete(part.id)
                                 state.referenced.add(part.id)
-                                if (state.referenced.size > 500) state.referenced.delete(state.referenced.values().next().value!)
+                                if (state.referenced.size > 500)
+                                    state.referenced.delete(state.referenced.values().next().value!)
                             }
                         }
                         state.cursor = message.cursor
@@ -147,15 +173,20 @@ export class VisualizationLibrary {
             })
         }
         await state.pending
-        const resources = await createVisualizationStore(context).list({ threadOnly: scope === 'thread' })
+        const resources = await createVisualizationStore(context).list({
+            threadOnly: scope === 'thread',
+            metadataOnly: true,
+        })
         if (scope === 'thread') {
             const known = new Set(resources.map((resource) => resource.id))
             for (const id of state.referenced) {
                 if (known.has(id)) continue
                 try {
-                    const resource = await this.get(context, id)
-                    resources.push(resource)
-                    known.add(id)
+                    const resource = await this.findResource(context, id, true)
+                    if (resource) {
+                        resources.push(resource)
+                        known.add(id)
+                    }
                 } catch {
                     /* An unavailable reference stays visible as an error in its original message. */
                 }
@@ -164,17 +195,27 @@ export class VisualizationLibrary {
         return resources.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     }
 
+    private async findResource(
+        context: VisualizationLibraryContext,
+        id: string,
+        metadataOnly = false,
+    ) {
+        for (const cwd of [...new Set([context.cwd, ...(context.readRoots || [])])].slice(0, 20)) {
+            const store = createVisualizationStore({ ...context, cwd })
+            const resource = metadataOnly ? await store.getMetadata(id) : await store.get(id)
+            if (resource) return resource
+        }
+        return null
+    }
+
     async get(
         context: VisualizationLibraryContext,
         id: string,
         version?: number,
     ): Promise<VisualizationResource> {
-        let resource: VisualizationResource | null = null
-        for (const cwd of [...new Set([context.cwd, ...(context.readRoots || [])])].slice(0, 20)) {
-            resource = await createVisualizationStore({ ...context, cwd }).get(id)
-            if (resource) break
-        }
-        if (!resource) throw new Error('This saved visualization is unavailable in this Project or workspace.')
+        const resource = await this.findResource(context, id)
+        if (!resource)
+            throw new Error('This saved visualization is unavailable in this Project or workspace.')
         if (
             version !== undefined &&
             (!Number.isSafeInteger(version) ||

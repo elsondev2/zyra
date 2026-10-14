@@ -120,7 +120,8 @@ const button = (label: string) =>
     Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
         (b) => b.textContent?.trim() === label || b.getAttribute('aria-label') === label,
     )!
-const input = () => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Your answer"]')!
+const input = () =>
+    document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Your answer"]')!
 ;(window as any).sidebarContinuityCheck = (async () => {
     render()
     await sleep()
@@ -137,7 +138,10 @@ const input = () => document.querySelector<HTMLTextAreaElement>('textarea[aria-l
     button('Type another answer').click()
     await wait(() => Boolean(input()), 'Custom choice opens an editable answer')
     button('Paste').click()
-    await wait(() => input().value === clipText, 'Paste inserts clipboard text into a custom answer')
+    await wait(
+        () => input().value === clipText,
+        'Paste inserts clipboard text into a custom answer',
+    )
     check(!button('Continue').disabled, 'Typed custom answer is complete')
     button('Continue').click()
     await wait(() => Boolean(button('Submit')), 'Custom answer reaches review')
@@ -156,8 +160,9 @@ const input = () => document.querySelector<HTMLTextAreaElement>('textarea[aria-l
     await sleep()
     await sleep()
     check(
-        Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Skip')
-            .length === 1,
+        Array.from(document.querySelectorAll('button')).filter(
+            (b) => b.textContent?.trim() === 'Skip',
+        ).length === 1,
         'Exactly one primary Skip button exists for an empty optional answer',
     )
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
@@ -172,10 +177,16 @@ const input = () => document.querySelector<HTMLTextAreaElement>('textarea[aria-l
     input().dispatchEvent(new Event('input', { bubbles: true }))
     await sleep()
     button('Skip').click()
-    await wait(() => Boolean(button('Submit')), 'Empty optional response advances via the primary action')
+    await wait(
+        () => Boolean(button('Submit')),
+        'Empty optional response advances via the primary action',
+    )
     button('Submit').click()
     await wait(() => responses.length === 2, 'Skipped answer submits')
-    check(responses[1].answers.answer === '', 'Skipping is explicit and preserves empty-answer semantics')
+    check(
+        responses[1].answers.answer === '',
+        'Skipping is explicit and preserves empty-answer semantics',
+    )
     results.push('One Continue/Skip action, empty optional answers and review')
     questionId = 'files'
     required = true
@@ -185,8 +196,15 @@ const input = () => document.querySelector<HTMLTextAreaElement>('textarea[aria-l
     await sleep()
     const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]')!
     const files = new DataTransfer()
-    files.items.add(new File(['Complete supporting notes'], 'notes.txt', { type: 'text/plain' }))
-    Object.defineProperty(fileInput, 'files', { configurable: true, value: files.files })
+    files.items.add(
+        new File(['Complete supporting notes'], 'notes.txt', {
+            type: 'text/plain',
+        }),
+    )
+    Object.defineProperty(fileInput, 'files', {
+        configurable: true,
+        value: files.files,
+    })
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
     await wait(
         () => document.body.textContent!.includes('notes.txt'),
@@ -204,6 +222,41 @@ const input = () => document.querySelector<HTMLTextAreaElement>('textarea[aria-l
     )
     button('Continue').click()
     await wait(() => Boolean(button('Submit')), 'File-only answer reaches review')
+    const removalButtons = () =>
+        Array.from(document.querySelectorAll<HTMLButtonElement>('button')).filter((item) =>
+            item.getAttribute('aria-label')?.startsWith('Remove '),
+        )
+    await wait(
+        () => removalButtons().length === 2 && removalButtons().every((item) => !item.disabled),
+        'Attachment entry animation finishes before removal',
+    )
+    for (const remove of removalButtons()) remove.click()
+    await wait(
+        () => button('Submit')?.disabled === true,
+        'Removing all evidence invalidates the required file-only answer',
+    )
+    button('Submit').click()
+    await sleep()
+    check(responses.length === 2, 'An answer claiming missing attachments cannot submit')
+    button('Back').click()
+    await wait(() => Boolean(input()), 'Missing required answer can be edited')
+    check(input().value === '', 'The orphaned file-only caption is not presented as typed text')
+    Object.defineProperty(fileInput, 'files', {
+        configurable: true,
+        value: files.files,
+    })
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+    await wait(() => document.body.textContent!.includes('notes.txt'), 'Evidence can be restored')
+    button('Paste').click()
+    await wait(
+        () => Boolean(document.querySelector('[aria-label="Open preview for pasted-image.png"]')),
+        'Image evidence can be restored',
+    )
+    button('Continue').click()
+    await wait(
+        () => button('Submit')?.disabled === false,
+        'Restoring evidence validates the attachment-only answer',
+    )
     button('Submit').click()
     await wait(() => responses.length === 3, 'Attachments submit')
     check(

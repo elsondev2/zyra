@@ -26,7 +26,7 @@ export const MAX_VISUALIZATION_REVISIONS: number;
 export const VISUALIZATION_KINDS: readonly VisualizationKind[];
 export const VISUALIZATION_ID_PATTERN: RegExp;
 export function validateVisualizationTimestamp(value: string): string;
-export function validateVisualizationResource(value: unknown): VisualizationResource;
+export function validateVisualizationResource(value: unknown, options?: { metadataOnly?: boolean }): VisualizationResource;
 export function validateVisualizationId(id: string): string;
 export function validateVisualizationVersion(version: number): number;
 export function validateScene3D(source: string | Scene3D): Scene3D;

@@ -139,16 +139,39 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         submitLabel: 'Continue',
     })
 
+    const hasAttachments = composerController.contextFiles.length > 0
     const activeDraftAnswers = useMemo(() => {
         if (!activePrompt) return {}
-        return (
+        const answers =
             draftAnswersByRequestId[activePrompt.requestId] ||
             readAssistantPendingUserInputDraft(activePrompt.requestId)?.answers ||
             {}
+        if (hasAttachments) return answers
+        // A file-only caption is not an answer without its evidence. Derive this
+        // before progress/Submit validation, including restored review drafts.
+        return Object.fromEntries(
+            Object.entries(answers).map(([id, answer]) => {
+                const question = activePrompt.questions.find((item) => item.id === id)
+                if (question?.options.some((option) => option.label === 'See attached files.'))
+                    return [id, answer]
+                return [
+                    id,
+                    Array.isArray(answer)
+                        ? answer.filter((value) => value !== 'See attached files.')
+                        : answer === 'See attached files.'
+                          ? ''
+                          : answer,
+                ]
+            }),
         )
-    }, [activePrompt, draftAnswersByRequestId])
+    }, [activePrompt, draftAnswersByRequestId, hasAttachments])
     const progress = useMemo(
-        () => deriveAssistantPendingUserInputProgress(activePrompt, activeDraftAnswers, questionIndex),
+        () =>
+            deriveAssistantPendingUserInputProgress(
+                activePrompt,
+                activeDraftAnswers,
+                questionIndex,
+            ),
         [activeDraftAnswers, activePrompt, questionIndex],
     )
 
@@ -170,7 +193,10 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                   restoredAnswers,
               )
         suppressDraftPersistenceRequestIdRef.current = activePrompt.requestId
-        setDraftAnswersByRequestId((current) => ({ ...current, [activePrompt.requestId]: restoredAnswers }))
+        setDraftAnswersByRequestId((current) => ({
+            ...current,
+            [activePrompt.requestId]: restoredAnswers,
+        }))
         setCustomQuestionIdByRequestId((current) => ({
             ...current,
             [activePrompt.requestId]:
@@ -195,7 +221,13 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             customQuestionId: customQuestionIdByRequestId[activePrompt.requestId] || null,
             returnToReview,
         })
-    }, [activeDraftAnswers, activePrompt, customQuestionIdByRequestId, questionIndex, returnToReview])
+    }, [
+        activeDraftAnswers,
+        activePrompt,
+        customQuestionIdByRequestId,
+        questionIndex,
+        returnToReview,
+    ])
 
     useEffect(() => {
         setExpandedOptionKey(null)
@@ -248,11 +280,17 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                 const nextValues = values.includes(optionLabel)
                     ? values.filter((entry) => entry !== optionLabel)
                     : [...values, optionLabel]
-                if (question.maxSelections !== undefined && nextValues.length > question.maxSelections)
+                if (
+                    question.maxSelections !== undefined &&
+                    nextValues.length > question.maxSelections
+                )
                     return current
                 return {
                     ...current,
-                    [activePrompt.requestId]: { ...requestAnswers, [questionId]: nextValues },
+                    [activePrompt.requestId]: {
+                        ...requestAnswers,
+                        [questionId]: nextValues,
+                    },
                 }
             })
         },
@@ -262,7 +300,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     const handleSelectCustom = useCallback(
         (questionId: string) => {
             if (!activePrompt) return
-            const question = activePrompt.questions.find((candidate) => candidate.id === questionId) || null
+            const question =
+                activePrompt.questions.find((candidate) => candidate.id === questionId) || null
             if (!question) return
             setCustomQuestionIdByRequestId((current) => ({
                 ...current,
@@ -280,7 +319,10 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                       : String(currentAnswer || '')
                 return {
                     ...current,
-                    [activePrompt.requestId]: { ...currentAnswers, [questionId]: nextAnswer },
+                    [activePrompt.requestId]: {
+                        ...currentAnswers,
+                        [questionId]: nextAnswer,
+                    },
                 }
             })
             window.requestAnimationFrame(() => {
@@ -299,7 +341,11 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             if (!activePrompt) return
             const question = activePrompt.questions.find((candidate) => candidate.id === questionId)
             if (!question) return
-            if (question.type !== 'text' && question.type !== 'number' && question.type !== 'date') {
+            if (
+                question.type !== 'text' &&
+                question.type !== 'number' &&
+                question.type !== 'date'
+            ) {
                 setCustomQuestionIdByRequestId((current) =>
                     current[activePrompt.requestId] === questionId
                         ? current
@@ -317,7 +363,13 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                           ...(value.trim() ? [value] : []),
                       ]
                     : value
-                return { ...current, [activePrompt.requestId]: { ...requestAnswers, [questionId]: answer } }
+                return {
+                    ...current,
+                    [activePrompt.requestId]: {
+                        ...requestAnswers,
+                        [questionId]: answer,
+                    },
+                }
             })
         },
         [activePrompt],
@@ -331,8 +383,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     )
 
     const stepQuestion = progress?.activeQuestion || null
-    const hasAttachments = composerController.contextFiles.length > 0
-    const emptyStepAnswer = !stepQuestion || !String(activeDraftAnswers[stepQuestion.id] || '').trim()
+    const emptyStepAnswer =
+        !stepQuestion || !String(activeDraftAnswers[stepQuestion.id] || '').trim()
     const attachmentAnswer =
         stepQuestion &&
         hasAttachments &&
@@ -344,8 +396,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             : undefined
     const attachmentAnswerComplete = Boolean(
         stepQuestion &&
-            attachmentAnswer &&
-            isAssistantUserInputAnswerComplete(stepQuestion, attachmentAnswer, true),
+        attachmentAnswer &&
+        isAssistantUserInputAnswerComplete(stepQuestion, attachmentAnswer, true),
     )
     const canSkipStep = stepQuestion?.required === false && emptyStepAnswer && !hasAttachments
     const canAdvanceStep = Boolean(
@@ -376,15 +428,23 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                             : '',
                   }
                 : activeDraftAnswers
-        const resolvedAnswers = buildAssistantPendingUserInputAnswers(activePrompt.questions, nextAnswers)
+        const resolvedAnswers = buildAssistantPendingUserInputAnswers(
+            activePrompt.questions,
+            nextAnswers,
+        )
 
         if (progress.isReviewStep) {
             if (!resolvedAnswers) return
             submittingRef.current = true
             try {
-                await onRespond(activePrompt.requestId, resolvedAnswers, composerController.contextFiles)
+                await onRespond(
+                    activePrompt.requestId,
+                    resolvedAnswers,
+                    composerController.contextFiles,
+                )
                 submittedComposerSessionIdRef.current = questionComposerSessionId
-                if (questionComposerSessionId) clearAssistantComposerSessionState(questionComposerSessionId)
+                if (questionComposerSessionId)
+                    clearAssistantComposerSessionState(questionComposerSessionId)
                 suppressDraftPersistenceRequestIdRef.current = activePrompt.requestId
                 clearAssistantPendingUserInputDraft(activePrompt.requestId)
             } finally {
@@ -494,7 +554,12 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         textarea.focus()
         const cursor = textarea.value.length
         textarea.setSelectionRange(cursor, cursor)
-    }, [activePrompt, customQuestionIdByRequestId, progress?.activeQuestion, progress?.isCustomAnswer])
+    }, [
+        activePrompt,
+        customQuestionIdByRequestId,
+        progress?.activeQuestion,
+        progress?.isCustomAnswer,
+    ])
 
     useLayoutEffect(() => {
         const textarea = customTextareaRef.current
@@ -510,8 +575,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         : null
     const showCustomComposer = Boolean(
         activeQuestion &&
-            activeQuestion.allowOther &&
-            (activeCustomQuestionId === activeQuestion.id || progress?.isCustomAnswer),
+        activeQuestion.allowOther &&
+        (activeCustomQuestionId === activeQuestion.id || progress?.isCustomAnswer),
     )
     const showAnswerComposer = Boolean(activeQuestion?.type === 'text' || showCustomComposer)
     const customAnswerValue =
@@ -593,7 +658,9 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         const container = animatedStepRef.current
         if (!container || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
-        const animatedNodes = Array.from(container.querySelectorAll<HTMLElement>('[data-guided-animate]'))
+        const animatedNodes = Array.from(
+            container.querySelectorAll<HTMLElement>('[data-guided-animate]'),
+        )
         animatedNodes.forEach((node, index) => {
             node.animate(
                 [
@@ -628,7 +695,8 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
 
     const pasteAnswerText = (value: string) => {
         if (!activeQuestion) return
-        if (isLargeTextPaste(value)) composerController.upsertAttachment(buildTextAttachmentFromPaste(value))
+        if (isLargeTextPaste(value))
+            composerController.upsertAttachment(buildTextAttachmentFromPaste(value))
         else {
             const start = customTextareaRef.current?.selectionStart ?? customAnswerValue.length
             const end = customTextareaRef.current?.selectionEnd ?? start
@@ -638,7 +706,10 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
             )
             window.requestAnimationFrame(() => {
                 customTextareaRef.current?.focus({ preventScroll: true })
-                customTextareaRef.current?.setSelectionRange(start + value.length, start + value.length)
+                customTextareaRef.current?.setSelectionRange(
+                    start + value.length,
+                    start + value.length,
+                )
             })
         }
     }
@@ -646,7 +717,10 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
     if (!activePrompt || !progress) return null
     return (
         <div className="mx-auto w-full max-w-3xl" data-assistant-composer-hitbox="true">
-            <div ref={composerController.composerRootRef} className="pointer-events-auto relative z-10">
+            <div
+                ref={composerController.composerRootRef}
+                className="pointer-events-auto relative z-10"
+            >
                 <div className="group rounded-[20px] border border-white/10 bg-sparkle-card transition-[border-color,box-shadow] duration-200">
                     <div className="relative px-3 pb-1.5 pt-2 sm:px-4 sm:pt-2">
                         <AssistantPendingUserInputStage
@@ -693,7 +767,9 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                                 <button
                                     type="button"
                                     disabled={composerCapabilities.attachDisabled}
-                                    onClick={() => composerController.filePickerRef.current?.click()}
+                                    onClick={() =>
+                                        composerController.filePickerRef.current?.click()
+                                    }
                                     aria-label="Attach files"
                                     className="mt-0.5 rounded-full p-1 text-sparkle-text-muted hover:text-sparkle-text disabled:opacity-35"
                                     title={
@@ -733,11 +809,15 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
                                                         activeQuestion
                                                     )
                                                         pasteAnswerText(
-                                                            await (await item.getType('text/plain')).text(),
+                                                            await (
+                                                                await item.getType('text/plain')
+                                                            ).text(),
                                                         )
                                                 }
                                             } else if (activeQuestion)
-                                                pasteAnswerText(await navigator.clipboard.readText())
+                                                pasteAnswerText(
+                                                    await navigator.clipboard.readText(),
+                                                )
                                         } catch {
                                             setPasteError(
                                                 'Could not read the clipboard. Use Ctrl+V in the answer field.',

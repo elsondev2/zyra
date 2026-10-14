@@ -4,7 +4,8 @@ export interface VisualizationReviseInput {
   title?: string; summary?: string; height?: number; kind?: VisualizationKind;
 }
 export interface VisualizationStore {
-  list(options?: { threadOnly?: boolean; query?: string }): Promise<VisualizationResource[]>;
+  list(options?: { threadOnly?: boolean; query?: string; metadataOnly?: boolean }): Promise<VisualizationResource[]>;
+  getMetadata(id: string): Promise<VisualizationResource | null>;
   get(id: string, version?: number): Promise<(VisualizationResource & { selectedVersion: VisualizationRevision }) | null>;
   create(input: VisualizationInput): Promise<VisualizationResource>;
   revise(input: VisualizationReviseInput): Promise<VisualizationResource>;

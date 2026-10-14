@@ -274,7 +274,7 @@ assert.match(questionFieldSource, /DndContext[\s\S]*SortableContext/, 'ranking a
 assert.match(questionFieldSource, /CSS\.Transform\.toString\(transform\)/, 'the complete ranking row follows the pointer')
 assert.match(pendingQuestionSource, /AssistantPendingUserInputStage/, 'the existing guided questionnaire remains the composer-owned input')
 assert.match(pendingQuestionSource, /data-assistant-composer-hitbox="true"/, 'questionnaire wheel and pointer input stay inside the composer surface')
-assert.match(pendingQuestionSource, /onRespond\(activePrompt\.requestId, resolvedAnswers, composerController\.contextFiles\)/, 'finishing the questionnaire submits one linked answer set with its supporting files')
+assert.match(pendingQuestionSource, /onRespond\(\s*activePrompt\.requestId,\s*resolvedAnswers,\s*composerController\.contextFiles,?\s*\)/, 'finishing the questionnaire submits one linked answer set with its supporting files')
 assert.match(pendingQuestionSource, /responding\s*\?\s*'Submitting'\s*:\s*isReviewStep\s*\?\s*'Submit'/, 'the settled review step exposes a direct Submit action')
 assert.match(questionResponseSource, /Answered agent question/, 'the linked user bubble identifies question responses')
 assert.match(questionResponseSource, /aria-haspopup=\"dialog\"/, 'the compact response card opens all answers in the existing dialog')

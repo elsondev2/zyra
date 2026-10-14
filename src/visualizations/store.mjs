@@ -80,7 +80,7 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
     return true;
   }
   const directoryFor = id => path.join(root, validateVisualizationId(id));
-  async function load(id) {
+  async function load(id, { metadataOnly = false, threadOnly = false, query = '' } = {}) {
     id = validateVisualizationId(id);
     if (!await ensureRoot()) return null;
     const directory = directoryFor(id);
@@ -94,6 +94,15 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
       if (!stat.isFile() || stat.nlink > 1 || stat.size > MAX_VISUALIZATION_MANIFEST_BYTES) throw new Error('Invalid or oversized visualization manifest.');
       resource = JSON.parse(await readBounded(handle, MAX_VISUALIZATION_MANIFEST_BYTES));
     } finally { await handle.close(); }
+    if (metadataOnly) {
+      // Existing manifests retain source for immutable-history compatibility. Parse
+      // within the disk budget, filter first, and never open/validate revision files.
+      if (!resource || resource.id !== id) throw new Error('Invalid visualization resource manifest ID.');
+      if ((threadOnly && resource.threadId !== threadId) || (query && !`${resource.title}\n${resource.summary}\n${resource.kind}`.toLowerCase().includes(query))) return null;
+      resource = { ...resource, versions: Array.isArray(resource.versions) ? resource.versions.map(revision => ({ ...revision, source: '' })) : resource.versions };
+      validateVisualizationResource(resource, { metadataOnly: true });
+      return { ...resource, sourceLoaded: false };
+    }
     validateVisualizationResource(resource);
     if (resource.id !== id) throw new Error('Invalid visualization resource manifest ID.');
     for (let index = 0; index < resource.versions.length; index++) {
@@ -247,14 +256,14 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
     return save(resource, first);
   }
   return {
-    async list({ threadOnly = false, query = '' } = {}) {
-      if (typeof query !== 'string' || query.length > 1200 || typeof threadOnly !== 'boolean') throw new Error('Invalid visualization list filter.');
+    async list({ threadOnly = false, query = '', metadataOnly = false } = {}) {
+      if (typeof query !== 'string' || query.length > 1200 || typeof threadOnly !== 'boolean' || typeof metadataOnly !== 'boolean') throw new Error('Invalid visualization list filter.');
       if (!await ensureRoot()) return [];
       await projectBudget();
       const result = [], needle = query.toLowerCase(); let resultBytes = 0;
       for (const entry of await readdir(root)) {
         if (!VISUALIZATION_ID_PATTERN.test(entry)) continue;
-        const resource = await load(entry);
+        const resource = await load(entry, { metadataOnly, threadOnly, query: needle });
         if (!resource || (threadOnly && resource.threadId !== threadId)
           || (needle && !`${resource.title}\n${resource.summary}\n${resource.kind}`.toLowerCase().includes(needle))) continue;
         resultBytes += Buffer.byteLength(JSON.stringify(resource), 'utf8');
@@ -263,6 +272,7 @@ export function createVisualizationStore({ cwd, threadId } = {}) {
       }
       return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
     },
+    async getMetadata(id) { return load(id, { metadataOnly: true }); },
     async get(id, version) {
       const resource = await load(id);
       if (!resource) return null;

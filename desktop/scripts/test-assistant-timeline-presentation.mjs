@@ -17,7 +17,7 @@ try {
     await writeFile(join(directory, 'tools.tsx'), 'export function TimelineToolCallList(){return null}');
     const bundle = await build({
         entryPoints: [join(desktop, 'scripts/fixtures/assistant-timeline-presentation.tsx')],
-        bundle: true, write: false, format: 'iife', jsx: 'automatic', platform: 'browser',
+        bundle: true, write: false, outfile: join(directory, 'renderer.js'), format: 'iife', jsx: 'automatic', platform: 'browser',
         define: { 'import.meta.env.DEV': 'true' },
         nodePaths: [join(desktop, 'node_modules')],
         alias: {
@@ -37,7 +37,7 @@ try {
         .grid{display:grid}.grid-rows-\\[1fr\\]{grid-template-rows:1fr}.grid-rows-\\[0fr\\]{grid-template-rows:0fr}
         .min-h-0{min-height:0}.overflow-hidden{overflow:hidden}
         .transition-\\[grid-template-rows\\]{transition-property:grid-template-rows}
-        </style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`)
+        </style></head><body><div id="root"></div><script>${bundle.outputFiles.find(file => file.path.endsWith('.js')).text}</script></body></html>`)
     const harness = join(directory, 'run.cjs')
     await writeFile(harness, `
         const { app, BrowserWindow } = require('electron');
