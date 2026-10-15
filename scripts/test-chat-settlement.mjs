@@ -77,7 +77,9 @@ try {
   console.log('Canonical settlement: cross-surface updates, restart, new activity, migration ordering and busy guards passed.');
 } finally {
   for (const client of clients) client.close();
-  await server.stop();
-  assert.equal(server.settlementTimer, null, 'Server shutdown disposes its single deadline timer');
+  const shutdown = server.stop();
+  server.projectCatalogChat({ ...chat, messageCount: chat.messageCount + 1, modifiedAt: new Date().toISOString() });
+  await shutdown;
+  assert.equal(server.settlementTimer, null, 'Shutdown also prevents late catalog projection from rearming the deadline timer');
   rmSync(dir, { recursive: true, force: true });
 }

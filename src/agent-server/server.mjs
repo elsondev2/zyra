@@ -84,6 +84,7 @@ export class ZyraAgentServer extends EventEmitter {
     this.sessions = new Map();
     this.settlementTimer = null;
     this.settlementDeadline = null;
+    this.settlementStopping = false;
     this.threads = new AgentThreadCoordinator(this);
     this.pluginAuthority = new ServerPluginAuthority();
     this.utilityWorker = null;
@@ -111,6 +112,7 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   async start() {
+    this.settlementStopping = false;
     if (this.server) return this.descriptor();
     mkdirSync(this.paths.stateDirectory, { recursive: true });
     this.assertNoIncompatibleServer();
@@ -143,6 +145,7 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   async stop(reason = "Agent server stopped.") {
+    this.settlementStopping = true;
     clearTimeout(this.settlementTimer);
     this.settlementTimer = null;
     this.settlementDeadline = null;
@@ -636,7 +639,7 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   scheduleSettlementDeadline(deadline) {
-    if (!this.server || !Number.isFinite(deadline) || deadline <= Date.now()) return;
+    if (!this.server || this.settlementStopping || !Number.isFinite(deadline) || deadline <= Date.now()) return;
     if (this.settlementDeadline !== null && this.settlementDeadline <= deadline) return;
     clearTimeout(this.settlementTimer);
     this.settlementDeadline = deadline;
