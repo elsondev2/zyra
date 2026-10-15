@@ -87,6 +87,7 @@ export interface AssistantServiceActionDeps {
     ensureReady(): Promise<void>
     getSnapshot(): AssistantSnapshot
     hydrateSelectedSession(sessionId: string): Promise<void>
+    recoverPendingUserInput?(requestId: string): Promise<void>
     getFirstUserMessageText(sessionId: string): Promise<string | null>
     getNewChatExecutionDefaults(): Promise<AssistantNewChatExecutionDefaults>
     getNewChatPreparationModel?(): Promise<string | null>

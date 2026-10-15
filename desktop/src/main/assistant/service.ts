@@ -495,6 +495,16 @@ export class AssistantService {
             hydrateSelectedSession: async (sessionId: string) => {
                 this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
             },
+            recoverPendingUserInput: async (requestId: string) => {
+                const stored = await this.persistence.readPendingUserInput(requestId)
+                if (!stored) return
+                const record = findThreadRecord(this.state.snapshot, stored.threadId)
+                // A live resolution wins over the older persisted read.
+                if (!record || record.thread.pendingUserInputs.some(input => input.requestId === requestId)) return
+                this.appendEvent('thread.user-input.updated', nowIso(), {
+                    threadId: record.thread.id, userInput: stored.userInput
+                }, record.session.id, record.thread.id)
+            },
             getFirstUserMessageText: (sessionId: string) => this.persistence.readFirstUserMessageText(sessionId),
             getNewChatExecutionDefaults: () => this.options.getNewChatExecutionDefaults?.()
                 || Promise.resolve({ webSearch: true, webFetch: true }),

@@ -63,7 +63,8 @@ import {
     readAssistantPersistenceRecord,
     readAssistantSessionTurnUsage,
     readAssistantUsageOwners,
-    readAssistantTimelineProjectionRows
+    readAssistantTimelineProjectionRows,
+    readAssistantPendingUserInput
 } from './persistence-read'
 import {
     initializeAssistantPersistenceSchema,
@@ -355,6 +356,13 @@ export class AssistantPersistence {
         this.clearPendingEventTimer()
         await this.processPendingEvents()
         return this.enqueue(() => readAssistantThreadDetail(this.requireDb(), threadId))
+    }
+
+    async readPendingUserInput(requestId: string) {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantPendingUserInput(this.requireDb(), requestId))
     }
 
     async readTimelineProjectionRows(threadId: string) {

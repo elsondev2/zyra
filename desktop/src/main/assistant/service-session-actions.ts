@@ -771,7 +771,11 @@ export async function respondAssistantUserInputAction(
     activeRequests.add(input.requestId)
     try {
         await deps.ensureReady()
-        const target = findThreadForUserInput(deps.getSnapshot(), input.requestId)
+        let target = findThreadForUserInput(deps.getSnapshot(), input.requestId)
+        if (!target) {
+            await deps.recoverPendingUserInput?.(input.requestId)
+            target = findThreadForUserInput(deps.getSnapshot(), input.requestId)
+        }
         if (!target) throw new Error(`Unknown user-input request ${input.requestId}.`)
         const pendingInput = target.thread.pendingUserInputs.find((entry) => entry.requestId === input.requestId)
         if (!pendingInput) throw new Error(`Unknown user-input request ${input.requestId}.`)

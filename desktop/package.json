@@ -211,7 +211,7 @@
         "test:shell-file-preview": "bun scripts/test-shell-file-preview.ts && bun scripts/test-quick-preview-chrome.tsx",
         "test:quick-preview-chrome": "bun scripts/test-quick-preview-chrome.tsx",
         "test:window-resize-guard": "bun scripts/test-platform-window-chrome.ts && bun scripts/test-window-state-events.ts && node scripts/test-window-resize-guard.mjs",
-        "test:assistant-user-input": "bun scripts/test-assistant-user-input-history.ts && bun scripts/test-assistant-user-input-contract.ts && bun scripts/test-assistant-question-attachments.ts && bun scripts/test-assistant-question-response.tsx && bun scripts/test-assistant-question-response-dialog.tsx",
+        "test:assistant-user-input": "bun scripts/test-assistant-user-input-restart.ts && bun scripts/test-assistant-user-input-history.ts && bun scripts/test-assistant-user-input-contract.ts && bun scripts/test-assistant-question-attachments.ts && bun scripts/test-assistant-question-response.tsx && bun scripts/test-assistant-question-response-dialog.tsx",
         "test:assistant-user-input-history": "bun scripts/test-assistant-user-input-history.ts",
         "test:assistant-request-persistence": "node scripts/test-assistant-request-persistence.mjs",
         "test:assistant-approval-projection": "bun scripts/test-assistant-approval-projection.ts",

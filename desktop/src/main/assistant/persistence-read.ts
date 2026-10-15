@@ -222,10 +222,10 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
     }
 }
 
-function readAssistantPendingUserInputs(db: SqlDatabase, threadId: string): AssistantPendingUserInput[] {
-    return readThreadRows<AssistantPendingUserInput>(db, 'assistant_pending_user_inputs', threadId, [
-        'id', 'request_id', 'questions_json', 'status', 'answers_json', 'response_message_id', 'turn_id', 'created_at', 'resolved_at'
-    ], (row) => ({
+const userInputColumns = ['id', 'request_id', 'questions_json', 'status', 'answers_json', 'response_message_id', 'turn_id', 'created_at', 'resolved_at']
+
+function pendingUserInputFromRow(row: SqlValue[]): AssistantPendingUserInput {
+    return {
         id: String(row[0] || ''),
         requestId: String(row[1] || ''),
         questions: parseJson(row[2], []),
@@ -235,7 +235,16 @@ function readAssistantPendingUserInputs(db: SqlDatabase, threadId: string): Assi
         turnId: toNullableString(row[6]),
         createdAt: String(row[7] || new Date(0).toISOString()),
         resolvedAt: toNullableString(row[8])
-    }))
+    }
+}
+
+function readAssistantPendingUserInputs(db: SqlDatabase, threadId: string): AssistantPendingUserInput[] {
+    return readThreadRows(db, 'assistant_pending_user_inputs', threadId, userInputColumns, pendingUserInputFromRow)
+}
+
+export function readAssistantPendingUserInput(db: SqlDatabase, requestId: string): { threadId: string; userInput: AssistantPendingUserInput } | null {
+    const row = db.exec(`SELECT ${userInputColumns.join(', ')}, thread_id FROM assistant_pending_user_inputs WHERE request_id = ? AND status = 'pending' LIMIT 1`, [requestId])[0]?.values?.[0]
+    return row ? { threadId: String(row[9]), userInput: pendingUserInputFromRow(row) } : null
 }
 
 export function readAssistantSessionTurnUsage(db: SqlDatabase, sessionId?: string, since?: string): AssistantSessionTurnUsageEntry[] {
