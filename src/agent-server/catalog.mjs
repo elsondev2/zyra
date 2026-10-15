@@ -10,7 +10,7 @@ import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";
 import { ZyraSessionManager } from "./zyra-session-manager.mjs";
-import { projectChatSettlement } from './chat-settlement.mjs';
+import { projectChatSettlement, automaticSettlementDeadline } from './chat-settlement.mjs';
 import {
   EAGER_HISTORY_TOOL_RESULTS,
   HISTORY_TOOL_RESULT_BODY_POLICY,
@@ -70,6 +70,10 @@ export class CanonicalChatCatalog {
   }
 
   projectPaths() { return this.record.projects.map(entry => entry.path); }
+
+  nextSettlementDeadline(chat) {
+    return automaticSettlementDeadline(chat, this.record.metadata[chat.canonicalChatId] || {});
+  }
 
   async list(options = {}) {
     const requestedProject = options.project ? this.registerProject(options.project) : null;

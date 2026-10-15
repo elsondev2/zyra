@@ -82,6 +82,8 @@ export class ZyraAgentServer extends EventEmitter {
     this.catalog.index?.on?.("modelsChanged", change => this.broadcastCatalogChanged(change));
     this.clients = new Map();
     this.sessions = new Map();
+    this.settlementTimer = null;
+    this.settlementDeadline = null;
     this.threads = new AgentThreadCoordinator(this);
     this.pluginAuthority = new ServerPluginAuthority();
     this.utilityWorker = null;
@@ -141,6 +143,9 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   async stop(reason = "Agent server stopped.") {
+    clearTimeout(this.settlementTimer);
+    this.settlementTimer = null;
+    this.settlementDeadline = null;
     this.sessionWorkerPool?.dispose(reason);
     this.externalTools.dispose();
     this.memoryQueue.dispose();
@@ -630,7 +635,23 @@ export class ZyraAgentServer extends EventEmitter {
     }
   }
 
+  scheduleSettlementDeadline(deadline) {
+    if (!this.server || !Number.isFinite(deadline) || deadline <= Date.now()) return;
+    if (this.settlementDeadline !== null && this.settlementDeadline <= deadline) return;
+    clearTimeout(this.settlementTimer);
+    this.settlementDeadline = deadline;
+    this.settlementTimer = setTimeout(() => {
+      this.settlementTimer = null;
+      this.settlementDeadline = null;
+      if (!this.server) return;
+      if (Date.now() < deadline) { this.scheduleSettlementDeadline(deadline); return; }
+      this.broadcastCatalogChanged({ settlementDue: true });
+    }, Math.min(2_147_483_647, Math.max(1, deadline - Date.now())));
+    this.settlementTimer.unref?.();
+  }
+
   projectCatalogChat(chat) {
+    if (!chat.archived) this.scheduleSettlementDeadline(this.catalog.nextSettlementDeadline?.(chat));
     const connected = this.sessions.get(chat.canonicalChatId)?.connectedResult;
     if (!connected && chat.model == null) this.catalog.index?.queueModelPresentations?.([chat.canonicalChatId]);
     const presence = this.sessionPresence(chat.canonicalChatId);

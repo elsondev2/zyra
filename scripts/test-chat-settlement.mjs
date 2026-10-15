@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CanonicalChatCatalog } from '../src/agent-server/catalog.mjs';
 import { ZyraAgentServer } from '../src/agent-server/server.mjs';
 import { ZyraAgentServerClient } from '../src/agent-server/client.mjs';
-import { projectChatSettlement, AUTO_SETTLE_AFTER_MS } from '../src/agent-server/chat-settlement.mjs';
+import { projectChatSettlement, automaticSettlementDeadline, AUTO_SETTLE_AFTER_MS } from '../src/agent-server/chat-settlement.mjs';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'zyra-settlement-'));
 const chat = { canonicalChatId: 'settlement-fixture', title: 'Fixture', project: dir, cwd: dir, messageCount: 4, modifiedAt: new Date().toISOString() };
@@ -24,6 +24,9 @@ const clients = [];
 try {
   assert.equal(projectChatSettlement({ ...chat, modifiedAt: new Date(Date.now() - AUTO_SETTLE_AFTER_MS - 1000).toISOString() }, {}), true);
   assert.equal(projectChatSettlement({ ...chat, messageCount: 0, modifiedAt: '2000-01-01' }, {}), false, 'empty chats remain active');
+  assert.equal(automaticSettlementDeadline(chat, { settlement: { state: 'active', messageCount: chat.messageCount } }), null, 'Explicit current choices do not schedule automatic transitions');
+  assert.equal(automaticSettlementDeadline({ ...chat, messageCount: 0 }), null);
+  assert.equal(automaticSettlementDeadline({ ...chat, modifiedAt: 'not a date' }), null);
   await server.start();
   for (const surface of ['desktop', 'mobile', 'browser']) {
     const client = new ZyraAgentServerClient({ stateDirectory: dir, autoStart: false, clientId: `fixture:${surface}`, surface });
@@ -34,6 +37,22 @@ try {
   const [desktop, mobile, browser] = clients;
   const read = async client => (await client.request('catalog.get', { session: chat.canonicalChatId })).chat;
   const update = (client, settled, extra = {}) => client.request('catalog.update', { session: chat.canonicalChatId, settled, ...extra });
+  // Long-lived clients must learn that an automatic deadline passed without
+  // another user action, reconnect or periodic caller-side catalog poll.
+  const dueSignals = new Set();
+  for (const client of clients) client.on('catalog-changed', message => {
+    if (message.change?.settlementDue) dueSignals.add(client);
+  });
+  chat.modifiedAt = new Date(Date.now() - AUTO_SETTLE_AFTER_MS + 500).toISOString();
+  assert.equal((await read(desktop)).settled, false);
+  const timer = server.settlementTimer;
+  await read(browser);
+  assert.equal(server.settlementTimer, timer, 'Repeated catalog reads retain one shared earliest timer');
+  const dueDeadline = Date.now() + 2_000;
+  while (dueSignals.size < clients.length && Date.now() < dueDeadline) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(dueSignals.size, clients.length, 'Automatic settlement deadline must notify all connected surfaces without an unrelated catalog action');
+  assert.equal((await read(mobile)).settled, true);
+  chat.modifiedAt = new Date().toISOString();
   await update(desktop, true);
   assert.equal((await read(mobile)).settled, true);
   assert.equal((await read(browser)).settled, true, 'all surfaces read the server choice');
@@ -59,5 +78,6 @@ try {
 } finally {
   for (const client of clients) client.close();
   await server.stop();
+  assert.equal(server.settlementTimer, null, 'Server shutdown disposes its single deadline timer');
   rmSync(dir, { recursive: true, force: true });
 }
