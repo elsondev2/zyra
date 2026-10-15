@@ -1224,19 +1224,32 @@ export class AssistantService {
         const plannedSessionId = createAssistantId('assistant-session')
         let sessionCreated = false
         try {
-            const requestedPath = String(input?.workingRoot || input?.projectPath || '').trim()
+            let requestedPath = String(input?.workingRoot || input?.projectPath || '').trim()
             const project = input?.projectId || input?.mode === 'playground'
                 ? null
                 : requestedPath ? await this.persistence.ensureProjectForFolder(requestedPath) : null
             const projectId = String(input?.projectId || project?.id || '').trim()
-            const chatScope = projectId
+            if (input?.workspace) {
+                if (!projectId || !requestedPath || input.mode === 'playground') throw new Error('Worktrees require a project chat.')
+                const { resolveChatWorktree } = await import('../services/developer-worktrees')
+                requestedPath = await resolveChatWorktree(requestedPath, input.workspace)
+                await this.persistence.associateProjectFolder({ projectId, path: requestedPath, access: 'read-write' })
+            }
+            let chatScope = projectId
                 ? await this.persistence.createProjectChatScope(projectId, requestedPath || null)
                 : null
+            if (input?.workspace && chatScope) {
+                // A worktree chat writes only its selected tree; the original project
+                // and other worktrees remain available as read-only reference roots.
+                const { scopeChatWorktree } = await import('../services/developer-worktrees')
+                chatScope = scopeChatWorktree(chatScope, requestedPath)
+            }
             await this.pluginRegistry.createChatScope(plannedSessionId, projectId || null, input?.mode !== 'playground', pluginSelection)
             if (input?.mode !== 'playground') await this.pluginRegistry.ensureAvailableChatScope(plannedSessionId, projectId || null)
             if (pluginSelection) await this.stopCanonicalVoiceForNavigation()
             const result = await createAssistantSessionAction(this.actionDeps, {
                 ...input,
+                ...(input?.workspace ? { workingRoot: requestedPath, projectPath: requestedPath } : {}),
                 ...(chatScope ? { projectPath: chatScope.workingRoot } : {})
             }, { sessionId: plannedSessionId })
             sessionCreated = true
@@ -1579,6 +1592,24 @@ export class AssistantService {
     async archiveSession(sessionId: string, archived = true) {
         if (archived && this.activeCanonicalVoice?.sessionId === sessionId) await this.stopCanonicalVoiceForNavigation()
         return archiveAssistantSessionAction(this.actionDeps, sessionId, archived)
+    }
+
+    async setSessionSettled(sessionId: string, settled: boolean, migrateLegacy = false) {
+        await this.ensureReady()
+        if (typeof settled !== 'boolean') throw new Error('Choose whether to settle this chat.')
+        const session = this.state.snapshot.sessions.find(entry => entry.id === sessionId)
+        const thread = session?.threads.find(entry => entry.id === session.activeThreadId) || session?.threads[0]
+        if (!session || !thread) throw new Error('Chat not found.')
+        if (settled && session.threads.some(entry => entry.latestTurn?.state === 'running' || entry.hasPendingApprovals || entry.hasPendingUserInputs)) throw new Error('Finish the current turn before settling this chat.')
+        if (!thread.providerThreadId) await this.connectSessionRuntime(session, thread)
+        const canonicalId = findThreadRecord(this.state.snapshot, thread.id)?.thread.providerThreadId
+        if (!canonicalId) throw new Error('Connect this chat before settling it.')
+        const chat = await this.runtime.setCanonicalChatSettlement(canonicalId, settled, migrateLegacy)
+        if (typeof chat?.settled !== 'boolean') throw new Error('Update the background service to change chat settlement.')
+        this.appendEvent('session.updated', new Date().toISOString(), {
+            sessionId, patch: { settled: chat.settled, settlementManual: chat.settlementManual === true }
+        }, sessionId, thread.id)
+        return { success: true as const }
     }
 
     async deleteSession(sessionId: string) {
@@ -3038,6 +3069,8 @@ export class AssistantService {
                     sessionPatch['projectPath'] = canonicalProjectPath
                 }
                 if (chat.archived !== existing.session.archived) sessionPatch['archived'] = chat.archived
+                if (typeof chat.settled === 'boolean' && chat.settled !== existing.session.settled) sessionPatch['settled'] = chat.settled
+                if (typeof chat.settlementManual === 'boolean' && chat.settlementManual !== existing.session.settlementManual) sessionPatch['settlementManual'] = chat.settlementManual
                 if (Object.keys(sessionPatch).length > 0) {
                     sessionPatch['updatedAt'] = updatedAt
                     this.appendEvent('session.updated', updatedAt, {
@@ -3142,6 +3175,8 @@ export class AssistantService {
             })
             session.workingRoot = canonicalRuntimeCwd
             session.archived = chat.archived === true
+            session.settled = chat.settled
+            session.settlementManual = chat.settlementManual
             session.updatedAt = updatedAt
             this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
         }

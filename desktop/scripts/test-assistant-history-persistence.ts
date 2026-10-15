@@ -84,6 +84,8 @@ const session: AssistantSession = {
     playgroundLabId: null,
     pendingLabRequest: null,
     archived: false,
+    settled: true,
+    settlementManual: true,
     createdAt,
     updatedAt: currentMessage.updatedAt,
     activeThreadId: thread.id,
@@ -98,6 +100,8 @@ const SQL = await initSqlJs()
 const db = new SQL.Database()
 initializeAssistantPersistenceSchema(db)
 replaceAssistantSnapshot(db, snapshot)
+assert.equal(readAssistantPersistenceRecord(db).snapshot.sessions[0]?.settled, true, 'Cold desktop catalog retains server settlement without reapplying local age rules')
+assert.equal(readAssistantPersistenceRecord(db).snapshot.sessions[0]?.settlementManual, true, 'Canonical migration marker survives catalog cache hydration')
 const persistedThread = readAssistantPersistenceRecord(db).snapshot.sessions[0]?.threads[0]
 assert.equal(persistedThread?.canonicalHistoryModifiedAt, thread.canonicalHistoryModifiedAt)
 assert.equal(persistedThread?.canonicalHistoryEntryCount, thread.canonicalHistoryEntryCount)

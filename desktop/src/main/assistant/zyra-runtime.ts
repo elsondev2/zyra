@@ -1628,9 +1628,13 @@ export class ZyraRuntime extends EventEmitter {
         )
     }
 
+    async setCanonicalChatSettlement(threadId: string, settled: boolean, migrateLegacy: boolean): Promise<CanonicalAgentChat | null> {
+        return this.getAgentServerConnection(resolveZyraRoot()).updateCanonicalChat(threadId, { settled, settlementIfAbsent: migrateLegacy })
+    }
+
     async updateCanonicalChat(
         threadId: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean; settled?: boolean; settlementIfAbsent?: boolean }
     ): Promise<void> {
         const normalizedThreadId = String(threadId || '').trim()
         if (!normalizedThreadId) return
@@ -1985,6 +1989,7 @@ export class ZyraRuntime extends EventEmitter {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
             profile?: string
+            startInNewWorktree?: boolean
             images?: PreparedAssistantPromptImage[]
             reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
             contextCompactionThresholdTokens?: number
@@ -2597,6 +2602,7 @@ export class ZyraRuntime extends EventEmitter {
         options?: {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
+            startInNewWorktree?: boolean
             images?: PreparedAssistantPromptImage[]
             reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
             contextCompactionThresholdTokens?: number
@@ -2615,6 +2621,7 @@ export class ZyraRuntime extends EventEmitter {
                 runtimeMode: context.runtimeMode,
                 webSearch: context.webSearch ?? undefined,
                 webFetch: context.webFetch ?? undefined,
+                startInNewWorktree: options?.startInNewWorktree,
                 images: options?.images,
                 reasoningSummary: options?.reasoningSummary,
                 contextCompactionThresholdTokens: options?.contextCompactionThresholdTokens,

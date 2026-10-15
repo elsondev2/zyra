@@ -15,9 +15,11 @@ try {
   const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   const message = (content, stopReason = 'stop') => ({ role: 'assistant', content, api: model.api, provider: model.provider, model: model.id, usage, stopReason, timestamp: Date.now() });
   let request = 0;
+  let providerCalls = 0;
   let cancelMode = false;
   let signalReceived;
   const stream = (_model, context, options) => {
+    providerCalls++;
     const result = new AssistantMessageEventStream();
     signalReceived = options.signal;
     if (cancelMode) {
@@ -62,10 +64,41 @@ try {
     if (i > 100) throw new Error('Session did not begin the cancellation fixture.');
     await new Promise(resolve => setTimeout(resolve, 5));
   }
-  await session.abort();
+  const callsBeforeStop = providerCalls;
+  await session.sendCustomMessage({ customType: 'zyra_thread_message', content: 'Queued peer evidence', display: true,
+    details: { messageId: 'queued-peer-stop' } }, { triggerTurn: true, deliverAs: 'followUp' });
+  let stopDeadline;
+  try {
+    await Promise.race([session.abort(), new Promise((_, reject) => {
+      stopDeadline = setTimeout(() => reject(new Error('Stop restarted the queued peer message instead of settling')), 250);
+    })]);
+  } finally { clearTimeout(stopDeadline); }
   await pending;
+  assert.equal(providerCalls, callsBeforeStop, 'An aborted run must not restart for a queued peer message');
   assert.equal(signalReceived.aborted, true);
   assert.equal(session.isStreaming, false);
+  session.clearQueue();
+  cancelMode = false;
+  let releaseMaintenance;
+  const checkCompaction = session._checkCompaction;
+  session._checkCompaction = () => session.isStreaming
+    ? new Promise(resolve => { releaseMaintenance = () => resolve(true); })
+    : Promise.resolve(false);
+  const maintenance = session.prompt('Complete before context maintenance.');
+  for (let i = 0; !releaseMaintenance; i++) {
+    if (i > 100) throw new Error('Session did not reach post-run maintenance.');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  const maintenanceCalls = providerCalls;
+  await session.sendCustomMessage({ customType: 'zyra_thread_message', content: 'Peer arriving during maintenance', display: true },
+    { triggerTurn: true, deliverAs: 'followUp' });
+  const maintenanceStop = session.abort();
+  releaseMaintenance();
+  await Promise.all([maintenanceStop, maintenance]);
+  assert.equal(providerCalls, maintenanceCalls, 'Stop during post-run maintenance must cancel its continuation');
+  assert.equal(session.isStreaming, false);
+  session._checkCompaction = checkCompaction;
+  session.clearQueue();
   for (const [name, specifier] of [['zyra', '@zyra/engine'], ['legacy', '@earendil-works/pi-coding-agent']]) {
     const extension = path.join(directory, `${name}.ts`);
     await writeFile(extension, `import { DynamicBorder } from '${specifier}'; import { Text } from '@zyra/terminal'; export default function(api) { if (typeof DynamicBorder !== 'function' || typeof Text !== 'function') throw Error('Missing local runtime'); api.registerCommand('fixture_${name}', { description: 'Fixture', handler: async () => {} }); }`);

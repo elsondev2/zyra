@@ -1048,6 +1048,19 @@ assert.equal(liveAbortedCompletion?.itemId, `zyra-message:assistant:${liveAborte
 assert.equal(liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.errorMessage : null, 'Request was aborted')
 assert.equal(replayGuardContext.activeTurnId, null)
 
+const restartEventStart = replayGuardEvents.length
+replayGuardHandler.handleZyraEvent(replayGuardContext, { type: 'agent_start' }, {
+    turnId: 'turn-peer-restart', replay: false
+})
+assert.equal(replayGuardContext.activeTurnId, 'turn-peer-restart', 'A fresh canonical restart remains controllable after Stop')
+assert.equal(replayGuardContext.completedTurnIds.has('turn-live-aborted'), true, 'The interrupted turn retains its completion identity')
+replayGuardHandler.handleZyraEvent(replayGuardContext, { type: 'agent_end', outcome: 'interrupted' }, {
+    turnId: 'turn-peer-restart', replay: false
+})
+const peerRestartEvents = replayGuardEvents.slice(restartEventStart)
+assert.equal(peerRestartEvents.filter(event => event.type === 'turn.started').length, 1)
+assert.equal(peerRestartEvents.filter(event => event.type === 'turn.completed').length, 1)
+
 replayGuardEvents.length = 0
 replayGuardContext.completedTurnIds.clear()
 replayGuardHandler.handleZyraEvent(replayGuardContext, {
@@ -1678,6 +1691,13 @@ const liveInterruptedActivities = findProjectedRecord(projectedThread.id)?.threa
 )) || []
 assert.equal(liveInterruptedActivities.length, 1, 'live interrupted completion projects one authoritative terminal activity')
 assert.equal(liveInterruptedActivities[0]?.id, `shared-error:zyra-message:assistant:${liveAbortedTimestamp}`)
+
+handleAssistantRuntimeEvent(peerRestartEvents.find(event => event.type === 'turn.started')!, projectedDeps)
+assert.equal(findProjectedRecord(projectedThread.id)?.thread.latestTurn?.id, 'turn-peer-restart')
+assert.equal(findProjectedRecord(projectedThread.id)?.thread.latestTurn?.state, 'running', 'The UI projection exposes restarted work after an interrupted turn')
+assert.equal(findProjectedRecord(projectedThread.id)?.thread.state, 'running')
+handleAssistantRuntimeEvent(peerRestartEvents.find(event => event.type === 'turn.completed')!, projectedDeps)
+assert.equal(findProjectedRecord(projectedThread.id)?.thread.state, 'ready')
 
 const recoveredTurnEvents = replayGuardEvents.filter((event) => event.turnId === 'turn-live-recovered')
 const recoveredTurnCompletionIndex = recoveredTurnEvents.findIndex((event) => event.type === 'turn.completed')

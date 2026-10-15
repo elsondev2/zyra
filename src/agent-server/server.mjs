@@ -418,7 +418,14 @@ export class ZyraAgentServer extends EventEmitter {
       });
     }
     if (method === "catalog.update") {
+      if (params.settled !== undefined) {
+        if (typeof params.settled !== 'boolean') throw new AgentServerProtocolError('Choose whether to settle this chat.');
+        const active = this.sessions.get(this.catalog.resolveAlias(params.session));
+        const presence = this.sessionPresence(this.catalog.resolveAlias(params.session));
+        if (params.settled && (active?.latestTurn?.state === 'running' || active?.foregroundPromptRequests > 0 || presence.state === 'background' || presence.attention)) throw new AgentServerProtocolError('Finish the current turn before settling this chat.');
+      }
       const chat = await this.catalog.updateChat(params.session, {
+        ...(params.settled !== undefined ? { settled: params.settled, settlementIfAbsent: params.settlementIfAbsent === true } : {}),
         ...(params.title !== undefined ? { title: params.title } : {}),
         ...(params.project !== undefined ? { project: params.project } : {}),
         ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
@@ -626,8 +633,9 @@ export class ZyraAgentServer extends EventEmitter {
   projectCatalogChat(chat) {
     const connected = this.sessions.get(chat.canonicalChatId)?.connectedResult;
     if (!connected && chat.model == null) this.catalog.index?.queueModelPresentations?.([chat.canonicalChatId]);
-    return { ...chat, model: normalizeChatModel(connected?.config?.model || connected?.model) || normalizeChatModel(chat.model),
-      presence: this.sessionPresence(chat.canonicalChatId) };
+    const presence = this.sessionPresence(chat.canonicalChatId);
+    return { ...chat, settled: ['running', 'background'].includes(presence.state) || presence.attention ? false : chat.settled,
+      model: normalizeChatModel(connected?.config?.model || connected?.model) || normalizeChatModel(chat.model), presence };
   }
   sessionPresence(sessionKeyValue) {
     const sessionKey = String(sessionKeyValue || "").trim();
@@ -1284,7 +1292,11 @@ class ServerOwnedSession {
       if (ownsTurn) this.foregroundPromptRequests = Math.max(0, this.foregroundPromptRequests - 1);
       this.syncMemoryQueue();
       if (ownsTurn) this.server.notifyDesktopWorkspaceTurnEnded(this.sessionKey, requestContext.turnId);
-      if (ownsTurn && this.activeRequestContext === requestContext) {
+      if (ownsTurn && (this.activeRequestContext === requestContext
+        || this.foregroundPromptRequests === 0 && this.isTurnTerminal(this.activeRequestContext?.turnId))) {
+        if (this.activeRequestContext?.turnId && this.activeRequestContext.turnId !== requestContext.turnId) {
+          this.server.notifyDesktopWorkspaceTurnEnded(this.sessionKey, this.activeRequestContext.turnId);
+        }
         this.activeRequestContext = null;
         this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey });
       }
@@ -1314,7 +1326,16 @@ class ServerOwnedSession {
 
   publish(event) {
     if (event?.type === 'zyra_agent_interruption') this.pendingAgentInterruption = event.interruption;
-    if (event?.type === 'agent_start') this.pendingAgentInterruption = null;
+    if (event?.type === 'agent_start') {
+      this.pendingAgentInterruption = null;
+      // A queued continuation can begin after agent_end but before its owning
+      // request returns. Completed IDs are immutable on every client: reuse
+      // would hide the new run and make Stop target a completed turn.
+      if (!this.activeRequestContext || this.isTurnTerminal(this.activeRequestContext.turnId)) {
+        this.activeRequestContext = { ...this.activeRequestContext, turnId: `agent-turn-${randomUUID()}` };
+        this.server.notifyDesktopWorkspaceTurn(this.sessionKey, this.activeRequestContext.turnId);
+      }
+    }
     if (event?.type === 'agent_end' && this.pendingAgentInterruption) {
       event = { ...event, outcome: 'interrupted', interruption: this.pendingAgentInterruption };
       this.pendingAgentInterruption = null;
@@ -1343,6 +1364,7 @@ class ServerOwnedSession {
     const previousBackgroundWork = this.hasBackgroundWork();
     this.updateBackgroundWork(event);
     this.updateRuntimeSummary(event, publishedRequestContext, occurredAt);
+    if (event?.type === 'agent_start') this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     if (event?.type === "session_config") {
       const config = {
         model: event.model ?? this.connectedResult?.config?.model ?? this.connectedResult?.model,
@@ -1392,7 +1414,10 @@ class ServerOwnedSession {
     ) {
       // Keep attribution and serialization until the worker finishes post-turn
       // maintenance. Presence already reflects the completed answer above.
-      if (this.foregroundPromptRequests === 0) this.activeRequestContext = null;
+      if (this.foregroundPromptRequests === 0) {
+        this.server.notifyDesktopWorkspaceTurnEnded(this.sessionKey, publishedRequestContext.turnId);
+        this.activeRequestContext = null;
+      }
       this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
       this.releaseUserInputContinuations();
     }

@@ -299,6 +299,11 @@ function readAssistantMeta(db: SqlDatabase): AssistantMetaRow {
 function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSnapshot['playground']): AssistantSession[] {
     const sessions = new Map<string, AssistantSession>()
     const chatScopes = readAssistantChatScopes(db)
+    const canonicalSettlement = new Map<string, Pick<AssistantSession, 'settled' | 'settlementManual'>>()
+    for (const row of db.exec("SELECT key, value FROM assistant_meta WHERE key LIKE 'canonicalSettlement:%'")[0]?.values || []) {
+        const cached = parseJson<Record<string, unknown> | null>(row[1], null)
+        if (cached && typeof cached.settled === 'boolean') canonicalSettlement.set(String(row[0]).slice('canonicalSettlement:'.length), { settled: cached.settled, settlementManual: cached.settlementManual === true })
+    }
     const sessionRoutePatches: Array<{
         sessionId: string
         mode: AssistantSession['mode']
@@ -319,6 +324,7 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
         const chatScope = chatScopes.get(sessionId) || null
         const session: AssistantSession = {
             id: sessionId,
+            ...canonicalSettlement.get(sessionId),
             title: String(row[1] || 'New Session'),
             mode: String(row[2] || 'work') === 'playground' ? 'playground' : 'work',
             projectPath: toNullableString(row[3]),

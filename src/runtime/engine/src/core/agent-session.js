@@ -76,6 +76,7 @@ class AgentSession {
   _unsubscribeAgent;
   _eventListeners = [];
   _isAgentRunActive = false;
+  _agentRunAbortEpoch = 0;
   _idleWaitPromise;
   _resolveIdleWait;
   /** Tracks pending steering messages for UI display. Removed when delivered. */
@@ -502,6 +503,7 @@ class AgentSession {
    * Call this when completely done with the session.
    */
   dispose() {
+    this._agentRunAbortEpoch++;
     try {
       this.abortRetry();
       this.abortCompaction();
@@ -683,10 +685,12 @@ class AgentSession {
   // Prompting
   // =========================================================================
   async _runAgentPrompt(messages) {
+    const abortEpoch = this._agentRunAbortEpoch;
     this._isAgentRunActive = true;
     try {
       await this.agent.prompt(messages);
-      while (await this._handlePostAgentRun()) {
+      while (abortEpoch === this._agentRunAbortEpoch && await this._handlePostAgentRun()) {
+        if (abortEpoch !== this._agentRunAbortEpoch) break;
         await this.agent.continue();
       }
     } finally {
@@ -698,7 +702,7 @@ class AgentSession {
   async _handlePostAgentRun() {
     const msg = this._lastAssistantMessage;
     this._lastAssistantMessage = void 0;
-    if (!msg) {
+    if (!msg || msg.stopReason === "aborted") {
       return false;
     }
     if (this._isRetryableError(msg) && await this._prepareRetry(msg)) {
@@ -1089,6 +1093,7 @@ ${args}` : skillBlock;
    * Abort current operation and wait for agent to become idle.
    */
   async abort() {
+    this._agentRunAbortEpoch++;
     this.abortRetry();
     this.agent.abort();
     await this.waitForIdle();

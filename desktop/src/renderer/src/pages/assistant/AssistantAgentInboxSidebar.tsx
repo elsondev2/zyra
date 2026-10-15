@@ -1,3 +1,5 @@
+import { setChatSettlement } from './assistant-chat-menu-state'
+import type { AssistantToastInput } from './AssistantPageHelpers'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
@@ -12,7 +14,7 @@ import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { useStableSidebarGroups } from './useStableSidebarGroups'
 import { getSidebarSettlementActivityKey, isAssistantChatSettled, upgradeSidebarSettlementOverrides, type SettlementOverride, type SettlementOverrides } from './assistant-sidebar-settlement'
-import { useAssistantSettlementOverrides } from './assistant-settlement-store'
+import { useAssistantSettlementOverrides, migrateCanonicalSettlementOverrides } from './assistant-settlement-store'
 import { createChatSettlementMenuItem } from './assistant-chat-actions-menu'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
 import { AssistantAgentPresenceIndicator } from './AssistantAgentPresenceIndicator'
@@ -62,6 +64,7 @@ type Props = {
     onCreateProjectChat: (projectPath?: string) => Promise<void> | void
     onSelectSession: (sessionId: string) => Promise<void> | void
     onRename: (session: AssistantSession) => Promise<void> | void
+    onShowToast?: (input: AssistantToastInput) => void
     getSessionMenuItems: (session: AssistantSession) => FileActionsMenuItem[]
     onOpenContextMenu: (event: ReactMouseEvent<HTMLElement>, session: AssistantSession, items: FileActionsMenuItem[]) => void
 }
@@ -283,6 +286,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
             return next
         })
     }, [visibleSessions])
+    useEffect(() => { void migrateCanonicalSettlementOverrides(visibleSessions) }, [visibleSessions])
     const projectGroups = useMemo(() => groupSessionsByProject(visibleSessions, props.projectIconOverrides, props.projects), [props.projectIconOverrides, props.projects, visibleSessions])
     const projectQuery = projectSearch.trim().toLocaleLowerCase()
     const filteredProjectGroups = projectGroups.filter((group) => !projectQuery || [group.label, group.path].join(' ')
@@ -461,10 +465,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
     const setSettlement = (item: SidebarItem, state: SettlementOverride['state']) => {
         if (item.pinned) return
         stableLayout.release()
-        setSettlementOverrides((current) => {
-            const next = { ...current, [item.session.id]: { state, activityAt: item.activityAt, activityKey: getSidebarSettlementActivityKey(item.session) } }
-            return next
-        })
+        void setChatSettlement(item.session, state === 'settled').catch(error => props.onShowToast?.({ message: error.message, tone: 'error' }))
     }
 
     return (

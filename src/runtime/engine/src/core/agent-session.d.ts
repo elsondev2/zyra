@@ -202,6 +202,7 @@ export declare class AgentSession {
     private _unsubscribeAgent?;
     private _eventListeners;
     private _isAgentRunActive;
+    private _agentRunAbortEpoch;
     private _idleWaitPromise;
     private _resolveIdleWait;
     /** Tracks pending steering messages for UI display. Removed when delivered. */

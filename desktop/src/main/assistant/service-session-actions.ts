@@ -539,6 +539,8 @@ export async function sendAssistantPromptAction(
         return triggerDevContextCompactionTestPrompt(deps, session.id, thread, compactionTestCommand, occurredAt)
     }
 
+    if (options?.startInNewWorktree !== undefined && typeof options.startInNewWorktree !== 'boolean') throw new Error('Invalid worktree choice.')
+    if (options?.startInNewWorktree && await deps.getFirstUserMessageText(session.id)) throw new Error('Choose a new worktree before the first message in a chat.')
     const promptImages = preparedImages ?? await prepareAssistantPromptImages(options?.images)
     const runtimePolicy = normalizeAssistantRuntimePolicy(
         await deps.getRuntimePolicy?.().catch((error) => {
@@ -656,6 +658,7 @@ export async function sendAssistantPromptAction(
         }
         const result = await deps.runtime.sendPrompt(runtimeThreadId, input, {
             turnId: submittedTurnId,
+            startInNewWorktree: options?.startInNewWorktree,
             model: model || undefined,
             runtimeMode: options?.runtimeMode,
             interactionMode: 'default',
