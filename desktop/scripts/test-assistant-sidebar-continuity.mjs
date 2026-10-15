@@ -31,6 +31,11 @@ try {
             builder.onLoad({ filter: /.*/, namespace: 'test-unused' }, () => ({ contents: userInputForm ? 'export default function UnusedPreview(props){window.fixtureAttachmentPreview=props.file;return null}' : 'export default function UnusedPreview(){return null}', loader: 'js' }))
             builder.onResolve({ filter: /monaco\/runtime$/ }, () => ({ path: 'editor-runtime', namespace: 'test-editor-runtime' }))
             builder.onLoad({ filter: /.*/, namespace: 'test-editor-runtime' }, () => ({ contents: 'export const monaco = {}; export function ensureMonacoRuntime(){throw new Error("Unexpected editor in agent message fixture")}', loader: 'js' }))
+            // The header imports developer diffs, but these message fixtures do
+            // not open them. Fail if a worker is requested instead of requiring
+            // Vite's worker loader just to import the real header.
+            builder.onResolve({ filter: /^@pierre\/diffs\/worker\/worker\.js\?worker$/ }, () => ({ path: 'diff-worker', namespace: 'test-unused-diff-worker' }))
+            builder.onLoad({ filter: /.*/, namespace: 'test-unused-diff-worker' }, () => ({ contents: 'export default class UnusedDiffWorker { constructor(){throw new Error("Unexpected diff worker in sidebar continuity fixture")} }', loader: 'js' }))
         } }], logLevel: 'silent' })
     // Compile the actual app styles, but keep test fonts/assets entirely local.
     const source = (await readFile(join(desktop, 'src/renderer/src/index.css'), 'utf8')).replace(/^@import[^\n]+\n/gm, '')

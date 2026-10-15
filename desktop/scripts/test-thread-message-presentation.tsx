@@ -8,9 +8,12 @@ import { resolveAgentThreadOwner } from '../src/shared/assistant/thread-owner'
 import { buildSessionSubagentTree, isAssistantDraftThread } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 import type { AssistantSession, AssistantThread } from '../src/shared/assistant/contracts'
 import { findAssistantThreadLink } from '../src/renderer/src/pages/assistant/assistant-thread-navigation'
-import { AssistantConversationHeader } from '../src/renderer/src/pages/assistant/AssistantConversationHeader'
 // Canvas-dependent Markdown is verified in the hidden renderer fixture.
 mock.module('../src/renderer/src/pages/assistant/AssistantTimelineText', () => ({ CollapsibleUserMessageBody: ({ content }: { content: string }) => <span>{content}</span> }))
+// The header also imports developer diffs. Their Vite worker boundary is covered
+// by the renderer suite; this plain Bun presentation test has no worker loader.
+mock.module('@pierre/diffs/worker/worker.js?worker', () => ({ default: class UnusedDiffWorker { constructor() { throw new Error('Unexpected diff worker in peer-message presentation fixture') } } }))
+const { AssistantConversationHeader } = await import('../src/renderer/src/pages/assistant/AssistantConversationHeader')
 const { AssistantTimelineThreadMessage } = await import('../src/renderer/src/pages/assistant/AssistantTimelineThreadMessage')
 
 const details = { messageId: 'receipt-1', senderThreadId: 'agent-run:a', senderCanonicalThreadId: 'chat-a', senderLabel: 'Xara', recipientThreadId: 'chat-b', text: 'Check the evidence from my thread.', createdAt: '2026-10-01T12:00:00.000Z' }
