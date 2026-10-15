@@ -189,6 +189,16 @@ try{
  await act(async()=>requests.shift().resolve({success:true,entries:[{...gitEntries[0],staged:true},gitEntries[1]]}))
  await act(async()=>stages[1].resolve({success:true}));await flush(20)
  await act(async()=>requests.shift().resolve({success:true,entries:gitEntries.map(entry=>({...entry,staged:true}))}))
+ for(const [label,expected] of [['Staged','staged'],['Unstaged','unstaged'],['All','combined']]){
+  await act(async()=>scopeButton(label).click())
+  await act(async()=>document.querySelector('[aria-label="View changes for src/a.ts"]').click());await flush(20)
+  const read=diffReads.shift()
+  check(read?.path==='src/a.ts'&&read.scope===expected,'partially staged file opens the '+expected+' diff in '+label+' scope')
+  await act(async()=>read.resolve({success:true,diff:'fixture '+expected+' patch'}));await flush(20)
+  if(requests.length)await act(async()=>requests.shift().resolve({success:true,entries:gitEntries.map(entry=>({...entry,staged:true}))}))
+  check(document.querySelector('pre')?.textContent.includes('fixture '+expected+' patch'),'selected diff content is visible')
+  await act(async()=>[...document.querySelectorAll('button')].find(button=>button.textContent==='src/a.ts').click());await flush(20)
+ }
  const messageInput=document.querySelector('[aria-label="Commit message"]')
  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(messageInput,'Check review guard');messageInput.dispatchEvent(new Event('input',{bubbles:true}))})
  await act(async()=>[...document.querySelectorAll('button')].find(button=>button.textContent==='Review commit').click());await flush(20)

@@ -191,6 +191,7 @@ const syntaxTargets = [
 ];
 
 const coreTests = [
+  "scripts/test-runtime-schema-paths.mjs",
   "scripts/test-chat-settlement.mjs",
   "scripts/test-chatgpt-account-aliases.mjs",
   "scripts/test-ci-relay.mjs",

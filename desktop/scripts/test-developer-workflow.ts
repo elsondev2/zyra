@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { developerGit, listDeveloperWorktrees, resolveChatWorktree, scopeChatWorktree } from '../src/main/services/developer-worktrees'
-import { DeveloperTasks, workspaceRevision } from '../src/main/services/developer-tasks'
+import { DeveloperTasks, workspaceRevision, stopDeveloperTaskProcess } from '../src/main/services/developer-tasks'
 import { previewRecordedUndo, applyRecordedUndo } from '../src/main/services/developer-undo'
 import { diffCodeSelection } from '../src/renderer/src/components/ui/diff-viewer/diff-code-selection'
 import { parsePatchFiles } from '@pierre/diffs'
@@ -87,6 +88,55 @@ try {
     assert.ok((await tasks.workspace(root)).tasks.find(task => task.id === running.id)?.urls.includes('http://localhost:3456/'))
     await tasks.stop(running.id)
     assert.equal((await waitTask(running.id)).state, 'stopped')
+    assert.equal((tasks as any).processes.has(running.id), false, 'Stop resolves only after the owned process closes')
+
+    // Real owner and POSIX policy, controlled signal transport on every host.
+    // No operating-system process receives the synthetic group signals.
+    for (const force of [false, true]) {
+        const child = Object.assign(new EventEmitter(), { pid: 2147483000 })
+        const signals: string[] = []
+        const synthetic = new DeveloperTasks(join(fixture, `stop-${force}.json`), process.env,
+            process => stopDeveloperTaskProcess(process, 'linux', ((pid: number, signal: string) => {
+                assert.equal(pid, -child.pid)
+                signals.push(signal)
+                if (signal === 'SIGKILL') queueMicrotask(() => child.emit('close', null, 'SIGKILL'))
+                return true
+            }) as typeof globalThis.process.kill))
+        await synthetic.workspace(root)
+        const record = { ...running, id: `synthetic-stop-${force}`, state: 'running' }
+        ;(synthetic as any).tasks.push(record)
+        ;(synthetic as any).processes.set(record.id, child)
+        const stopping = synthetic.stop(record.id)
+        try {
+            await new Promise(resolve => setTimeout(resolve, 20))
+            assert.equal(record.state, 'running', 'Sending SIGTERM alone must not report a still-running task as stopped')
+            assert.equal((synthetic as any).processes.has(record.id), true)
+            await assert.rejects(synthetic.start(root, 'dev'), /already running/, 'A task awaiting close cannot start a duplicate')
+            if (!force) child.emit('close', 0, null)
+            await stopping
+            assert.equal(record.state, 'stopped')
+            assert.equal((synthetic as any).processes.has(record.id), false)
+            assert.deepEqual(signals, force ? ['SIGTERM', 'SIGKILL'] : ['SIGTERM'])
+        } finally {
+            child.emit('close', null, 'SIGKILL')
+            await stopping.catch(() => undefined)
+        }
+    }
+    const reapedChild = Object.assign(new EventEmitter(), { pid: 2147483000 })
+    await stopDeveloperTaskProcess(reapedChild as any, 'linux', (() => {
+        queueMicrotask(() => reapedChild.emit('close', 0, null))
+        throw Object.assign(new Error('Group already exited'), { code: 'ESRCH' })
+    }) as typeof process.kill)
+    const failedStop = new DeveloperTasks(join(fixture, 'failed-stop.json'), process.env, async () => { throw new Error('Synthetic stop failure') })
+    await failedStop.workspace(root)
+    const retained = { ...running, id: 'retained-process', state: 'running' }
+    ;(failedStop as any).tasks.push(retained)
+    ;(failedStop as any).processes.set(retained.id, { pid: 2147483000 })
+    await assert.rejects(failedStop.stop(retained.id), /Synthetic stop failure/)
+    assert.equal(retained.state, 'running', 'Failed termination must not report stopped')
+    assert.equal((failedStop as any).processes.has(retained.id), true, 'Failed termination retains the owned process')
+    await assert.rejects(failedStop.start(root, 'dev'), /already running/)
+    ;(failedStop as any).processes.delete(retained.id)
     await new Promise(resolve => setTimeout(resolve, 100))
     assert.ok((await new DeveloperTasks(storage).workspace(root)).tasks.some(task => task.id === pass.id && task.state === 'passed'))
 

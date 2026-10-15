@@ -11,7 +11,6 @@
         "test:assistant-user-input-form": "bun scripts/test-assistant-sidebar-continuity.mjs --user-input-form",
         "test:compaction-replay": "bun scripts/test-compaction-reconciliation.ts && bun scripts/test-pi-assistant-lifecycle.ts",
         "test:skill-context-presentation": "bun scripts/test-skill-context-presentation.ts",
-        "test:browser-new-tab-layout": "node scripts/test-browser-new-tab-layout-renderer.mjs",
         "test:developer-workflow": "bun scripts/test-project-content-search.ts && bun scripts/test-developer-workflow.ts && bun scripts/test-developer-workflow-renderer.tsx && bun scripts/test-command-palette-account-usage.tsx && bun scripts/test-chatgpt-account-identity.tsx && bun scripts/test-composer-presentation.tsx",
         "test:chatgpt-account-identity": "bun scripts/test-command-palette-account-usage.tsx && bun scripts/test-chatgpt-account-identity.tsx",
         "test:composer-presentation": "bun scripts/test-composer-presentation.tsx",

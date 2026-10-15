@@ -19,6 +19,7 @@ function createRuntime(finalMessage) {
       this.observedPrompt = text;
       this.observedPromptOptions = options;
       this.observedSystemPrompt = this.agent.state.systemPrompt;
+      this.state.messages.push({ role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() });
       this.state.messages.push(finalMessage);
       entries.push({ type: "message", message: finalMessage });
     },
@@ -120,16 +121,20 @@ try {
   assert.equal(skillMessages[0].options.triggerTurn, false, 'Loading skill context cannot start its own turn');
   assert.match(skillMessages[0].content, /Synthetic skill instructions/);
   assert.equal(skillRuntime.session.observedPromptOptions.expandPromptTemplates, false, 'The native SDK cannot expand the visible reference again');
+  const modelRequestText = convertToLlm(skillRuntime.session.state.messages).flatMap(message => typeof message.content === 'string' ? [message.content] : message.content.filter(block => block.type === 'text').map(block => block.text)).join('\n');
+  assert.equal(modelRequestText.split('whats this for?').length - 1, 1, 'Actual model context must receive the skill request only once');
   assert.match(convertToLlm(skillRuntime.session.state.messages)[0].content[0].text, /Synthetic skill instructions/, 'Hidden skill context still reaches the actual model-message transformer');
   await runZyraPrintPrompt(skillRuntime, '/skill:fixture-skill describe it');
   assert.equal(skillRuntime.session.observedPrompt, '/skill:fixture-skill describe it', 'Print prompts retain the same context boundary');
   assert.equal(skillMessages.length, 2);
+  assert.doesNotMatch(skillMessages.at(-1).content, /User: describe it/, 'Print skill context excludes the repeated user request');
   skillRuntime.session.isStreaming = true;
   for (const mode of ['steer', 'queue']) {
     assert.equal(await queueZyraMidRunInput(skillRuntime, '/skill:fixture-skill continue', { mode }), mode);
     const delivery = mode === 'queue' ? 'followUp' : 'steer';
     assert.equal(skillMessages.at(-1).options.deliverAs, delivery);
     assert.equal(skillRuntime.session.observedPrompt, '/skill:fixture-skill continue');
+    assert.doesNotMatch(skillMessages.at(-1).content, /User: continue/, 'Queued and steering skill context excludes the repeated request');
     assert.equal(skillRuntime.session.observedPromptOptions.streamingBehavior, delivery);
     assert.equal(skillRuntime.session.observedPromptOptions.expandPromptTemplates, false);
   }

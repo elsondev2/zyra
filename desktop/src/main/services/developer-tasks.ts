@@ -39,13 +39,56 @@ async function projectScripts(root: string): Promise<Pick<DeveloperWorkspace, 's
     return { scripts, runner }
 }
 
+export async function stopDeveloperTaskProcess(
+    child: ChildProcess,
+    platform: NodeJS.Platform = process.platform,
+    signalGroup: typeof process.kill = process.kill
+): Promise<void> {
+    if (!child.pid) throw new Error('Task has no owned process.')
+    let closed = false
+    let notifyClose!: () => void
+    const completion = new Promise<void>(resolve => { notifyClose = resolve })
+    const onClose = () => { closed = true; notifyClose() }
+    child.once('close', onClose)
+    const waitForClose = async (milliseconds: number) => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try { await Promise.race([completion, new Promise<void>(resolve => { timer = setTimeout(resolve, milliseconds) })]) }
+        finally { clearTimeout(timer) }
+        return closed
+    }
+    try {
+        if (platform === 'win32') {
+            await new Promise<void>((resolve, reject) => {
+                const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
+                killer.once('error', reject)
+                killer.once('exit', code => code === 0 || closed ? resolve() : reject(new Error('Could not stop task.')))
+            })
+        } else {
+            try {
+                signalGroup(-child.pid, 'SIGTERM')
+                if (!await waitForClose(1_000)) signalGroup(-child.pid, 'SIGKILL')
+            } catch (error) {
+                // The OS may reap the group just before Node delivers close.
+                if ((error as NodeJS.ErrnoException).code !== 'ESRCH' || !await waitForClose(3_000)) throw error
+            }
+        }
+        if (!await waitForClose(3_000)) throw new Error('The task has not exited. Its process is still tracked; try Stop again.')
+    } finally { child.off('close', onClose) }
+}
+
 export class DeveloperTasks {
     private tasks: DeveloperTask[] = []
     private processes = new Map<string, ChildProcess>()
+    private stopping = new Map<string, Promise<void>>()
+    private stopRequested = new Set<string>()
     private starting = new Set<string>()
     private ready: Promise<void>
     private saves = Promise.resolve()
-    constructor(private storagePath: string, private environment: NodeJS.ProcessEnv = process.env) {
+    constructor(
+        private storagePath: string,
+        private environment: NodeJS.ProcessEnv = process.env,
+        private stopProcess: (child: ChildProcess) => Promise<void> = stopDeveloperTaskProcess
+    ) {
         this.ready = readFile(storagePath, 'utf8').then(raw => {
             const saved = JSON.parse(raw)
             if (Array.isArray(saved)) this.tasks = saved.filter(task => task && typeof task.id === 'string' && typeof task.root === 'string').slice(-100).map(task => ({ ...task, output: String(task.output || '').slice(-32_768), state: task.state === 'running' ? 'stopped' : task.state }))
@@ -86,7 +129,7 @@ export class DeveloperTasks {
         if (this.processes.size >= 8) throw new Error('Stop a running task before starting another.')
         const { scripts, runner } = await projectScripts(root)
         if (!/^[\w:.-]+$/.test(name) || !Object.hasOwn(scripts, name)) throw new Error('Choose an existing package script.')
-        if (this.tasks.some(task => task.root === root && task.name === name && task.state === 'running')) throw new Error('This task is already running.')
+        if (this.tasks.some(task => task.root === root && task.name === name && (task.state === 'running' || this.processes.has(task.id)))) throw new Error('This task is already running.')
         const task: DeveloperTask = { id: randomUUID(), root, name, command: `${runner} run ${name}`, state: 'running', startedAt: new Date().toISOString(), output: '', urls: [], sourceRevision: await workspaceRevision(root), stale: false }
         this.tasks.push(task)
         // Keep running processes and a bounded amount of completed evidence.
@@ -103,8 +146,9 @@ export class DeveloperTasks {
         child.once('error', error => { task.output = `${task.output}\n${error.message}`.slice(-32_768); task.state = 'failed' })
         child.once('close', (code, signal) => {
             this.processes.delete(task.id)
+            const stopRequested = this.stopRequested.delete(task.id)
             task.exitCode = code; task.finishedAt = new Date().toISOString()
-            if (task.state === 'running') task.state = signal ? 'stopped' : code === 0 ? 'passed' : 'failed'
+            if (task.state === 'running') task.state = stopRequested || signal ? 'stopped' : code === 0 ? 'passed' : 'failed'
             void this.save()
         })
         await this.save()
@@ -112,16 +156,22 @@ export class DeveloperTasks {
     }
     async stop(id: string): Promise<void> {
         await this.ready
+        const existing = this.stopping.get(id)
+        if (existing) return existing
         const child = this.processes.get(id)
         if (!child?.pid) throw new Error('Task is no longer running.')
-        if (process.platform === 'win32') await new Promise<void>((resolve, reject) => {
-            const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
-            killer.once('error', reject); killer.once('exit', code => code === 0 ? resolve() : reject(new Error('Could not stop task.')))
-        })
-        else process.kill(-child.pid, 'SIGTERM')
-        const task = this.tasks.find(item => item.id === id)
-        if (task) task.state = 'stopped'
-        await this.save()
+        this.stopRequested.add(id)
+        const pending = (async () => {
+            await this.stopProcess(child)
+            this.stopRequested.delete(id)
+            if (this.processes.get(id) === child) this.processes.delete(id)
+            const task = this.tasks.find(item => item.id === id)
+            if (task) task.state = 'stopped'
+            await this.save()
+        })()
+        this.stopping.set(id, pending)
+        try { await pending }
+        finally { if (this.stopping.get(id) === pending) this.stopping.delete(id) }
     }
     async dispose(): Promise<void> { await Promise.allSettled([...this.processes.keys()].map(id => this.stop(id))) }
 }
