@@ -29,7 +29,7 @@ window.testSnapshot={selectedSessionId:'chat-a',sessions:[{id:'chat-a',projectPa
 window.testSettings={theme:'dark',appearanceResolvedMode:'dark',defaultShell:'cmd',accentColor:{primary:'#4385ff'}}
 const check=(value,message)=>{if(!value)throw Error(message)}
 const requests=[],reads=[],attachments=[],previews=[],checkouts=[],terminalCalls=[]
-const startedTasks=[],stoppedTasks=[],actionErrors=[],stages=[],diffReads=[],commits=[]
+const startedTasks=[],stoppedTasks=[],actionErrors=[],stages=[],unstages=[],diffReads=[],commits=[]
 let taskRecords=[]
 window.testPreviews=previews
 window.devscope={
@@ -45,6 +45,7 @@ window.devscope={
  startDeveloperTask:(folder,name)=>new Promise(resolve=>startedTasks.push({folder,name,finish:state=>{const task={id:name,root:folder,name,command:'npm run '+name,state,sourceRevision:'test',startedAt:'2026-10-08T12:00:00Z',stale:false,output:'real fixture output',urls:[]};taskRecords.push(task);resolve({success:true,task})}})),
  stopDeveloperTask:id=>new Promise(resolve=>stoppedTasks.push({id,finish:()=>{taskRecords=taskRecords.map(task=>task.id===id?{...task,state:'stopped'}:task);resolve({success:true})}})),
  stageFiles:(folder,paths)=>new Promise(resolve=>stages.push({folder,paths,resolve})),
+ unstageFiles:(folder,paths)=>new Promise(resolve=>unstages.push({folder,paths,resolve})),
  getWorkingDiff:(folder,path,scope)=>new Promise(resolve=>diffReads.push({folder,path,scope,resolve})),
  createCommit:async(folder,message)=>{commits.push({folder,message});return{success:true}},
  listBranches:async()=>({success:true,branches:[{name:'main',current:true,isRemote:false},{name:'feature',current:false,isRemote:false},{name:'origin/feature',current:false,isRemote:true}]}),
@@ -199,6 +200,18 @@ try{
   check(document.querySelector('pre')?.textContent.includes('fixture '+expected+' patch'),'selected diff content is visible')
   await act(async()=>[...document.querySelectorAll('button')].find(button=>button.textContent==='src/a.ts').click());await flush(20)
  }
+ await act(async()=>scopeButton('Unstaged').click())
+ const priorStages=stages.length,priorUnstages=unstages.length
+ await act(async()=>(document.querySelector('[aria-label="Stage src/a.ts"]')||document.querySelector('[aria-label="Unstage src/a.ts"]')).click());await flush(20)
+ check(stages.length===priorStages+1&&unstages.length===priorUnstages,'partially staged row in Unstaged stages the visible working changes without removing the existing index')
+ await act(async()=>stages.at(-1).resolve({success:true}));await flush(20)
+ await act(async()=>requests.shift().resolve({success:true,entries:gitEntries.map(entry=>({...entry,staged:true}))}));await flush(20)
+ await act(async()=>scopeButton('Staged').click())
+ await act(async()=>document.querySelector('[aria-label="Unstage src/a.ts"]').click());await flush(20)
+ check(unstages.length===priorUnstages+1,'same partially staged row in Staged uses the explicit unstage action')
+ await act(async()=>unstages.at(-1).resolve({success:true}));await flush(20)
+ await act(async()=>requests.shift().resolve({success:true,entries:gitEntries.map(entry=>({...entry,staged:true}))}));await flush(20)
+ await act(async()=>scopeButton('All').click())
  const messageInput=document.querySelector('[aria-label="Commit message"]')
  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(messageInput,'Check review guard');messageInput.dispatchEvent(new Event('input',{bubbles:true}))})
  await act(async()=>[...document.querySelectorAll('button')].find(button=>button.textContent==='Review commit').click());await flush(20)
