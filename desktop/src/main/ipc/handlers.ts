@@ -32,6 +32,7 @@ import { handleMemoryGetOverview, handleMemoryGetJobStatus, handleMemoryGetModel
 import {
     handleAssistantApprovePendingPlaygroundLabRequest,
     handleAssistantArchiveSession,
+    handleAssistantSettleSession,
     handleAssistantAssociateProjectFolder,
     handleAssistantAttachSessionToPlaygroundLab,
     handleAssistantAgentAction,
@@ -58,6 +59,8 @@ import {
     handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
+    handleAssistantListVisualizations,
+    handleAssistantGetVisualization,
     handleAssistantGetUsageSummary,
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
@@ -103,6 +106,7 @@ import {
     handleAssistantStopRealtimeVoice,
     handleAssistantSubscribeRealtimeVoice,
     handleAssistantTranscribeVoice,
+    handleAssistantCancelVoiceTranscription,
     handleAssistantUnsubscribeRealtimeVoice,
     handleAssistantUpdateProject,
     handleAssistantUpdateSkillSourceSettings,
@@ -123,6 +127,8 @@ import {
 import { ASSISTANT_IPC } from '../../shared/assistant/contracts'
 import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../../shared/platform-window-chrome'
 import { peekAssistantService } from '../assistant'
+import { handleSearchProjectContents } from './handlers/project-content-search-handlers'
+import { registerDeveloperWorkflowHandlers } from './handlers/developer-workflow-handlers'
 import {
     handleCopyToClipboard,
     handleDiscoverLocalGitHubProjects,
@@ -473,12 +479,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.getHistoryAroundMessage, requireCompletedSetup(handleAssistantGetHistoryAroundMessage))
     ipcMain.handle(ASSISTANT_IPC.hydrateHistoryBody, requireCompletedSetup(handleAssistantHydrateHistoryBody))
     ipcMain.handle(ASSISTANT_IPC.getReviewIndex, requireCompletedSetup(handleAssistantGetReviewIndex))
+    ipcMain.handle(ASSISTANT_IPC.listVisualizations, requireCompletedSetup(handleAssistantListVisualizations))
+    ipcMain.handle(ASSISTANT_IPC.getVisualization, requireCompletedSetup(handleAssistantGetVisualization))
     ipcMain.handle(ASSISTANT_IPC.getTurnDetail, requireCompletedSetup(handleAssistantGetTurnDetail))
     ipcMain.handle(ASSISTANT_IPC.searchChats, requireCompletedSetup(handleAssistantSearchChats))
     ipcMain.handle(ASSISTANT_IPC.searchTurns, requireCompletedSetup(handleAssistantSearchTurns))
     ipcMain.handle(ASSISTANT_IPC.renameSession, requireCompletedSetup(handleAssistantRenameSession))
     ipcMain.handle(ASSISTANT_IPC.regenerateSessionTitle, requireCompletedSetup(handleAssistantRegenerateSessionTitle))
     ipcMain.handle(ASSISTANT_IPC.archiveSession, requireCompletedSetup(handleAssistantArchiveSession))
+    ipcMain.handle(ASSISTANT_IPC.settleSession, requireCompletedSetup(handleAssistantSettleSession))
     ipcMain.handle(ASSISTANT_IPC.deleteSession, requireCompletedSetup(handleAssistantDeleteSession))
     ipcMain.handle(ASSISTANT_IPC.deleteMessage, requireCompletedSetup(handleAssistantDeleteMessage))
     ipcMain.handle(ASSISTANT_IPC.clearLogs, requireCompletedSetup(handleAssistantClearLogs))
@@ -508,6 +517,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.stopRealtimeVoice, requireCompletedSetup(handleAssistantStopRealtimeVoice))
     ipcMain.handle(ASSISTANT_IPC.getVoiceTranscriptionState, requireCompletedSetup(handleAssistantGetVoiceTranscriptionState))
     ipcMain.handle(ASSISTANT_IPC.transcribeVoice, requireCompletedSetup(handleAssistantTranscribeVoice))
+    ipcMain.handle(ASSISTANT_IPC.cancelVoiceTranscription, requireCompletedSetup(handleAssistantCancelVoiceTranscription))
     ipcMain.handle(ASSISTANT_IPC.saveVoiceHistory, requireCompletedSetup(handleAssistantSaveVoiceHistory))
     ipcMain.handle(ASSISTANT_IPC.listVoiceHistory, requireCompletedSetup(handleAssistantListVoiceHistory))
     ipcMain.handle(ASSISTANT_IPC.getFailedVoiceRecording, requireCompletedSetup(handleAssistantGetFailedVoiceRecording))
@@ -521,6 +531,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:discoverLocalGitHubProjects', handleDiscoverLocalGitHubProjects)
     ipcMain.handle('devscope:indexAllFolders', handleIndexAllFolders)
     ipcMain.handle('devscope:searchIndexedPaths', handleSearchIndexedPaths)
+    ipcMain.handle('devscope:searchProjectContents', handleSearchProjectContents)
+    registerDeveloperWorkflowHandlers()
     ipcMain.handle('devscope:openInExplorer', handleOpenInExplorer)
     ipcMain.handle('devscope:openInTerminal', handleOpenInTerminal)
     ipcMain.handle('devscope:listInstalledIdes', handleListInstalledIdes)

@@ -57,6 +57,7 @@ import { reportDesktopThreadView } from '../../assistant/thread-view-window'
 import { hasActiveBrowserAssistantClient } from '../../assistant/browser-client-lease'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from '../../assistant/clipboard-attachments'
 import { getCodexVoiceTranscriptionState } from '../../assistant/codex-voice-transcription'
+import { VoiceTranscriptionJobs } from '../../assistant/voice-transcription-jobs'
 import { deleteVoiceHistory, getFailedVoiceRecording, listVoiceHistory, saveVoiceHistory, transcribeVoiceAndSave } from '../../assistant/voice-history'
 
 async function withAssistantResult<T>(work: () => Promise<T> | T): Promise<T | { success: false; error: string }> {
@@ -103,6 +104,14 @@ export async function handleAssistantBootstrap() {
 
 export async function handleAssistantGetSnapshot() {
     return getAssistantService().getSnapshot()
+}
+
+export function handleAssistantListVisualizations(_event: Electron.IpcMainInvokeEvent, input: import('../../../shared/visualization-resources').ListVisualizationsInput) {
+    return withAssistantResult(() => getAssistantService().listVisualizations(input))
+}
+
+export function handleAssistantGetVisualization(_event: Electron.IpcMainInvokeEvent, input: import('../../../shared/visualization-resources').GetVisualizationInput) {
+    return withAssistantResult(() => getAssistantService().getVisualization(input))
 }
 
 export async function handleAssistantGetStatus() {
@@ -393,6 +402,10 @@ export function handleAssistantArchiveSession(_event: Electron.IpcMainInvokeEven
     return withAssistantResult(() => getAssistantService().archiveSession(sessionId, archived))
 }
 
+export function handleAssistantSettleSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, settled: boolean, migrateLegacy?: boolean) {
+    return withAssistantResult(() => getAssistantService().setSessionSettled(sessionId, settled, migrateLegacy))
+}
+
 export function handleAssistantDeleteSession(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
     log.info('IPC: assistant:deleteSession', { sessionId })
     return withAssistantResult(() => getAssistantService().deleteSession(sessionId))
@@ -545,12 +558,24 @@ export function handleAssistantGetVoiceTranscriptionState() {
     }))
 }
 
-export function handleAssistantTranscribeVoice(_event: Electron.IpcMainInvokeEvent, input: AssistantTranscribeVoiceInput) {
+const voiceTranscriptionJobs = new VoiceTranscriptionJobs(transcribeVoiceAndSave)
+
+export function handleAssistantCancelVoiceTranscription(event: Electron.IpcMainInvokeEvent, requestId: string) {
+    return { success: true as const, cancelled: voiceTranscriptionJobs.cancel(`desktop:${event.sender.id}`, requestId) }
+}
+
+export function handleAssistantTranscribeVoice(event: Electron.IpcMainInvokeEvent, input: AssistantTranscribeVoiceInput) {
     log.info('IPC: assistant:transcribeVoice', {
         durationMs: Number(input?.durationMs) || 0,
         encodedLength: typeof input?.audioBase64 === 'string' ? input.audioBase64.length : 0
     })
-    return withAssistantResult(async () => ({ success: true as const, text: await transcribeVoiceAndSave(input) }))
+    return withAssistantResult(async () => {
+        const owner = `desktop:${event.sender.id}`
+        const onDestroyed = () => voiceTranscriptionJobs.cancelOwner(owner)
+        event.sender.once('destroyed', onDestroyed)
+        try { return { success: true as const, text: await voiceTranscriptionJobs.run(owner, input) } }
+        finally { event.sender.removeListener('destroyed', onDestroyed) }
+    })
 }
 
 export function handleAssistantSaveVoiceHistory(_event: Electron.IpcMainInvokeEvent, input: AssistantSaveVoiceHistoryInput) {

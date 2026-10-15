@@ -394,6 +394,9 @@ export interface AssistantSession {
     id: string
     title: string
     titleGenerating?: boolean
+    /** Authoritative agent-server catalog state; absent for an unattached/legacy chat. */
+    settled?: boolean
+    settlementManual?: boolean
     mode: AssistantSessionMode
     /** Compatibility projection of workingRoot for legacy runtime and canonical-chat integrations. */
     projectPath: string | null

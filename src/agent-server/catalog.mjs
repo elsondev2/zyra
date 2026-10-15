@@ -10,6 +10,7 @@ import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";
 import { ZyraSessionManager } from "./zyra-session-manager.mjs";
+import { projectChatSettlement } from './chat-settlement.mjs';
 import {
   EAGER_HISTORY_TOOL_RESULTS,
   HISTORY_TOOL_RESULT_BODY_POLICY,
@@ -278,10 +279,15 @@ export class CanonicalChatCatalog {
   async updateChat(selector, patch = {}) {
     const canonicalChatId = this.resolveAlias(selector);
     const chat = await this.find(canonicalChatId, { allProjects: true, includeDeleted: true });
+    if (patch.settled !== undefined && typeof patch.settled !== 'boolean') throw new TypeError('Choose whether to settle this chat.');
+    if (patch.settled !== undefined && !chat) throw new Error('Chat not found.');
     if (patch.project !== undefined) this.registerProject(patch.project);
     const existing = this.record.metadata[canonicalChatId] || {};
     const next = {
       ...existing,
+      ...(patch.settled !== undefined && !(patch.settlementIfAbsent && existing.settlement) ? { settlement: {
+        state: patch.settled ? 'settled' : 'active', messageCount: Math.max(0, Number(chat.messageCount) || 0), changedAt: new Date().toISOString()
+      } } : {}),
       ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
       ...(patch.agentCreatedBy !== undefined ? { agentCreatedBy: String(patch.agentCreatedBy).slice(0, 192) } : {}),
       ...(patch.agentLabel !== undefined ? { agentLabel: String(patch.agentLabel).slice(0, 120) } : {}),
@@ -307,6 +313,14 @@ export class CanonicalChatCatalog {
 
   snapshot() {
     return structuredClone(this.record);
+  }
+
+  markSettlementActive(canonicalChatId) {
+    const existing = this.record.metadata[canonicalChatId];
+    if (existing?.settlement?.state !== 'settled') return false;
+    this.record.metadata[canonicalChatId] = { ...existing, settlement: { ...existing.settlement, state: 'active', changedAt: new Date().toISOString() } };
+    this.persist();
+    return true;
   }
 
   markCompletionSeen(canonicalChatId, turnId, completedAt) {
@@ -365,6 +379,8 @@ function applyMetadata(chat, metadata = {}, record = {}) {
     project: metadata.project || chat.project || chat.storageProject || chat.cwd,
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,
+    settled: projectChatSettlement(chat, metadata),
+    settlementManual: Boolean(metadata.settlement),
     archivedAt: metadata.archivedAt || null,
     deleted: metadata.deleted === true,
     deletedAt: metadata.deletedAt || null,

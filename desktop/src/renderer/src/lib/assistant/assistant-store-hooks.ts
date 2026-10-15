@@ -126,8 +126,8 @@ const assistantStoreActions = {
     disconnect: (sessionId?: string) => assistantStore.disconnect(sessionId).then(() => undefined),
     respondApproval: (requestId: string, decision: AssistantApprovalResponseInput['decision']) =>
         assistantStore.respondApproval({ requestId, decision }).then(() => undefined),
-    respondUserInput: (requestId: string, answers: Record<string, string | string[]>) =>
-        assistantStore.respondUserInput({ requestId, answers }).then(() => undefined),
+    respondUserInput: (requestId: string, answers: Record<string, string | string[]>, attachments?: Pick<import('@shared/assistant/contracts').AssistantUserInputResponseInput, 'contextText' | 'images'>) =>
+        assistantStore.respondUserInput({ requestId, answers, ...attachments }).then(() => undefined),
     chooseProjectPath: (sessionId: string) => assistantStore.chooseProjectPath(sessionId).then(() => undefined),
     chooseProjectPathResult: (sessionId: string) => assistantStore.chooseProjectPath(sessionId),
     createProjectSession: () => assistantStore.createProjectSession().then(() => undefined),

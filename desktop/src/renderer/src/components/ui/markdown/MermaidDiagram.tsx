@@ -78,7 +78,7 @@ function hashString(input: string): string {
     return Math.abs(hash).toString(36)
 }
 
-export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }) {
+export const MermaidDiagram = memo(function MermaidDiagram({ chart, fill = false, hideExpand = false }: { chart: string; fill?: boolean; hideExpand?: boolean }) {
     const containerRef = useRef<HTMLDivElement | null>(null)
     const visualTheme = useMarkdownVisualTheme()
     const themeRevision = useThemeRevision()
@@ -149,13 +149,13 @@ export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: s
     }
 
     if (!svg) {
-        return <ArtifactCreationState kind="diagram" phase="loading"/>
+        return <ArtifactCreationState kind="diagram" phase="loading" className={fill ? 'h-full flex-1 !min-h-0 !rounded-none !border-0' : ''}/>
     }
 
     return (
-        <><div className="mermaid-canvas group relative rounded-lg border border-[var(--surface-divider)] bg-sparkle-card">
-            <button type="button" aria-label="Expand diagram" title="Expand diagram" onClick={() => setExpanded(true)} className="absolute right-2 top-2 z-10 inline-flex size-8 items-center justify-center rounded-md border border-[var(--surface-divider)] bg-sparkle-card text-sparkle-text-muted hover:text-sparkle-text"><Expand size={15}/></button>
-            <div ref={containerRef} className="mermaid-diagram flex items-center justify-center overflow-x-auto p-4" dangerouslySetInnerHTML={{ __html: svg }}/>
+        <><div className={fill ? 'mermaid-canvas mermaid-reveal group relative flex min-h-0 flex-1 flex-col' : 'mermaid-canvas mermaid-reveal group relative rounded-lg border border-[var(--surface-divider)] bg-sparkle-card'}>
+            {!hideExpand && <button type="button" aria-label="Expand diagram" title="Expand diagram" onClick={() => setExpanded(true)} className="absolute right-2 top-2 z-10 inline-flex size-8 items-center justify-center rounded-md border border-[var(--surface-divider)] bg-sparkle-card text-sparkle-text-muted hover:text-sparkle-text"><Expand size={15}/></button>}
+            <div ref={containerRef} className={fill ? 'mermaid-diagram flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 [&>svg]:max-h-full [&>svg]:max-w-full' : 'mermaid-diagram flex items-center justify-center overflow-x-auto p-4'} dangerouslySetInnerHTML={{ __html: svg }}/>
         </div>{expanded ? <MermaidExpandedView svg={svg} onClose={() => setExpanded(false)}/> : null}</>
     )
-}, (previous, next) => previous.chart === next.chart)
+}, (previous, next) => previous.chart === next.chart && previous.fill === next.fill && previous.hideExpand === next.hideExpand)

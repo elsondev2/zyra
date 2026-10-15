@@ -1,4 +1,5 @@
 import log from 'electron-log'
+import type { AssistantUserInputResponseInput } from '../../shared/assistant/contracts'
 import type {
     AssistantClearLogsInput,
     AssistantConnectOptions,
@@ -21,7 +22,7 @@ import {
 } from '../../shared/assistant/session-project'
 import { normalizeAssistantRuntimePolicy } from '../../shared/assistant/runtime-policy'
 import { is } from '../utils'
-import { prepareAssistantPromptImages } from './prompt-images'
+import { prepareAssistantPromptImages, type PreparedAssistantPromptImage } from './prompt-images'
 import { isCanonicalPresenceActive } from './service-canonical-presence'
 import { leaveAssistantThreadForNavigation } from './service-navigation-runtime'
 import { buildDeleteMessagePlan } from './service-history'
@@ -515,7 +516,8 @@ function triggerDevContextCompactionTestPrompt(
 export async function sendAssistantPromptAction(
     deps: AssistantServiceActionDeps,
     prompt: string,
-    options?: AssistantSendPromptOptions
+    options?: AssistantSendPromptOptions,
+    preparedImages?: PreparedAssistantPromptImage[]
 ) {
     await deps.ensureReady()
     const input = String(prompt || '').trim()
@@ -537,7 +539,9 @@ export async function sendAssistantPromptAction(
         return triggerDevContextCompactionTestPrompt(deps, session.id, thread, compactionTestCommand, occurredAt)
     }
 
-    const promptImages = await prepareAssistantPromptImages(options?.images)
+    if (options?.startInNewWorktree !== undefined && typeof options.startInNewWorktree !== 'boolean') throw new Error('Invalid worktree choice.')
+    if (options?.startInNewWorktree && await deps.getFirstUserMessageText(session.id)) throw new Error('Choose a new worktree before the first message in a chat.')
+    const promptImages = preparedImages ?? await prepareAssistantPromptImages(options?.images)
     const runtimePolicy = normalizeAssistantRuntimePolicy(
         await deps.getRuntimePolicy?.().catch((error) => {
             log.warn('[Assistant] Failed to read the runtime policy preference', error)
@@ -654,6 +658,7 @@ export async function sendAssistantPromptAction(
         }
         const result = await deps.runtime.sendPrompt(runtimeThreadId, input, {
             turnId: submittedTurnId,
+            startInNewWorktree: options?.startInNewWorktree,
             model: model || undefined,
             runtimeMode: options?.runtimeMode,
             interactionMode: 'default',
@@ -758,7 +763,7 @@ export async function respondAssistantApprovalAction(
 
 export async function respondAssistantUserInputAction(
     deps: AssistantServiceActionDeps,
-    input: { requestId: string; answers: Record<string, string | string[]> }
+    input: AssistantUserInputResponseInput
 ) {
     const activeRequests = activeUserInputResponses.get(deps) || new Set<string>()
     activeUserInputResponses.set(deps, activeRequests)
@@ -770,6 +775,9 @@ export async function respondAssistantUserInputAction(
         if (!target) throw new Error(`Unknown user-input request ${input.requestId}.`)
         const pendingInput = target.thread.pendingUserInputs.find((entry) => entry.requestId === input.requestId)
         if (!pendingInput) throw new Error(`Unknown user-input request ${input.requestId}.`)
+        const contextText = input.contextText ?? ''
+        if (typeof contextText !== 'string' || contextText.length > 256_000) throw new Error('Question attachments are too large.')
+        const questionImages = await prepareAssistantPromptImages(input.images)
         const continuationPrompt = await respondToAssistantUserInputWithRuntime({
             runtime: deps.runtime,
             thread: target.thread,
@@ -791,10 +799,11 @@ export async function respondAssistantUserInputAction(
                 resolvedAt: respondedAt
             }
         }, target.session.id, target.thread.id)
-        return sendAssistantPromptAction(deps, continuationPrompt, {
+        return sendAssistantPromptAction(deps, contextText.trim() ? `${continuationPrompt}\n\n${contextText.trim()}` : continuationPrompt, {
             sessionId: target.session.id,
+            images: input.images,
             userMessageId: responseMessageId
-        })
+        }, questionImages)
     } finally {
         activeRequests.delete(input.requestId)
         if (activeRequests.size === 0) activeUserInputResponses.delete(deps)

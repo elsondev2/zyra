@@ -1,3 +1,4 @@
+import type { VisualizationResource } from '@shared/visualization-resources'
 import { IMAGE_EXTENSIONS } from '@/components/ui/file-preview/constants'
 import { resolveMarkdownPackageReference, looksLikeMarkdownFileReference } from '@/components/ui/markdown/fileReferences'
 import { resolveMarkdownLinkTarget } from '@/components/ui/markdown/linkNavigation'
@@ -6,7 +7,7 @@ import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-ty
 import { getAssistantLinkBaseFilePath, getAssistantRelativeFilePath } from './assistant-file-navigation'
 import { assistantImageDisplayName } from './assistant-resource-labels'
 
-export type AssistantResourceKind = 'image' | 'link'
+export type AssistantResourceKind = 'image' | 'link' | 'visualization'
 export type AssistantResourceSource = 'changed' | 'generated' | 'attached' | 'mentioned'
 export type AssistantResourceOriginKind = 'change' | 'prompt' | 'response' | 'attachment'
 
@@ -34,12 +35,34 @@ export type AssistantResource = {
     latestTurnNumber: number
     latestDiffTarget: AssistantDiffTarget | null
     searchText: string
+    visualization?: VisualizationResource
 }
 
 export type AssistantResourceIndex = {
     resources: AssistantResource[]
     totalOccurrences: number
     truncated: boolean
+}
+
+/** Saved resources are already normalized by the main transport; never parse response source here. */
+export function visualizationToAssistantResource(resource: VisualizationResource, turns: AssistantDiffTurn[] = []): AssistantResource {
+    const origins: AssistantResourceOrigin[] = []
+    for (const revision of resource.versions) {
+        const origin = revision.origin
+        const turn = origin?.turnId ? turns.find((candidate) => candidate.id === origin.turnId) : undefined
+        if (!turn || origins.some((candidate) => candidate.turnId === turn.id)) continue
+        origins.push({ key: `${resource.id}:${turn.id}`, turnId: turn.id, turnNumber: turn.number, createdAt: revision.createdAt, kind: 'response' })
+    }
+    origins.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    return {
+        id: `visualization:${resource.id}`, kind: 'visualization', title: resource.title,
+        subtitle: resource.summary || `${resource.kind} · v${resource.latestVersion}`,
+        path: null, url: null, attachment: null, sources: ['generated'], origins,
+        occurrenceCount: 0, latestAt: resource.updatedAt,
+        latestTurnId: origins[0]?.turnId || '', latestTurnNumber: origins[0]?.turnNumber || 0,
+        latestDiffTarget: null, visualization: resource,
+        searchText: [resource.title, resource.summary, resource.kind, 'visualization', ...origins.map((origin) => `turn ${origin.turnNumber}`)].join(' ').toLowerCase()
+    }
 }
 
 export const ASSISTANT_RESOURCE_INDEX_LIMIT = 500

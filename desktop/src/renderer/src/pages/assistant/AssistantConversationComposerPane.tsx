@@ -92,7 +92,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     ) => Promise<boolean>
     refreshModels: () => void
     respondApproval: (requestId: string, decision: AssistantApprovalDecision) => Promise<void>
-    respondUserInput: (requestId: string, answers: Record<string, string | string[]>) => Promise<void>
+    respondUserInput: (requestId: string, answers: Record<string, string | string[]>, files?: import('./assistant-composer-types').ComposerContextFile[]) => Promise<void>
     setPlaygroundTerminalAccess: (enabled: boolean) => void
     setPlaygroundTerminalAccessRequestMuted: (muted: boolean) => void
     approvePendingPlaygroundLabRequest: (input: { title?: string; source: 'empty' | 'git-clone'; repoUrl?: string }) => Promise<void>
@@ -164,6 +164,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
             ) : null}
             {!isWaitingForControlApproval && !isWaitingForApproval && !pendingTerminalAccessRequest && hasPendingQuestions ? (
                 <AssistantPendingUserInputPanel
+                    key={pendingQuestionInputs[0]?.requestId}
                     pendingUserInputs={pendingQuestionInputs}
                     responding={props.userInputResponding}
                     onRespond={props.respondUserInput}

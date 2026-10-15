@@ -25,6 +25,7 @@ import { chooseProjectFolder, useProjectCreation } from '@/lib/projects/project-
 import { resolveAssistantComposerContextUsage } from './assistant-composer-context-usage'
 import { buildAssistantTurnUsageIndex } from './assistant-turn-usage-index'
 import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
+import { ASSISTANT_USER_INPUT_CONTEXT_HEADING } from '@shared/assistant/user-input-continuation'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
 import { projectVoiceLiveTimelineMessages } from './assistant-voice-live-timeline'
 import { resolveAssistantComposerLaunchConfiguration } from './assistant-new-chat-composer-config'
@@ -195,7 +196,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         props.onShowToast?.(pinned ? 'Pinned chat' : 'Unpinned chat', 'success')
     }, [controller.selectedSession, props.onShowToast])
     const handleToggleChatSettlement = useCallback(() => {
-        if (controller.selectedSession && !settlementDisabled) setChatSettlement(controller.selectedSession, !chatSettled)
+        if (controller.selectedSession && !settlementDisabled) void setChatSettlement(controller.selectedSession, !chatSettled).catch(error => props.onShowToast?.(error.message, 'error'))
     }, [controller.selectedSession, settlementDisabled, chatSettled])
     const selectedSessionId = controller.selectedSession?.id || null
     const activeThreadId = controller.activeThread?.id || null
@@ -757,12 +758,15 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         await actions.respondApproval(requestId, decision)
     }, [actions])
 
-    const handleRespondUserInput = useCallback(async (requestId: string, answers: Record<string, string | string[]>) => {
+    const handleRespondUserInput = useCallback(async (requestId: string, answers: Record<string, string | string[]>, files?: import('./assistant-composer-types').ComposerContextFile[]) => {
         if (respondingUserInputRequestIdRef.current) return
         respondingUserInputRequestIdRef.current = requestId
         setRespondingUserInputRequestId(requestId)
         try {
-            await actions.respondUserInput(requestId, answers)
+            await actions.respondUserInput(requestId, answers, files?.length ? {
+                contextText: buildPromptWithContextFiles(ASSISTANT_USER_INPUT_CONTEXT_HEADING, files),
+                images: buildPromptImageInputs(files)
+            } : undefined)
         } finally {
             if (respondingUserInputRequestIdRef.current === requestId) respondingUserInputRequestIdRef.current = null
             setRespondingUserInputRequestId((current) => current === requestId ? null : current)
@@ -840,6 +844,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         const images = buildPromptImageInputs(contextFiles)
         const result = await actions.sendPromptResult(browserPrompt, {
             sessionId,
+            startInNewWorktree: options.startInNewWorktree,
             model: options.model,
             runtimeMode: options.runtimeMode,
             interactionMode: options.interactionMode,
@@ -1274,6 +1279,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                     ) : null}
                     {!composerIsCentered ? (
                         <AssistantConversationTimelinePane
+                            threadId={controller.activeThread?.id}
                             loading={controller.loading}
                             timelineContentRef={timelineContentRef}
                             timelineScrollRef={timelineScrollRef}

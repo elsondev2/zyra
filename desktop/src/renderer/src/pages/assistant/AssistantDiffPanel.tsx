@@ -1391,6 +1391,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                                 />
                             ) : (
                                 <AssistantResourcesWorkspace
+                                    threadId={threadId || undefined}
                                     active={open && activeWorkspaceTab?.kind === 'resources'}
                                     turns={turns}
                                     projectPath={projectPath}

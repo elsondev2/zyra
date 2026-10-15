@@ -693,12 +693,15 @@ export interface DevScopeAssistantApi {
     getHistoryAroundMessage: (input: AssistantGetHistoryAroundMessageInput) => Promise<DevScopeResult<AssistantHistoryAroundMessageResultPayload>>
     hydrateHistoryBody: (input: AssistantHydrateHistoryBodyInput) => Promise<DevScopeResult<AssistantHistoryBodyResultPayload>>
     getReviewIndex: (input: AssistantGetReviewIndexInput) => Promise<DevScopeResult<AssistantReviewIndexResultPayload>>
+    listVisualizations?: (input: import('../visualization-resources').ListVisualizationsInput) => Promise<DevScopeResult<{ resources: import('../visualization-resources').VisualizationResource[]; skippedCount?: number; indexingOlder?: boolean; readOnly?: boolean }>>
+    getVisualization?: (input: import('../visualization-resources').GetVisualizationInput) => Promise<DevScopeResult<{ resource: import('../visualization-resources').VisualizationResource }>>
     getTurnDetail: (input: AssistantGetTurnDetailInput) => Promise<DevScopeResult<AssistantTurnDetailResultPayload>>
     searchChats: (input: AssistantSearchChatsInput) => Promise<DevScopeResult<AssistantSearchChatsResultPayload>>
     searchTurns: (input: AssistantSearchTurnsInput) => Promise<DevScopeResult<AssistantSearchTurnsResultPayload>>
     renameSession: (sessionId: string, title: string) => Promise<DevScopeResult>
     regenerateSessionTitle: (sessionId: string) => Promise<DevScopeResult<{ title: string }>>
     archiveSession: (sessionId: string, archived?: boolean) => Promise<DevScopeResult>
+    settleSession: (sessionId: string, settled: boolean, migrateLegacy?: boolean) => Promise<DevScopeResult>
     deleteSession: (sessionId: string) => Promise<DevScopeResult>
     deleteMessage: (input: AssistantDeleteMessageInput) => Promise<DevScopeResult>
     clearLogs: (input?: AssistantClearLogsInput) => Promise<DevScopeResult>
@@ -737,6 +740,7 @@ export interface DevScopeAssistantApi {
     onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
     getVoiceTranscriptionState: () => Promise<DevScopeResult<{ state: AssistantVoiceTranscriptionState }>>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<DevScopeResult<{ text: string }>>
+    cancelVoiceTranscription?: (requestId: string) => Promise<DevScopeResult<{ cancelled: boolean }>>
     saveVoiceHistory: (input: AssistantSaveVoiceHistoryInput) => Promise<DevScopeResult>
     listVoiceHistory: () => Promise<DevScopeResult<{ entries: AssistantVoiceHistoryEntry[] }>>
     getFailedVoiceRecording: (id: string) => Promise<DevScopeResult<{ audioBase64: string | null }>>
@@ -760,6 +764,11 @@ export interface DevScopeApi {
     generateCommitMessage: (provider: DevScopeGitTextProvider, apiKey: string, diff: string, model?: string) => Promise<DevScopeResult<{ message: string }>>
 
     // Projects + Git
+    getDeveloperWorkspace: (root: string) => Promise<DevScopeResult<{ workspace: import('./developer-workflow').DeveloperWorkspace }>>
+    startDeveloperTask: (root: string, name: string) => Promise<DevScopeResult<{ task: import('./developer-workflow').DeveloperTask }>>
+    stopDeveloperTask: (id: string) => Promise<DevScopeResult>
+    previewRecordedUndo: (root: string, patch: string) => Promise<DevScopeResult<{ token: string; paths: string[] }>>
+    applyRecordedUndo: (token: string) => Promise<DevScopeResult>
     selectFolder: () => Promise<DevScopeResult<{ folderPath?: string; cancelled?: boolean }>>
     selectMarkdownFile: () => Promise<DevScopeResult<{ filePath?: string; cancelled?: boolean }>>
     selectProjectIconFile: () => Promise<DevScopeResult<{ filePath?: string; cancelled?: boolean }>>
@@ -1046,6 +1055,7 @@ export interface DevScopeApi {
     searchIndexedPaths: (
         input: DevScopeIndexedPathSearchInput
     ) => Promise<DevScopeResult<DevScopeIndexedPathSearchResult>>
+    searchProjectContents: (input: import('./project-content-search').ProjectContentSearchInput) => Promise<DevScopeResult<import('./project-content-search').ProjectContentSearchResult>>
     getFileSystemRoots: () => Promise<DevScopeResult<{ roots: string[] }>>
 
     terminal: DevScopeTerminalApi

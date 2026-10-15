@@ -114,7 +114,7 @@ export function toUserInputQuestions(
                 type,
                 options,
                 required: record?.['required'] !== false,
-                allowOther: record?.['allowOther'] === true || record?.['allow_other'] === true,
+                allowOther: type === 'single_select' || type === 'multi_select' || record?.['allowOther'] === true || record?.['allow_other'] === true,
                 ...(asString(record?.['placeholder']) ? { placeholder: asString(record?.['placeholder']) } : {}),
                 ...(typeof record?.['multiple'] === 'boolean' ? { multiple: record['multiple'] } : {}),
                 ...(min !== undefined ? { min } : {}),

@@ -75,7 +75,7 @@ export type AssistantUtilityResourcesStateCapsule = {
     version: 1
     workspace: 'resources'
     query?: string
-    kindFilter?: 'all' | 'images' | 'links'
+    kindFilter?: 'all' | 'images' | 'links' | 'visualizations'
     sourceFilter?: 'all' | 'attached' | 'generated' | 'changed' | 'mentioned'
     turnFilter?: string
     selectedResourceId?: string
@@ -338,7 +338,7 @@ export function sanitizeAssistantUtilityStateCapsule(
     }
 
     if (workspace === 'resources') {
-        const kindFilter = ['all', 'images', 'links'].includes(String(input['kindFilter']))
+        const kindFilter = ['all', 'images', 'links', 'visualizations'].includes(String(input['kindFilter']))
             ? input['kindFilter'] as AssistantUtilityResourcesStateCapsule['kindFilter']
             : undefined
         const sourceFilter = ['all', 'attached', 'generated', 'changed', 'mentioned'].includes(String(input['sourceFilter']))

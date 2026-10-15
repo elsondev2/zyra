@@ -319,6 +319,7 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
+	private _agentRunAbortEpoch = 0;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -849,6 +850,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._agentRunAbortEpoch++;
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1073,10 +1075,14 @@ export class AgentSession {
 	// =========================================================================
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		const abortEpoch = this._agentRunAbortEpoch;
 		this._isAgentRunActive = true;
 		try {
 			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun()) {
+			while (abortEpoch === this._agentRunAbortEpoch && (await this._handlePostAgentRun())) {
+				// Stop may arrive while retry or compaction awaits. It also owns
+				// the gap between agent runs, when agent.abort() has no active signal.
+				if (abortEpoch !== this._agentRunAbortEpoch) break;
 				await this.agent.continue();
 			}
 		} finally {
@@ -1089,7 +1095,7 @@ export class AgentSession {
 	private async _handlePostAgentRun(): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
-		if (!msg) {
+		if (!msg || msg.stopReason === "aborted") {
 			return false;
 		}
 
@@ -1560,6 +1566,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._agentRunAbortEpoch++;
 		this.abortRetry();
 		this.agent.abort();
 		await this.waitForIdle();

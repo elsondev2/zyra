@@ -11,7 +11,7 @@ const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const directory = await mkdtemp(join(os.tmpdir(), 'zyra-visual-scroll-'))
 const report = process.argv.find(argument => argument.endsWith('.json'))
 try {
-    const bundle = await build({ entryPoints: [join(desktop, 'scripts/fixtures/visualization-scroll.tsx')], bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"', 'import.meta.hot': 'undefined' }, alias: { '@': join(desktop, 'src/renderer/src'), '@shared': join(desktop, 'src/shared') } })
+    const bundle = await build({ entryPoints: [join(desktop, 'scripts/fixtures/visualization-scroll.tsx')], bundle: true, write: false, outfile: join(directory, 'fixture.js'), format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"', 'import.meta.hot': 'undefined' }, alias: { '@': join(desktop, 'src/renderer/src'), '@shared': join(desktop, 'src/shared') } })
     const shell = await readFile(join(desktop, 'src/renderer/index.html'), 'utf8')
     const policy = shell.match(/<meta http-equiv="Content-Security-Policy"[\s\S]*?\/>/)?.[0]
     if (!policy) throw new Error('Real app CSP must be present')

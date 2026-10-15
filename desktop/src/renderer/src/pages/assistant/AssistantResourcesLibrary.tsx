@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
-import { ArrowUpRight, Copy, ExternalLink, FileClock, Globe2, Image as ImageIcon, X } from 'lucide-react'
+import { ArrowUpRight, Box, Copy, ExternalLink, FileClock, Globe2, Image as ImageIcon, X } from 'lucide-react'
 import { usePreviewVirtualWindow } from '@/components/ui/file-preview/usePreviewVirtualWindow'
 import { MarkdownSiteIcon, resolveExternalMarkdownHost } from '@/components/ui/markdown/InlineTargets'
 import { cn } from '@/lib/utils'
@@ -7,7 +7,7 @@ import type { AssistantResource, AssistantResourceSource } from './assistant-res
 import { assistantResourceCaption } from './assistant-resource-labels'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 
-export type ResourceKindFilter = 'all' | 'images' | 'links'
+export type ResourceKindFilter = 'all' | 'images' | 'links' | 'visualizations'
 export type ResourceSourceFilter = 'all' | AssistantResourceSource
 export type ResourceTurnFilter = 'all' | string
 
@@ -58,7 +58,7 @@ const ResourceLibraryTile = memo(function ResourceLibraryTile({
             title={`${resource.title}\n${resourceLocation(resource)}`}
         >
             <span className="relative flex h-[104px] shrink-0 items-center justify-center overflow-hidden border-b border-white/[0.055] bg-black/15">
-                {resource.kind === 'image' ? preview : (
+                {resource.kind === 'image' || resource.kind === 'visualization' ? preview : (
                     <span className="flex min-w-0 items-center gap-3 px-4">
                         {host ? <MarkdownSiteIcon host={host} className="inline-flex size-8 shrink-0" /> : <Globe2 size={28} className="shrink-0 text-sky-200/65" />}
                         <span className="min-w-0">
@@ -73,10 +73,10 @@ const ResourceLibraryTile = memo(function ResourceLibraryTile({
             </span>
             <span className="flex min-h-0 flex-1 flex-col px-2.5 py-1.5">
                 <span className="truncate text-[10px] font-medium text-sparkle-text-secondary">{resource.title}</span>
-                <span className="mt-0.5 truncate text-[7px] text-sparkle-text-muted/45">{assistantResourceCaption(resource)}</span>
+                <span className="mt-0.5 truncate text-[7px] text-sparkle-text-muted/45">{resource.visualization ? resource.subtitle : assistantResourceCaption(resource)}</span>
                 <span className="mt-auto flex items-center gap-1.5 pt-1">
-                    <span className="min-w-0 flex-1 truncate text-[7px] text-sparkle-text-muted/45">{resource.occurrenceCount} mention{resource.occurrenceCount === 1 ? '' : 's'}</span>
-                    <span className="font-mono text-[7px] text-sparkle-text-muted/55">#{resource.latestTurnNumber}</span>
+                    <span className="min-w-0 flex-1 truncate text-[7px] text-sparkle-text-muted/45">{resource.visualization ? '' : `${resource.occurrenceCount} mention${resource.occurrenceCount === 1 ? '' : 's'}`}</span>
+                    {resource.latestTurnId && <span className="font-mono text-[7px] text-sparkle-text-muted/55">#{resource.latestTurnNumber}</span>}
                 </span>
             </span>
         </button>
@@ -95,6 +95,7 @@ export function AssistantResourcesLibrary({
     sourceCounts,
     turnOptions,
     renderPreview,
+    renderDetails,
     onSelectResource,
     onKindFilterChange,
     onSourceFilterChange,
@@ -115,6 +116,7 @@ export function AssistantResourcesLibrary({
     sourceCounts: Record<AssistantResourceSource, number>
     turnOptions: Array<{ id: string; number: number; count: number }>
     renderPreview: (resource: AssistantResource) => ReactNode
+    renderDetails?: (resource: AssistantResource) => ReactNode
     onSelectResource: (resourceId: string | null) => void
     onKindFilterChange: (filter: ResourceKindFilter) => void
     onSourceFilterChange: (filter: ResourceSourceFilter) => void
@@ -129,8 +131,9 @@ export function AssistantResourcesLibrary({
     const selectedResource = resources.find((resource) => resource.id === selectedResourceId)
         || allResources.find((resource) => resource.id === selectedResourceId)
         || null
-    const columnCount = Math.max(1, Math.floor((libraryWidth + 8) / 190))
-    const rowHeight = 178
+    const viewingVisualization = Boolean(selectedResource?.visualization)
+    const columnCount = viewingVisualization ? 1 : Math.max(1, Math.floor((libraryWidth + 8) / 190))
+    const rowHeight = viewingVisualization ? 40 : 178
     const rowCount = Math.ceil(resources.length / columnCount)
     const { range, scrollElementRef, scrollToIndex } = usePreviewVirtualWindow({
         active,
@@ -200,7 +203,7 @@ export function AssistantResourcesLibrary({
                 onSourceFilterChange={onSourceFilterChange}
                 onTurnFilterChange={onTurnFilterChange}
             />
-            <div ref={libraryRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" onKeyDown={handleLibraryKeyDown}>
+            <div ref={libraryRef} className={viewingVisualization ? 'flex min-h-0 w-52 shrink-0 flex-col overflow-hidden border-r border-[var(--surface-divider)]' : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'} onKeyDown={handleLibraryKeyDown}>
                 <div className="flex h-8 shrink-0 items-center justify-between border-b border-white/[0.055] px-3">
                     <span className="text-[9px] font-semibold text-sparkle-text-secondary">Library</span>
                     <span className="font-mono text-[8px] text-sparkle-text-muted/45">{resources.length} item{resources.length === 1 ? '' : 's'}</span>
@@ -216,14 +219,9 @@ export function AssistantResourcesLibrary({
                                 }}
                             >
                                 {renderedResources.map((resource) => (
-                                    <ResourceLibraryTile
-                                        key={resource.id}
-                                        resource={resource}
-                                        selected={resource.id === selectedResourceId}
-                                        preview={renderPreview(resource)}
-                                        onSelect={(target) => onSelectResource(target.id)}
-                                        onOpen={(target) => onOpenResource(target)}
-                                    />
+                                    viewingVisualization ? <button key={resource.id} type="button" role="option" aria-selected={resource.id === selectedResourceId} title={resource.title} onClick={() => { onSelectResource(resource.id); onOpenResource(resource) }} className={cn('flex h-8 min-w-0 items-center gap-2 px-2 text-left text-[11px]', resource.id === selectedResourceId ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)]')}>
+                                        {resource.kind === 'visualization' ? <Box size={13} className="shrink-0"/> : resource.kind === 'image' ? <ImageIcon size={13} className="shrink-0"/> : <Globe2 size={13} className="shrink-0"/>}<span className="truncate">{resource.title}</span>
+                                    </button> : <ResourceLibraryTile key={resource.id} resource={resource} selected={resource.id === selectedResourceId} preview={renderPreview(resource)} onSelect={target => onSelectResource(target.id)} onOpen={target => onOpenResource(target)}/>
                                 ))}
                             </div>
                         </div>
@@ -238,7 +236,7 @@ export function AssistantResourcesLibrary({
                     )}
                 </div>
             </div>
-            {selectedResource ? (
+            {selectedResource?.visualization && renderDetails ? <aside className="flex min-h-0 min-w-0 flex-1 bg-[var(--color-bg)]" aria-label="Selected resource details">{renderDetails(selectedResource)}</aside> : selectedResource ? (
                 <ResourceInspector
                     resource={selectedResource}
                     preview={renderPreview(selectedResource)}
@@ -278,11 +276,12 @@ function ResourceFilterRail({
     const kinds: Array<{ id: ResourceKindFilter; label: string }> = [
         { id: 'all', label: 'All resources' },
         { id: 'images', label: 'Images' },
-        { id: 'links', label: 'Links' }
+        { id: 'links', label: 'Links' },
+        { id: 'visualizations', label: 'Visualizations' }
     ]
     const sources: AssistantResourceSource[] = ['attached', 'generated', 'changed', 'mentioned']
     return (
-        <aside className="custom-scrollbar w-[210px] shrink-0 overflow-y-auto border-r border-white/[0.055] bg-[color-mix(in_srgb,var(--color-card)_66%,var(--color-bg))] px-2 py-2" aria-label="Resource filters">
+        <aside className="custom-scrollbar w-[154px] shrink-0 overflow-y-auto border-r border-white/[0.055] bg-[color-mix(in_srgb,var(--color-card)_66%,var(--color-bg))] px-2 py-2" aria-label="Resource filters">
             <FilterSection label="Type">
                 {kinds.map((entry) => <FilterButton key={entry.id} active={kindFilter === entry.id} label={entry.label} count={kindCounts[entry.id]} onClick={() => onKindFilterChange(entry.id)} />)}
             </FilterSection>

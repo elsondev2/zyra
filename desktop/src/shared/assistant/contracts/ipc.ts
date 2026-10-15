@@ -81,12 +81,15 @@ export const ASSISTANT_IPC = {
     getHistoryAroundMessage: 'devscope:assistant:getHistoryAroundMessage',
     hydrateHistoryBody: 'devscope:assistant:hydrateHistoryBody',
     getReviewIndex: 'devscope:assistant:getReviewIndex',
+    listVisualizations: 'devscope:assistant:listVisualizations',
+    getVisualization: 'devscope:assistant:getVisualization',
     getTurnDetail: 'devscope:assistant:getTurnDetail',
     searchChats: 'devscope:assistant:searchChats',
     searchTurns: 'devscope:assistant:searchTurns',
     renameSession: 'devscope:assistant:renameSession',
     regenerateSessionTitle: 'devscope:assistant:regenerateSessionTitle',
     archiveSession: 'devscope:assistant:archiveSession',
+    settleSession: 'devscope:assistant:settleSession',
     deleteSession: 'devscope:assistant:deleteSession',
     deleteMessage: 'devscope:assistant:deleteMessage',
     clearLogs: 'devscope:assistant:clearLogs',
@@ -117,6 +120,7 @@ export const ASSISTANT_IPC = {
     realtimeVoiceEvent: 'devscope:assistant:realtimeVoice:event',
     getVoiceTranscriptionState: 'devscope:assistant:getVoiceTranscriptionState',
     transcribeVoice: 'devscope:assistant:transcribeVoice',
+    cancelVoiceTranscription: 'devscope:assistant:cancelVoiceTranscription',
     saveVoiceHistory: 'devscope:assistant:saveVoiceHistory',
     listVoiceHistory: 'devscope:assistant:listVoiceHistory',
     getFailedVoiceRecording: 'devscope:assistant:getFailedVoiceRecording',
@@ -302,6 +306,7 @@ export interface AssistantUpdateSessionConfigurationInput {
 }
 
 export interface AssistantSendPromptOptions {
+    startInNewWorktree?: boolean
     sessionId?: string
     model?: string
     runtimeMode?: AssistantRuntimeMode
@@ -325,6 +330,7 @@ export interface AssistantDeleteMessageInput {
 }
 
 export interface AssistantCreateSessionInput {
+    workspace?: import('../../contracts/developer-workflow').ChatWorkspaceChoice
     title?: string
     projectPath?: string
     projectId?: string
@@ -402,6 +408,8 @@ export interface AssistantApprovalResponseInput {
 export interface AssistantUserInputResponseInput {
     requestId: string
     answers: Record<string, string | string[]>
+    contextText?: string
+    images?: AssistantPromptImageInput[]
 }
 
 export type AssistantVoiceTranscriptionStatus = 'ready' | 'signed-out' | 'unavailable'
@@ -415,6 +423,7 @@ export interface AssistantVoiceTranscriptionState {
 }
 
 export interface AssistantTranscribeVoiceInput {
+    requestId?: string
     audioBase64: string
     mimeType: 'audio/wav'
     sampleRateHz: 24_000

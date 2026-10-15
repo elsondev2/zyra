@@ -73,6 +73,7 @@ import {
 
 type ActiveCompactionLifecycle = {
     activityId: string
+    startedSequence?: number
     startedAt: string
     reason: string
     turnId: string | null
@@ -1627,9 +1628,13 @@ export class ZyraRuntime extends EventEmitter {
         )
     }
 
+    async setCanonicalChatSettlement(threadId: string, settled: boolean, migrateLegacy: boolean): Promise<CanonicalAgentChat | null> {
+        return this.getAgentServerConnection(resolveZyraRoot()).updateCanonicalChat(threadId, { settled, settlementIfAbsent: migrateLegacy })
+    }
+
     async updateCanonicalChat(
         threadId: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean; settled?: boolean; settlementIfAbsent?: boolean }
     ): Promise<void> {
         const normalizedThreadId = String(threadId || '').trim()
         if (!normalizedThreadId) return
@@ -1984,6 +1989,7 @@ export class ZyraRuntime extends EventEmitter {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
             profile?: string
+            startInNewWorktree?: boolean
             images?: PreparedAssistantPromptImage[]
             reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
             contextCompactionThresholdTokens?: number
@@ -2596,6 +2602,7 @@ export class ZyraRuntime extends EventEmitter {
         options?: {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
+            startInNewWorktree?: boolean
             images?: PreparedAssistantPromptImage[]
             reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
             contextCompactionThresholdTokens?: number
@@ -2614,6 +2621,7 @@ export class ZyraRuntime extends EventEmitter {
                 runtimeMode: context.runtimeMode,
                 webSearch: context.webSearch ?? undefined,
                 webFetch: context.webFetch ?? undefined,
+                startInNewWorktree: options?.startInNewWorktree,
                 images: options?.images,
                 reasoningSummary: options?.reasoningSummary,
                 contextCompactionThresholdTokens: options?.contextCompactionThresholdTokens,
@@ -3380,10 +3388,11 @@ export class ZyraRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_start') {
-            const startedAt = nowIso()
+            const startedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || 'threshold'
             const lifecycle: ActiveCompactionLifecycle = {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
+                startedSequence: metadata?.sequence,
                 startedAt,
                 reason,
                 turnId
@@ -3406,6 +3415,9 @@ export class ZyraRuntime extends EventEmitter {
                         category: 'context-compaction',
                         sourceMethod: 'pi-sdk',
                         status: 'running',
+                        replay: metadata?.replay === true,
+                        sourceSequence: metadata?.sequence,
+                        startedSequence: lifecycle.startedSequence,
                         reason,
                         startedAt
                     }
@@ -3415,7 +3427,7 @@ export class ZyraRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_end') {
-            const completedAt = nowIso()
+            const completedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || context.activeCompaction?.reason || 'threshold'
             const lifecycle = context.activeCompaction || {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
@@ -3455,6 +3467,9 @@ export class ZyraRuntime extends EventEmitter {
                         category: 'context-compaction',
                         sourceMethod: 'pi-sdk',
                         status,
+                        replay: metadata?.replay === true,
+                        sourceSequence: metadata?.sequence,
+                        startedSequence: 'startedSequence' in lifecycle ? lifecycle.startedSequence : undefined,
                         reason,
                         startedAt: lifecycle.startedAt,
                         completedAt,
@@ -3471,7 +3486,7 @@ export class ZyraRuntime extends EventEmitter {
                 ? result.estimatedTokensAfter
                 : null
             const activeCompactionTurnId = lifecycle.turnId || turnId
-            if (status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
+            if (metadata?.replay !== true && status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
                 context.sessionUsage = {
                     ...(context.sessionUsage || { threadId: context.localThreadId }),
                     threadId: context.localThreadId,

@@ -9,6 +9,7 @@ const markdown = resolve(import.meta.dir, '../src/renderer/src/components/ui/mar
 const harness = `
 import React, {act,useRef} from 'react'
 import {createRoot} from 'react-dom/client'
+import MarkdownRenderer from ${JSON.stringify(join(markdown, '../MarkdownRenderer.tsx'))}
 import {MarkdownInteractionLayer} from ${JSON.stringify(join(markdown, 'MarkdownInteractionLayer.tsx'))}
 import {createMarkdownComponents} from ${JSON.stringify(join(markdown, 'components.tsx'))}
 import {inspectMarkdownLinkAvailability,resetMarkdownLinkAvailabilityCache} from ${JSON.stringify(join(markdown, 'linkAvailability.ts'))}
@@ -52,6 +53,12 @@ try{
  await click('./note.md#L42');check(calls.open.length===1,'unresolved relative file never becomes a browser URL')
  await render();deferred=[];let pending;await act(async()=>{pending=anchor('./note.md#L42').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))});await render({filePath:'/other/__assistant__.md',contentKey:'other'});const oldChecks=deferred;deferred=null;await act(async()=>oldChecks.forEach(resolve=>resolve()));await tick();check(calls.open.length===1,'old file check cannot navigate after owner changes')
  resetMarkdownLinkAvailabilityCache();exists=true;await inspectMarkdownLinkAvailability('/project/Name.md',undefined,undefined,{allowProjectSearch:false});exists=false;const lower=await inspectMarkdownLinkAvailability('/project/name.md',undefined,undefined,{allowProjectSearch:false});check(lower.availability==='missing','POSIX path case remains distinct')
+ exists=true;failed=false;resetMarkdownLinkAvailabilityCache()
+ await act(async()=>root.render(<MarkdownRenderer content={'[View the graded frame](C:/workspace/graded-frame.png)\\n\\n[Sound file](C:/workspace/sound.wav)'} filePath="C:/workspace/__assistant__.md" mediaMode="images" onInternalLinkClick={onOpen} onLinkNotice={onNotice}/>));await tick()
+ const beforeWindows=calls.open.length
+ check(anchor('C:/workspace/graded-frame.png')?.dataset.markdownFileLink!==undefined,'actual markdown sanitizer preserves the screenshot-style Windows image link')
+ await click('C:/workspace/graded-frame.png');check(calls.open.length===beforeWindows+1&&calls.open.at(-1)==='C:/workspace/graded-frame.png','actual rendered Windows image link opens its local file, not browser routing')
+ await click('C:/workspace/sound.wav');check(calls.open.length===beforeWindows+2&&calls.open.at(-1)==='C:/workspace/sound.wav','actual rendered Windows sound link opens its local file outside embedding mode')
  await act(async()=>root.unmount());console.log('LINK_INTERACTIONS_PASS')
 }catch(error){console.error('LINK_INTERACTIONS_FAIL '+error.stack)}
 `

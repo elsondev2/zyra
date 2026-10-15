@@ -15,7 +15,7 @@ const context = runInNewContext(`${promptFunctions}\n({ injectSurfaceGuide })`, 
 const session = { _baseSystemPrompt: 'Existing instructions.', agent: { state: { systemPrompt: '' } } }
 context.injectSurfaceGuide(session, 'desktop-ui')
 const guide = session._baseSystemPrompt
-assert.match(guide, /inline images and videos/, 'the agent must know the renderer supports media')
+assert.match(guide, /inline images, videos and audio/, 'the agent must know the renderer supports media')
 assert.match(guide, /file:\/\/\/C:\/Users\/example\/Videos\/chat%20debug\.mp4/, 'the guide supplies a Windows filename-with-spaces example')
 assert.match(guide, /backticks|code-formatted/, 'the guide distinguishes an embed from a file chip')
 assert.match(guide, /never autoplay/i)
@@ -64,6 +64,29 @@ for (const [encoded, decoded] of [
     const source = videoSource(render(`[Recording](./${encoded})`, 'C:/workspace/response.md'))
     assert.equal(resolveProtocolFilePath(source).replace(/^\//, ''), `C:/workspace/${decoded}`, 'local URL path is decoded exactly once')
 }
+for (const base of [undefined, 'C:/workspace/response.md']) {
+    assert.match(render('[View the graded frame](C:/workspace/graded-frame.png)', base, 'images'), /data-markdown-file-link=""[^>]*|class="markdown-inline-file-tag"/, 'ordinary documents keep an actionable local target rather than a stripped, decorative link')
+    assert.match(render('[View the graded frame](C:/workspace/graded-frame.png)', base), /data-markdown-image-target="C:\/workspace\/graded-frame.png"/, 'final response image links become an openable embedded image')
+    assert.match(render('![Graded frame](C:/workspace/graded-frame.png)', base), /<img[^>]*src="zyra:\/\/\/C:\/workspace\/graded-frame.png"/, 'plain Windows image destinations survive sanitization')
+    assert.equal(videoSource(render('[Recording](C:/workspace/recording.mp4)', base)), 'zyra:///C:/workspace/recording.mp4', 'plain Windows video destinations survive sanitization')
+}
+for (const [href, expected] of [
+    ['C:/workspace/take%20%231.wav', 'zyra:///C:/workspace/take%20%231.wav'],
+    ['file:///C:/workspace/music.mp3', 'zyra:///C:/workspace/music.mp3'],
+    ['./music.m4a', 'zyra:///C:/workspace/music.m4a'],
+    ['https://example.com/music.ogg?token=public', 'https://example.com/music.ogg?token=public']
+]) {
+    const markup = render(`[Listen](${href})`, 'C:/workspace/response.md')
+    assert.match(markup, /<audio[^>]*controls=""[^>]*preload="metadata"/)
+    assert.match(markup, /data-markdown-audio-target=/)
+    assert.ok(markup.includes(`src="${expected}"`))
+    assert.doesNotMatch(markup, /autoplay/i)
+    assert.doesNotMatch(render(`[Listen](${href})`, 'C:/workspace/response.md', 'none'), /<audio/)
+    assert.doesNotMatch(render(`[Listen](${href})`, 'C:/workspace/response.md', 'images'), /<audio/)
+}
+assert.doesNotMatch(render('[Unsafe](javascript:alert%281%29.mp3)'), /<audio|javascript:|<a\b/i, 'unsafe schemes cannot turn into players or misleading dead anchors')
+assert.doesNotMatch(render('<img src="javascript:alert(1)" onerror="alert(1)"/><a href="evil:payload.mp4">unsafe</a>'), /javascript:|onerror|evil:|<video/i)
+assert.match(render('<a href="C:/workspace/frame.png">View</a>', undefined, 'images'), /data-markdown-file-link=/, 'raw HTML drive destinations use the same safe normalization')
 assert.doesNotMatch(render('`C:\\Users\\example\\Videos\\chat debug.mp4`'), /<video\b/, 'code-formatted paths retain file-chip behavior')
 assert.doesNotMatch(render(videoExample, undefined, 'images'), /<video\b/, 'ordinary documents retain link behavior')
 const narrationMarkup = render(`${videoExample}\n\n${imageExample}`, undefined, 'none')
@@ -76,7 +99,12 @@ assert.match(shell, /media-src[^;]*https:/, 'the packaged page policy permits th
 
 // The native smoke runner supplies its own temporary output and a read-only input file.
 if (process.env.ZYRA_MEDIA_TEST_FILE && process.env.ZYRA_MEDIA_TEST_HTML) {
-    const content = `[Recording](${pathToFileURL(process.env.ZYRA_MEDIA_TEST_FILE).href})`
+    const destination = (path: string) => process.platform === 'win32' ? path.replace(/\\/g, '/').replace(/%/g, '%25').replace(/ /g, '%20').replace(/#/g, '%23').replace(/\(/g, '%28').replace(/\)/g, '%29') : pathToFileURL(path).href
+    const content = [
+        `[Recording](${destination(process.env.ZYRA_MEDIA_TEST_FILE)})`,
+        process.env.ZYRA_MEDIA_TEST_AUDIO ? `[Listen](${destination(process.env.ZYRA_MEDIA_TEST_AUDIO)})` : '',
+        process.env.ZYRA_MEDIA_TEST_IMAGE ? `[View the graded frame](${destination(process.env.ZYRA_MEDIA_TEST_IMAGE)})` : ''
+    ].filter(Boolean).join('\n\n')
     const markup = render(content)
     videoSource(markup)
     const csp = shell.match(/<meta http-equiv="Content-Security-Policy"[\s\S]*?\/>/)?.[0]

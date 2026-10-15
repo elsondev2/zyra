@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { CanonicalChatCatalog } from '../src/agent-server/catalog.mjs';
+import { ZyraAgentServer } from '../src/agent-server/server.mjs';
+import { ZyraAgentServerClient } from '../src/agent-server/client.mjs';
+import { projectChatSettlement, AUTO_SETTLE_AFTER_MS } from '../src/agent-server/chat-settlement.mjs';
+
+const dir = mkdtempSync(path.join(tmpdir(), 'zyra-settlement-'));
+const chat = { canonicalChatId: 'settlement-fixture', title: 'Fixture', project: dir, cwd: dir, messageCount: 4, modifiedAt: new Date().toISOString() };
+const index = { get: id => id === chat.canonicalChatId ? { ...chat } : null, update() {}, listProjects: async () => [{ ...chat }] };
+const catalog = new CanonicalChatCatalog({ stateDirectory: dir, index });
+class Worker extends EventEmitter {
+  isAlive() { return true; }
+  async request(type) { return type === 'connect' ? { threadId: chat.canonicalChatId, cwd: dir } : {}; }
+  dispose() {}
+  sendControlResponse() {}
+}
+const worker = new Worker();
+const server = new ZyraAgentServer({ stateDirectory: dir, root: process.cwd(), endpoint: 0, catalog, createWorker: () => worker });
+const clients = [];
+try {
+  assert.equal(projectChatSettlement({ ...chat, modifiedAt: new Date(Date.now() - AUTO_SETTLE_AFTER_MS - 1000).toISOString() }, {}), true);
+  assert.equal(projectChatSettlement({ ...chat, messageCount: 0, modifiedAt: '2000-01-01' }, {}), false, 'empty chats remain active');
+  await server.start();
+  for (const surface of ['desktop', 'mobile', 'browser']) {
+    const client = new ZyraAgentServerClient({ stateDirectory: dir, autoStart: false, clientId: `fixture:${surface}`, surface });
+    await client.attach({ project: dir, session: chat.canonicalChatId }); clients.push(client);
+    // This fixture has no external identity provider; grant only the local test workspace.
+    [...server.clients.values()].find(entry => entry.clientId === `fixture:${surface}`).canOpenWorkspace = true;
+  }
+  const [desktop, mobile, browser] = clients;
+  const read = async client => (await client.request('catalog.get', { session: chat.canonicalChatId })).chat;
+  const update = (client, settled, extra = {}) => client.request('catalog.update', { session: chat.canonicalChatId, settled, ...extra });
+  await update(desktop, true);
+  assert.equal((await read(mobile)).settled, true);
+  assert.equal((await read(browser)).settled, true, 'all surfaces read the server choice');
+  const restored = new CanonicalChatCatalog({ stateDirectory: dir, index });
+  assert.equal((await restored.find(chat.canonicalChatId)).settled, true, 'choice survives catalog restart');
+  await update(mobile, false);
+  assert.equal((await read(desktop)).settled, false, 'mobile update changes desktop state');
+  await update(browser, true, { settlementIfAbsent: true });
+  assert.equal((await read(desktop)).settled, false, 'a legacy migration cannot overwrite a newer server choice');
+  await update(browser, true);
+  chat.messageCount += 1;
+  assert.equal((await read(desktop)).settled, false, 'new content revives the chat');
+  await update(desktop, true);
+  const session = server.sessions.get(chat.canonicalChatId);
+  session.activeRequestContext = { turnId: 'new-work' };
+  worker.emit('event', { type: 'agent_start' });
+  assert.equal((await read(mobile)).settled, false);
+  await assert.rejects(update(mobile, true), /Finish the current turn/);
+  worker.emit('event', { type: 'agent_end', messages: [] });
+  assert.equal((await read(browser)).settled, false, 'settlement stays cleared after completion');
+  await assert.rejects(update(desktop, 'yes'), /Choose whether/);
+  console.log('Canonical settlement: cross-surface updates, restart, new activity, migration ordering and busy guards passed.');
+} finally {
+  for (const client of clients) client.close();
+  await server.stop();
+  rmSync(dir, { recursive: true, force: true });
+}

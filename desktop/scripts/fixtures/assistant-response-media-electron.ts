@@ -47,6 +47,30 @@ void app.whenReady().then(async () => {
             video.pause();
             return { initial, playedTo, seekTo, playedAfterSeekTo: video.currentTime, width: video.videoWidth, height: video.videoHeight, duration: video.duration, error: video.error?.code || null };
         })()`, true)
+        const audioResult = await window.webContents.executeJavaScript(`(async () => {
+            const audio = document.querySelector('audio');
+            const image = document.querySelector('img');
+            if (!audio || !image) throw new Error('Missing embedded audio/image');
+            async function until(predicate, label) {
+                const deadline = performance.now() + 12000;
+                while (!predicate()) {
+                    if (audio.error) throw new Error(label + ': ' + audio.error.message);
+                    if (performance.now() > deadline) throw new Error(label + ': timed out');
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                }
+            }
+            await until(() => audio.readyState >= 2 && image.complete && image.naturalWidth > 0, 'load audio/image');
+            const initial = { paused: audio.paused, time: audio.currentTime, autoplay: audio.autoplay, controls: audio.controls };
+            audio.muted = true;
+            await audio.play(); await until(() => audio.currentTime > 0.15, 'audio playback'); audio.pause();
+            const playedTo = audio.currentTime;
+            audio.currentTime = 1; await until(() => !audio.seeking && Math.abs(audio.currentTime - 1) < 0.1, 'audio seek');
+            return { initial, playedTo, seekTo: audio.currentTime, duration: audio.duration, imageWidth: image.naturalWidth };
+        })()`, true)
+        assert.deepEqual(audioResult.initial, { paused: true, time: 0, autoplay: false, controls: true })
+        assert.ok(audioResult.playedTo > 0.15)
+        assert.ok(Math.abs(audioResult.seekTo - 1) < 0.1)
+        assert.ok(audioResult.imageWidth > 0)
         assert.equal(result.initial.paused, true)
         assert.equal(result.initial.time, 0)
         assert.equal(result.initial.autoplay, false)
@@ -57,7 +81,7 @@ void app.whenReady().then(async () => {
         assert.equal(result.error, null)
         assert.equal(window.isVisible(), false, 'the smoke window must never be shown')
         assert.equal(window.isFocused(), false, 'the smoke window must never receive focus')
-        console.log(JSON.stringify({ test: 'assistant-response-media-playback', ...result }))
+        console.log(JSON.stringify({ test: 'assistant-response-media-playback', ...result, audio: audioResult }))
         clearTimeout(watchdog)
         window.destroy()
         app.exit(0)

@@ -3,7 +3,9 @@ import type { AssistantTranscriptionEngine } from '@/lib/settings'
 import {
     ASSISTANT_VOICE_MAX_DURATION_MS,
     ASSISTANT_VOICE_MAX_WAVEFORM_SAMPLES,
-    createAssistantVoicePayload,
+    createAssistantVoicePcmPayload,
+    ASSISTANT_VOICE_SAMPLE_RATE_HZ,
+    resampleAssistantVoice,
     describeAssistantMicrophoneError,
     formatAssistantVoiceDuration,
     normalizeAssistantVoiceWaveformLevel
@@ -53,7 +55,7 @@ type RecorderRuntime = {
     processorNode: ScriptProcessorNode
     silentGainNode: GainNode
     stream: MediaStream
-    chunks: Float32Array[]
+    chunks: Int16Array[]
     capturedSampleCount: number
     sampleRateHz: number
     startedAt: number
@@ -133,6 +135,12 @@ export function useAssistantSpeechInput({
     const submitTranscriptRef = useRef(onSubmitTranscript)
     submitTranscriptRef.current = onSubmitTranscript
     const submittingRef = useRef<number | null>(null)
+    const transcriptionRequestRef = useRef<string | null>(null)
+    const cancelPendingTranscription = useCallback(() => {
+        const requestId = transcriptionRequestRef.current
+        transcriptionRequestRef.current = null
+        if (requestId) void window.devscope.assistant.cancelVoiceTranscription?.(requestId).catch(() => undefined)
+    }, [])
 
     const [isStarting, setIsStarting] = useState(false)
     const [isRecording, setIsRecording] = useState(false)
@@ -257,7 +265,7 @@ export function useAssistantSpeechInput({
             void (async () => {
                 try {
                     const recording = await teardownRecorder(false)
-                    const payload = recording && createAssistantVoicePayload(recording.chunks, recording.sampleRateHz)
+                    const payload = recording && createAssistantVoicePcmPayload(recording.chunks)
                     if (!payload) throw new Error('No audio was captured. Try dictation again.')
                     const saved = await window.devscope.assistant.saveVoiceHistory({
                         engine: 'browser', recording: payload,
@@ -397,12 +405,18 @@ export function useAssistantSpeechInput({
                         mono[sampleIndex] += (channel[sampleIndex] ?? 0) / channelCount
                     }
                 }
-                const maximumSampleCount = Math.ceil(runtime.sampleRateHz * ASSISTANT_VOICE_MAX_DURATION_MS / 1000)
+                const maximumSampleCount = Math.ceil(ASSISTANT_VOICE_SAMPLE_RATE_HZ * ASSISTANT_VOICE_MAX_DURATION_MS / 1000)
                 const remainingSampleCount = Math.max(0, maximumSampleCount - runtime.capturedSampleCount)
                 if (remainingSampleCount === 0) return
-                const captured = remainingSampleCount < mono.length ? mono.slice(0, remainingSampleCount) : mono
-                runtime.chunks.push(captured)
-                runtime.capturedSampleCount += captured.length
+                const resampled = resampleAssistantVoice(mono, runtime.sampleRateHz)
+                const captured = resampled.subarray(0, remainingSampleCount)
+                const pcm = new Int16Array(captured.length)
+                for (let i = 0; i < captured.length; i++) {
+                    const sample = Math.max(-1, Math.min(1, captured[i]))
+                    pcm[i] = Math.round(sample < 0 ? sample * 0x8000 : sample * 0x7fff)
+                }
+                runtime.chunks.push(pcm)
+                runtime.capturedSampleCount += pcm.length
 
                 let sumSquares = 0
                 for (const sample of captured) sumSquares += sample * sample
@@ -451,6 +465,7 @@ export function useAssistantSpeechInput({
         if (!recorderRuntimeRef.current || isTranscribing || submittingRef.current !== null) return
         const submittedScope = availableRef.current.scopeKey
         const requestId = requestIdRef.current + 1
+        const transcriptionRequestId = crypto.randomUUID()
         requestIdRef.current = requestId
         submittingRef.current = requestId
         setSpeechError(null)
@@ -460,8 +475,10 @@ export function useAssistantSpeechInput({
         try {
             const recording = await teardownRecorder(false)
             if (!recording || requestIdRef.current !== requestId) return
-            const payload = createAssistantVoicePayload(recording.chunks, recording.sampleRateHz)
+            const payload = createAssistantVoicePcmPayload(recording.chunks)
             if (!payload) throw new Error('No audio was captured. Try recording again.')
+            payload.requestId = transcriptionRequestId
+            transcriptionRequestRef.current = transcriptionRequestId
             const result = await window.devscope.assistant.transcribeVoice(payload)
             if (requestIdRef.current !== requestId || !mountedRef.current || availableRef.current.scopeKey !== submittedScope) return
             if (!result.success) throw new Error(result.error || 'Voice transcription failed.')
@@ -474,6 +491,7 @@ export function useAssistantSpeechInput({
                 setSpeechError(error instanceof Error ? error.message : 'Voice transcription failed.')
             }
         } finally {
+            if (transcriptionRequestRef.current === transcriptionRequestId) transcriptionRequestRef.current = null
             if (submittingRef.current === requestId) submittingRef.current = null
             if (requestIdRef.current === requestId) {
                 setIsTranscribing(false)
@@ -483,11 +501,12 @@ export function useAssistantSpeechInput({
     }, [applyTranscript, isTranscribing, resetRecorderPresentation, teardownRecorder])
 
     const cancelCodexRecording = useCallback(() => {
+        cancelPendingTranscription()
         requestIdRef.current += 1
         submittingRef.current = null
         setIsTranscribing(false)
         void teardownRecorder(true)
-    }, [teardownRecorder])
+    }, [cancelPendingTranscription, teardownRecorder])
 
     const stopBrowserOnInput = useCallback(() => {
         if (engine !== 'browser') return
@@ -561,8 +580,11 @@ export function useAssistantSpeechInput({
 
     useEffect(() => {
         mountedRef.current = true
+        window.addEventListener('pagehide', cancelPendingTranscription)
         return () => {
+            window.removeEventListener('pagehide', cancelPendingTranscription)
             mountedRef.current = false
+            cancelPendingTranscription()
             requestIdRef.current += 1
             const recognition = recognitionRef.current
             recognitionRef.current = null
@@ -574,7 +596,7 @@ export function useAssistantSpeechInput({
             }
             void teardownRecorder(false)
         }
-    }, [teardownRecorder])
+    }, [cancelPendingTranscription, teardownRecorder])
 
     return {
         isSupported,

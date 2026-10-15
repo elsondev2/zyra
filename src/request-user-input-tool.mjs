@@ -24,7 +24,7 @@ const QuestionSchema = Type.Object({
   type: QuestionTypeSchema,
   options: Type.Optional(Type.Array(QuestionOptionSchema, { description: "Choices for select, file, confirm, and ranking questions." })),
   required: Type.Optional(Type.Boolean({ description: "Whether the user must answer. Defaults to true." })),
-  allowOther: Type.Optional(Type.Boolean({ description: "Allow a custom typed answer for single or multi-select. Defaults to false." })),
+  allowOther: Type.Optional(Type.Boolean({ description: "Single and multi-select always offer a custom typed answer. Also enable a custom answer for other choice controls." })),
   placeholder: Type.Optional(Type.String({ description: "Helpful placeholder for text or numeric input." })),
   multiple: Type.Optional(Type.Boolean({ description: "Allow several file choices for file_select." })),
   min: Type.Optional(Type.Number({ description: "Optional minimum for number input." })),
@@ -47,7 +47,7 @@ export function createRequestUserInputTool(options = {}) {
       "Never use request_user_input for discoverable facts, routine progress updates, or secrets.",
       "Use as many questions as are materially necessary; batch related decisions without manufacturing extra questions.",
       "Choose text for open answers, single_select for an obvious bounded choice, multi_select for several choices, confirm for a true yes/no decision, file_select for user choice among known project paths, number or date when validation matters, and ranking when order is the decision.",
-      "Set allowOther only when listed select choices may reasonably be incomplete; it is false by default.",
+      "Single and multi-select always include an editable alternative. Set allowOther for other choice controls when the listed choices may be incomplete.",
       "When presenting meaningful tradeoffs, mark one option recommended and explain the consequence briefly.",
     ],
     parameters: Type.Object({

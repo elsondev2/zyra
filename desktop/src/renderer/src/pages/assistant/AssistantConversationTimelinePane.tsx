@@ -14,6 +14,7 @@ const AssistantTimeline = lazy(() => preloadAssistantTimeline().then(module => (
 
 export const AssistantConversationTimelinePane = memo(function AssistantConversationTimelinePane(props: {
     loading: boolean
+    threadId?: string | null
     timelineScrollRef: RefObject<HTMLDivElement | null>
     timelineContentRef: RefObject<HTMLDivElement | null>
     messages: AssistantMessage[]
@@ -119,6 +120,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                 <>
                     <Suspense fallback={<LoadingSpinner message="Loading conversation..." className="h-full py-0" minHeightClassName="min-h-0" />}>
                     <AssistantTimeline
+                        threadId={props.threadId}
                         messages={props.messages}
                         activities={props.activities}
                         proposedPlans={props.proposedPlans || []}

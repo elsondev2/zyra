@@ -14,6 +14,10 @@ The opening and closing tags occupy separate lines. Attribute values are quoted.
 
 The shared parser in `src/visualizations/blocks.mjs` separates Markdown from visualization blocks before streaming Markdown is split into paragraphs. Partial opening tags and unfinished blocks show a compact creation state. Only complete blocks reach the iframe. Ended or interrupted responses show an incomplete state instead of an endless spinner. HTML is limited to 64 KiB per block; the UI renders at most eight previews per message.
 
+## Saved resources
+
+HTML/SVG visuals, Mermaid diagrams and declarative 3D scenes can also be saved as versioned Resources. Agents use the `visualization` tool and version-pinned message references. The inspector provides Preview / Code / Versions, source export, parent comparisons and reuse in chat. Completed legacy blocks are imported without rewriting messages. See [saved visualization resources](visualization-resources.md) for persistence, permissions, 3D schema, compatibility and verification boundaries. The existing HTML iframe restrictions below remain unchanged.
+
 ## Rendering and trust boundary
 
 `VisualizationPreview` loads the app-owned `visualization-frame.html` in an opaque iframe. The parent sends the sanitized document after the frame's ready handshake. Defense in depth:

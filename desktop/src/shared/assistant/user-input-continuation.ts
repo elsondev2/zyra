@@ -1,5 +1,7 @@
 import type { AssistantMessage, AssistantPendingUserInput, AssistantUserInputAnswer, AssistantUserInputQuestion } from './contracts'
 
+export const ASSISTANT_USER_INPUT_CONTEXT_HEADING = 'Supporting files for these answers:'
+
 const USER_INPUT_RESPONSE_REPLAY_WINDOW_MS = 5 * 60_000
 
 function normalizeResponseText(text: string): string {
@@ -52,7 +54,9 @@ export function reconcileAssistantUserInputResponseMessageIds(
 
         const canonical = canonicalMessages
             .filter((message) => {
-                if (message.role !== 'user' || !expectedVariants.has(normalizeResponseText(message.text)) || claimedCanonicalIds.has(message.id)) return false
+                const text = normalizeResponseText(message.text)
+                const matches = expectedVariants.has(text) || [...expectedVariants].some(variant => text.startsWith(`${variant}\n\n${ASSISTANT_USER_INPUT_CONTEXT_HEADING}\n\nAttached files (`))
+                if (message.role !== 'user' || !matches || claimedCanonicalIds.has(message.id)) return false
                 const createdAt = Date.parse(message.createdAt)
                 return Number.isFinite(createdAt) && Math.abs(createdAt - anchorTime) <= USER_INPUT_RESPONSE_REPLAY_WINDOW_MS
             })

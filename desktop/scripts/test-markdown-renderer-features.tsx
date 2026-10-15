@@ -187,7 +187,7 @@ assert.doesNotMatch(markup, /<iframe/i, 'raw embeds are stripped')
 
 const rendererSource = readFileSync(new URL('../src/renderer/src/components/ui/MarkdownRenderer.tsx', import.meta.url), 'utf8')
 const timelineRowsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineRows.tsx', import.meta.url), 'utf8')
-assert.equal((timelineRowsSource.match(/mediaMode="images-and-videos"/g) || []).length, 1, 'only the settled final assistant response opts into inline video rendering')
+assert.equal((timelineRowsSource.match(/mediaMode=\{presentationActive \? 'none' : 'images-and-videos'\}/g) || []).length, 1, 'only a settled final assistant response opts into image/video/audio rendering')
 assert.match(timelineRowsSource, /mediaMode="none"/, 'streaming and Work narration suppress assistant-authored media projection')
 const codeSource = readFileSync(new URL('../src/renderer/src/components/ui/markdown/CodeElements.tsx', import.meta.url), 'utf8')
 const timelineTextSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineText.tsx', import.meta.url), 'utf8')

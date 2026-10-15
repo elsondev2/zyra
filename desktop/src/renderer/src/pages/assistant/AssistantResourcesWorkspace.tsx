@@ -1,5 +1,10 @@
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { ArrowUpRight, Copy, ExternalLink, FileClock, Globe2, Image as ImageIcon, Library, LoaderCircle, Search, X } from 'lucide-react'
+import { ArrowUpRight, Box, Code2, Copy, ExternalLink, FileClock, Globe2, Image as ImageIcon, Library, LoaderCircle, Search, Workflow, X } from 'lucide-react'
+import type { VisualizationResource } from '@shared/visualization-resources'
+import { VisualizationResourceView } from '@/components/ui/visualization-resource/VisualizationResourceView'
+import { VisualizationNavigator } from '@/components/ui/visualization-resource/VisualizationNavigator'
+import { VisualizationLibraryControls, type VisualizationLibraryLoad } from '@/components/ui/visualization-resource/VisualizationLibraryControls'
+import { visualizationEmbed, visualizationKindLabel } from '@/components/ui/visualization-resource/visualization-resource-utils'
 import type { AssistantUtilityResourcesStateCapsule } from '@shared/assistant/utility-window'
 import { getFileUrl } from '@/components/ui/file-preview/utils'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -10,7 +15,7 @@ import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import type { ComposerContextFile } from './assistant-composer-types'
 import { getContentTypeTag, getContextFileMeta, toKbLabel } from './assistant-composer-utils'
 import { openAssistantFileTarget } from './assistant-file-navigation'
-import { buildAssistantResourceIndex, type AssistantResource, type AssistantResourceSource } from './assistant-resource-index'
+import { buildAssistantResourceIndex, visualizationToAssistantResource, type AssistantResource, type AssistantResourceSource } from './assistant-resource-index'
 import {
     AssistantResourcesLibrary,
     resourceSourceBadgeClass,
@@ -28,7 +33,8 @@ const RESOURCE_TABLE_ROW_HEIGHT = 52
 const RESOURCE_FILTERS: Array<{ id: ResourceFilter; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'images', label: 'Images' },
-    { id: 'links', label: 'Links' }
+    { id: 'links', label: 'Links' },
+    { id: 'visualizations', label: 'Visualizations' }
 ]
 
 function parseAttachmentSize(value: string | null | undefined): number | undefined {
@@ -98,6 +104,7 @@ const ResourceImagePreview = memo(function ResourceImagePreview({ resource }: { 
 
 export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorkspace({
     active = true,
+    threadId,
     turns,
     projectPath,
     onOpenPreview,
@@ -109,6 +116,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
     onStateCapsuleChange
 }: {
     active?: boolean
+    threadId?: string
     turns: AssistantDiffTurn[]
     projectPath: string | null
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
@@ -132,14 +140,65 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
     const [error, setError] = useState<string | null>(null)
     const [openingResourceId, setOpeningResourceId] = useState<string | null>(null)
     const [previewFile, setPreviewFile] = useState<ComposerContextFile | null>(null)
-    const resourceIndex = useMemo(() => buildAssistantResourceIndex({ turns, projectPath }), [projectPath, turns])
+    const [visualizations, setVisualizations] = useState<VisualizationResource[]>([])
+    const [visualizationScope, setVisualizationScope] = useState<'thread' | 'project'>('thread')
+    const [visualizationLoad, setVisualizationLoad] = useState<VisualizationLibraryLoad>('idle')
+    const [visualizationError, setVisualizationError] = useState('')
+    const [visualizationStatus, setVisualizationStatus] = useState({ skippedCount: 0, indexingOlder: false, readOnly: false })
+    const [retry, setRetry] = useState(0)
+    const indexOlderRequest = useRef(false)
+    const listRequest = useRef(0)
+    const detailRequest = useRef(0)
+    const selectResource = useCallback((id: string | null) => {
+        if (id !== selectedResourceId) {
+            // Selection owns its detail/error state. Ignore a late result from
+            // the previous resource before starting this metadata-only load.
+            ++detailRequest.current
+            setOpeningResourceId(null)
+            setError(null)
+        }
+        setSelectedResourceId(id)
+    }, [selectedResourceId])
+    const listIdentity = useRef('')
+    const completedTurnsKey = turns.filter((turn) => turn.state !== 'running').map((turn) => `${turn.id}:${turn.state}`).join('|')
+    useEffect(() => {
+        const request = ++listRequest.current
+        ++detailRequest.current
+        setOpeningResourceId(null)
+        if (!active || !threadId) { setVisualizations([]); setVisualizationLoad('idle'); return }
+        const list = window.devscope.assistant.listVisualizations
+        if (!list) { setVisualizations([]); setVisualizationLoad('unavailable'); return }
+        const identity = `${threadId}:${visualizationScope}`
+        if (listIdentity.current !== identity) { setVisualizations([]); setSelectedResourceId(null); listIdentity.current = identity }
+        setVisualizationLoad('loading'); setVisualizationError('')
+        const indexOlder = indexOlderRequest.current
+        indexOlderRequest.current = false
+        void list({ threadId, scope: visualizationScope, indexOlder }).then(result => {
+            if (request !== listRequest.current) return
+            if (!result.success) throw new Error(result.error || 'Could not load visualizations.')
+            setVisualizations(current => (result.resources || []).map(item => {
+                const loaded = current.find(previous => previous.id === item.id && previous.latestVersion === item.latestVersion && previous.sourceLoaded !== false)
+                return loaded || item
+            })); setVisualizationLoad('ready')
+            setVisualizationStatus({ skippedCount: result.skippedCount || 0, indexingOlder: Boolean(result.indexingOlder), readOnly: Boolean(result.readOnly) })
+        }).catch((cause: unknown) => {
+            if (request !== listRequest.current) return
+            setVisualizationError(cause instanceof Error ? cause.message : 'Could not load visualizations.'); setVisualizationLoad('error')
+        })
+        return () => { ++listRequest.current; ++detailRequest.current }
+    }, [active, threadId, completedTurnsKey, visualizationScope, retry])
+    const resourceIndex = useMemo(() => {
+        const legacy = buildAssistantResourceIndex({ turns, projectPath })
+        return { ...legacy, resources: [...legacy.resources, ...(listIdentity.current === `${threadId}:${visualizationScope}` ? visualizations : []).map(resource => visualizationToAssistantResource(resource, turns))].sort((a,b) => b.latestAt.localeCompare(a.latestAt)) }
+    }, [projectPath, turns, visualizations, threadId, visualizationScope])
+    const selectedVisualization = resourceIndex.resources.find(resource => resource.id === selectedResourceId)?.visualization
     const kindCounts = useMemo(() => Object.fromEntries(RESOURCE_FILTERS.map(({ id }) => [
         id,
         resourceIndex.resources.filter((resource) => resourceMatchesFilter(resource, id)).length
     ])) as Record<ResourceFilter, number>, [resourceIndex.resources])
-    const availableTypeFilters = useMemo(() => RESOURCE_FILTERS.filter((entry) => entry.id !== 'all' && kindCounts[entry.id] > 0), [kindCounts])
+    const availableTypeFilters = useMemo(() => RESOURCE_FILTERS.filter((entry) => entry.id !== 'all' && (kindCounts[entry.id] > 0 || entry.id === 'visualizations')), [kindCounts])
     const availableResourceFilters = useMemo(() => [RESOURCE_FILTERS[0]!, ...availableTypeFilters], [availableTypeFilters])
-    const showResourceFilters = availableTypeFilters.length > 1
+    const showResourceFilters = availableTypeFilters.length > 0
     const sourceCounts = useMemo(() => ({
         attached: resourceIndex.resources.filter((resource) => resource.sources.includes('attached')).length,
         generated: resourceIndex.resources.filter((resource) => resource.sources.includes('generated')).length,
@@ -215,7 +274,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
         return () => observer.disconnect()
     }, [active])
     useEffect(() => {
-        if (filter !== 'all' && (!kindCounts[filter] || !showResourceFilters)) setFilter('all')
+        if (filter !== 'all' && filter !== 'visualizations' && (!kindCounts[filter] || !showResourceFilters)) setFilter('all')
     }, [filter, kindCounts, showResourceFilters])
     useEffect(() => {
         if (sourceFilter !== 'all' && sourceCounts[sourceFilter] === 0) setSourceFilter('all')
@@ -225,7 +284,6 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
         if (!active || workspaceWidth === 0 || wideLayout) return
         setSourceFilter('all')
         setTurnFilter('all')
-        setSelectedResourceId(null)
     }, [active, wideLayout, workspaceWidth])
     useEffect(() => {
         if (scrollElementRef.current) scrollElementRef.current.scrollTop = 0
@@ -256,23 +314,41 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
     }, [onOpenPreview, onOpenPreviewInNewTab, onOpenUrl, projectPath])
 
     const openResource = useCallback(async (resource: AssistantResource, inNewTab = false) => {
+        const openingRequest = ++detailRequest.current
         setOpeningResourceId(resource.id)
         setError(null)
         try {
+            if (resource.visualization) {
+                setSelectedResourceId(resource.id)
+                const request = openingRequest
+                const get = window.devscope.assistant.getVisualization
+                if (!get || !threadId) { setError('Visualization details are unavailable in this client.'); return }
+                const result = await get({ threadId, id: resource.visualization.id })
+                if (request !== detailRequest.current) return
+                if (!result.success || !result.resource) throw new Error(!result.success ? result.error || 'Could not load visualization details.' : 'Could not load visualization details.')
+                setVisualizations(current => current.map(item => item.id === result.resource!.id ? result.resource! : item))
+                return
+            }
             if (resource.kind === 'link' && resource.url) {
                 onOpenUrl(resource.url)
                 return
             }
             if (!await openImageResource(resource, inNewTab)) setError('This image is no longer available to preview.')
         } catch (openError: unknown) {
-            setError(openError instanceof Error ? openError.message : 'Could not open this resource.')
+            if (openingRequest === detailRequest.current) setError(openError instanceof Error ? openError.message : 'Could not open this resource.')
         } finally {
-            setOpeningResourceId(null)
+            if (openingRequest === detailRequest.current) setOpeningResourceId(null)
         }
-    }, [onOpenUrl, openImageResource])
+    }, [onOpenUrl, openImageResource, threadId])
+
+    useEffect(() => {
+        if (selectedVisualization?.sourceLoaded !== false || openingResourceId === selectedResourceId || error) return
+        const target = resourceIndex.resources.find(resource => resource.id === selectedResourceId)
+        if (target) void openResource(target)
+    }, [selectedVisualization, selectedResourceId, resourceIndex.resources, openingResourceId, error, openResource])
 
     const copyResource = useCallback(async (resource: AssistantResource) => {
-        const value = resource.path || resource.url || resource.attachment?.path || inlineImageData(resource) || resource.title
+        const value = resource.visualization ? visualizationEmbed(resource.visualization.id, resource.visualization.latestVersion) : resource.path || resource.url || resource.attachment?.path || inlineImageData(resource) || resource.title
         try {
             const result = await window.devscope.copyToClipboard(value)
             if (!result.success) setError(result.error || 'Could not copy this resource.')
@@ -283,7 +359,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
 
     const renderResourcePreview = useCallback((resource: AssistantResource): ReactNode => (
         <span className="relative flex h-full w-full items-center justify-center overflow-hidden">
-            <ResourceImagePreview resource={resource} />
+            {resource.visualization ? <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,0.16),transparent_70%)]"><span className="font-mono text-sm text-violet-200/70">{resource.visualization.kind === 'html' ? <Code2 size={22}/> : resource.visualization.kind === 'mermaid' ? <Workflow size={22}/> : <Box size={22}/>}</span><span className="text-[11px] text-sparkle-text-muted">{visualizationKindLabel(resource.visualization.kind)}</span></span> : <ResourceImagePreview resource={resource} />}
             {openingResourceId === resource.id ? <span className="absolute inset-0 flex items-center justify-center bg-black/55"><LoaderCircle size={14} className="animate-spin text-white/85" /></span> : null}
         </span>
     ), [openingResourceId])
@@ -302,9 +378,19 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
                 <Library size={12} className="shrink-0 text-[var(--accent-primary)]/75" />
                 <div className="assistant-resources-search flex h-6 min-w-0 flex-1 items-center gap-1.5 border border-white/[0.08] bg-white/[0.02] px-2 focus-within:border-[var(--accent-primary)]/30">
                     <Search size={10} className="shrink-0 text-sparkle-text-muted/45" />
-                    <input value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[10px] text-sparkle-text-secondary outline-none placeholder:text-sparkle-text-muted/40" placeholder="Search images, links, or turns" aria-label="Search chat resources" spellCheck={false} />
+                    <input value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[10px] text-sparkle-text-secondary outline-none placeholder:text-sparkle-text-muted/40" placeholder="Search resources or turns" aria-label="Search chat resources" spellCheck={false} />
                     {query ? <button type="button" onClick={() => setQuery('')} className="inline-flex size-4 items-center justify-center text-sparkle-text-muted hover:text-sparkle-text" title="Clear resource search"><X size={9} /></button> : null}
                 </div>
+                <VisualizationLibraryControls
+                    scope={visualizationScope}
+                    projectPath={projectPath}
+                    load={visualizationLoad}
+                    error={visualizationError}
+                    status={visualizationStatus}
+                    onScopeChange={setVisualizationScope}
+                    onRetry={() => setRetry(value => value + 1)}
+                    onIndexOlder={() => { indexOlderRequest.current = true; setRetry(value => value + 1) }}
+                />
                 <span className="assistant-resources-summary hidden shrink-0 font-mono text-[9px] text-sparkle-text-muted/55">{visibleResources.length === resourceIndex.resources.length ? `${visibleResources.length} resources` : `${visibleResources.length} of ${resourceIndex.resources.length}`}</span>
             </div>
 
@@ -313,7 +399,7 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
                     {availableResourceFilters.map((entry) => <button key={entry.id} type="button" onClick={() => setFilter(entry.id)} aria-pressed={filter === entry.id} className={cn('inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-[9px] font-medium transition-colors', filter === entry.id ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-muted/65 hover:bg-[var(--surface-hover)] hover:text-sparkle-text-secondary')}><span>{entry.label}</span><span className="font-mono text-[7px] text-sparkle-text-muted/45">{kindCounts[entry.id]}</span></button>)}
                 </div>
             ) : null}
-            {error ? <div className="flex shrink-0 items-center gap-2 border-b border-red-500/15 bg-red-500/[0.06] px-2 py-1 text-[9px] text-red-300"><span className="min-w-0 flex-1">{error}</span><button type="button" onClick={() => setError(null)} className="inline-flex size-4 items-center justify-center hover:text-red-100" title="Dismiss"><X size={9} /></button></div> : null}
+            {error ? <div className="flex shrink-0 items-center gap-2 border-b border-red-500/15 bg-red-500/[0.06] px-2 py-1 text-[9px] text-red-300"><span className="min-w-0 flex-1">{error}</span>{selectedVisualization && <button type="button" className="underline" onClick={() => { const resource = resourceIndex.resources.find(item => item.id === selectedResourceId); if(resource) void openResource(resource) }}>Retry</button>}<button type="button" onClick={() => setError(null)} className="inline-flex size-4 items-center justify-center hover:text-red-100" title="Dismiss"><X size={9} /></button></div> : null}
 
             {wideLayout ? (
                 <AssistantResourcesLibrary
@@ -328,7 +414,8 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
                     sourceCounts={sourceCounts}
                     turnOptions={turnOptions}
                     renderPreview={renderResourcePreview}
-                    onSelectResource={setSelectedResourceId}
+                    renderDetails={(resource) => resource.visualization ? <VisualizationResourceView key={resource.id} resource={resource.visualization} relatedResources={visualizations} threadId={threadId} onOpenTurn={onOpenTurn} onClose={() => setSelectedResourceId(null)}/> : null}
+                    onSelectResource={selectResource}
                     onKindFilterChange={setFilter}
                     onSourceFilterChange={setSourceFilter}
                     onTurnFilterChange={setTurnFilter}
@@ -337,7 +424,10 @@ export const AssistantResourcesWorkspace = memo(function AssistantResourcesWorks
                     onOpenTurn={onOpenTurn}
                     onOpenDiff={onOpenDiff}
                 />
-            ) : (
+            ) : selectedVisualization ? <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                <VisualizationNavigator compact resources={visualizations} selectedId={selectedVisualization.id} onSelect={item => { const target = resourceIndex.resources.find(resource => resource.visualization?.id === item.id); if (target) void openResource(target) }}/>
+                <VisualizationResourceView key={selectedVisualization.id} resource={selectedVisualization} relatedResources={visualizations} threadId={threadId} onOpenTurn={onOpenTurn} onClose={() => setSelectedResourceId(null)}/>
+            </div> : (
                 <ResourceCompactTable
                     resources={visibleResources}
                     renderedResources={renderedResources}
@@ -388,7 +478,7 @@ function ResourceCompactTable({
             {resources.length > 0 ? (
                 <div className="min-w-0">
                     <div className="assistant-resources-table-grid sticky top-0 z-10 grid h-7 items-center border-b border-white/[0.08] bg-[color-mix(in_srgb,var(--color-bg)_98%,black)] px-2 text-[8px] font-semibold uppercase tracking-[0.08em] text-sparkle-text-muted/55" role="row" aria-rowindex={1}>
-                        <span role="columnheader">Resource</span><span className="assistant-resources-table__type" role="columnheader">Type</span><span className="assistant-resources-table__source" role="columnheader">Source</span><span className="assistant-resources-table__mentions text-center" role="columnheader">Mentions</span><span className="assistant-resources-table__turn text-center" role="columnheader">Turn</span><span className="text-right" role="columnheader">Actions</span>
+                        <span role="columnheader">Resource</span><span className="assistant-resources-table__type" role="columnheader">Type</span><span className="assistant-resources-table__source" role="columnheader">Source</span><span className="assistant-resources-table__mentions text-center" role="columnheader">Count</span><span className="assistant-resources-table__turn text-center" role="columnheader">Turn</span><span className="text-right" role="columnheader">Actions</span>
                     </div>
                     <div role="rowgroup" style={{ height: resources.length * RESOURCE_TABLE_ROW_HEIGHT, position: 'relative' }}>
                         <div style={{ transform: `translateY(${rangeStart * RESOURCE_TABLE_ROW_HEIGHT}px)` }}>
@@ -400,7 +490,7 @@ function ResourceCompactTable({
                                         <div className="min-w-0 pr-2" role="cell">
                                             <button type="button" onClick={() => onOpenResource(resource)} className="flex w-full min-w-0 items-center gap-2 text-left" title={location}>
                                                 <span className="relative inline-flex size-7 shrink-0 items-center justify-center overflow-hidden border border-white/[0.08] bg-black/20">
-                                                    {resource.kind === 'image' ? renderPreview(resource) : host ? <MarkdownSiteIcon host={host} className="inline-flex size-4" /> : <Globe2 size={14} className="text-sky-200/70" />}
+                                                    {resource.kind === 'image' || resource.kind === 'visualization' ? renderPreview(resource) : host ? <MarkdownSiteIcon host={host} className="inline-flex size-4" /> : <Globe2 size={14} className="text-sky-200/70" />}
                                                     {openingResourceId === resource.id ? <span className="absolute inset-0 flex items-center justify-center bg-black/55"><LoaderCircle size={11} className="animate-spin text-white/85" /></span> : null}
                                                 </span>
                                                 <span className="min-w-0 flex-1"><span className="block truncate font-medium text-sparkle-text-secondary">{resource.title}</span><span className="mt-0.5 block truncate font-mono text-[8px] text-sparkle-text-muted/50">{location}</span></span>
@@ -408,12 +498,12 @@ function ResourceCompactTable({
                                         </div>
                                         <div className="assistant-resources-table__type pr-2 font-medium capitalize text-sparkle-text-muted/70" role="cell">{resource.kind}</div>
                                         <div className="assistant-resources-table__source flex min-w-0 items-center gap-1 overflow-hidden pr-2" role="cell">{resource.sources.slice(0, 2).map((source) => <span key={source} className={cn('shrink-0 border px-1 py-px text-[6px] font-semibold uppercase tracking-[0.04em]', resourceSourceBadgeClass(source))}>{resourceSourceBadgeLabel(source)}</span>)}</div>
-                                        <div className="assistant-resources-table__mentions text-center font-mono text-sparkle-text-muted/60" role="cell">{resource.occurrenceCount}</div>
-                                        <div className="assistant-resources-table__turn text-center" role="cell"><button type="button" onClick={() => onOpenTurn(resource.latestTurnId)} className="font-mono text-[8px] text-sparkle-text-muted/60 hover:text-sparkle-text">#{resource.latestTurnNumber}</button></div>
+                                        <div className="assistant-resources-table__mentions text-center font-mono text-sparkle-text-muted/60" role="cell">{resource.visualization ? `${resource.visualization.versions.length} versions` : `${resource.occurrenceCount} mentions`}</div>
+                                        <div className="assistant-resources-table__turn text-center" role="cell">{resource.latestTurnId ? <button type="button" onClick={() => onOpenTurn(resource.latestTurnId)} className="font-mono text-[8px] text-sparkle-text-muted/60 hover:text-sparkle-text">#{resource.latestTurnNumber}</button> : <span className="text-sparkle-text-muted/40">—</span>}</div>
                                         <div className="flex items-center justify-end gap-px" role="cell">
                                             <button type="button" onClick={() => onOpenResource(resource, resource.kind === 'image' && !resource.url)} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted/60 hover:bg-white/[0.06] hover:text-sparkle-text" title="Open resource"><ExternalLink size={9} /></button>
                                             {resource.latestDiffTarget ? <button type="button" onClick={() => onOpenDiff(resource.latestDiffTarget!)} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted/60 hover:bg-white/[0.06] hover:text-sparkle-text" title="Open in Review"><FileClock size={9} /></button> : null}
-                                            <button type="button" onClick={() => onOpenTurn(resource.latestTurnId)} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted/60 hover:bg-white/[0.06] hover:text-sparkle-text" title={`Open Turn ${resource.latestTurnNumber}`}><ArrowUpRight size={9} /></button>
+                                            {resource.latestTurnId && <button type="button" onClick={() => onOpenTurn(resource.latestTurnId)} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted/60 hover:bg-white/[0.06] hover:text-sparkle-text" title={`Open Turn ${resource.latestTurnNumber}`}><ArrowUpRight size={9} /></button>}
                                             <button type="button" onClick={() => onCopyResource(resource)} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted/60 hover:bg-white/[0.06] hover:text-sparkle-text" title="Copy resource"><Copy size={9} /></button>
                                         </div>
                                     </div>
@@ -423,7 +513,7 @@ function ResourceCompactTable({
                     </div>
                 </div>
             ) : (
-                <div className="flex h-full min-h-[220px] items-center justify-center px-6 text-center"><div className="max-w-[250px]"><Library size={20} className="mx-auto text-sparkle-text-muted/45" /><h3 className="mt-3 text-[11px] font-semibold text-sparkle-text-secondary">{hasAnyResources ? 'No matching resources' : 'No images or links yet'}</h3><p className="mt-1 text-[9px] leading-4 text-sparkle-text-muted/55">{hasAnyResources ? 'Try another search or resource filter.' : 'Images and safe links shared in this chat will appear here.'}</p></div></div>
+                <div className="flex h-full min-h-[220px] items-center justify-center px-6 text-center"><div className="max-w-[250px]"><Library size={20} className="mx-auto text-sparkle-text-muted/45" /><h3 className="mt-3 text-[11px] font-semibold text-sparkle-text-secondary">{hasAnyResources ? 'No matching resources' : 'No resources yet'}</h3><p className="mt-1 text-[9px] leading-4 text-sparkle-text-muted/55">{hasAnyResources ? 'Try another search or resource filter.' : 'Images, safe links, and saved visualizations will appear here.'}</p></div></div>
             )}
         </div>
     )

@@ -1,3 +1,4 @@
+import { findReplayedCompaction } from './compaction-reconciliation'
 import { reconcileAssistantUserInputResponseMessageIds } from '../../shared/assistant/user-input-continuation'
 import { remoteAssistantPromptMessageId } from './canonical-message-identity'
 import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
@@ -1400,10 +1401,22 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         const turnDiffTargetActivity = readRuntimePayloadString(payload['category']) === 'turn-diff'
             ? findFileChangeReconciliationTarget(existingThread.activities, turnId, payload)
             : null
-        const contextCompactionReconciliation = event.payload.kind === 'context.compaction'
+        const isContextCompaction = event.payload.kind === 'context.compaction'
             || readRuntimePayloadString(payload['category']) === 'context-compaction'
-            ? findContextCompactionReconciliation(existingThread.activities)
-            : null
+        const replayedCompaction = isContextCompaction ? findReplayedCompaction(existingThread.activities, payload) : null
+        // An old replayed start cannot turn a completed operation back into a spinner.
+        if (replayedCompaction && payload.status === 'running'
+            && normalizeRuntimeCompactionStatus(replayedCompaction.payload?.status, replayedCompaction.tone) !== 'running') return
+        const contextCompactionReconciliation = isContextCompaction
+            ? findContextCompactionReconciliation(existingThread.activities) : null
+        if (replayedCompaction && contextCompactionReconciliation) {
+            const replayedStart = existingThread.activities.find(activity => activity.id === event.payload.activityId
+                && activity.id !== replayedCompaction.id && activity.payload?.status === 'running')
+            contextCompactionReconciliation.target = replayedCompaction
+            if (replayedStart && !contextCompactionReconciliation.duplicateIds.includes(replayedStart.id)) contextCompactionReconciliation.duplicateIds.push(replayedStart.id)
+            if (replayedCompaction.payload?.startedAt) payload.startedAt = replayedCompaction.payload.startedAt
+            if (replayedCompaction.payload?.startedSequence) payload.startedSequence = replayedCompaction.payload.startedSequence
+        }
         if (turnDiffTargetActivity) {
             payload['category'] = readRuntimePayloadString(turnDiffTargetActivity.payload?.['category']) || 'file-change'
         }
@@ -1429,7 +1442,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 activityId: targetActivityId,
                 data: payload
             },
-            turnId,
+            replayedCompaction ? replayedCompaction.turnId || null : turnId,
             event.createdAt
         )
         deps.appendEvent('thread.activity.appended', event.createdAt, {

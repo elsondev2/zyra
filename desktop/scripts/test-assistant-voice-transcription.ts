@@ -11,8 +11,10 @@ import {
     encodeAssistantVoiceWav,
     formatAssistantVoiceDuration,
     normalizeAssistantVoiceWaveformLevel,
+    createAssistantVoicePcmPayload,
     resampleAssistantVoice
 } from '../src/renderer/src/pages/assistant/assistant-voice-recorder'
+import { splitVoiceWav } from '../src/main/assistant/voice-wav-chunks'
 import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/assistant/assistant-composer-capabilities'
 import type { AssistantTranscribeVoiceInput } from '../src/shared/assistant/contracts'
 
@@ -67,6 +69,44 @@ cancelledBody.abort(new Error('cancelled by phone'))
 await bodyRejection
 assert.equal(cancelledStream, true, 'leaving Voice cancels response-body reads too')
 
+const longWav = createWav(300_000)
+for (let offset = 44; offset < longWav.length; offset += 2) longWav.writeInt16LE((offset / 2 % 2000) - 1000, offset)
+const longInput = { ...baseInput, durationMs: 300_000, audioBase64: longWav.toString('base64') }
+assert.deepEqual(decodeCodexVoiceInput(longInput), longWav, 'a five-minute note is not rejected at the old recording/upload limit')
+let longRequests = 0
+const longTranscript = await transcribeCodexVoiceWithDependencies(longInput, {
+    resolveCredentials: async () => ({ accessToken: 'fixture', accountId: 'fixture' }),
+    requestTranscription: async ({ audio }) => {
+        longRequests++
+        assert.ok(audio.readUInt32LE(40) / 48 <= 120_000, 'no endpoint upload exceeds two minutes')
+        return new Response(JSON.stringify({ text: ['first part', 'second part', 'last part'][longRequests - 1] }), { status: 200 })
+    }
+})
+assert.equal(longRequests, 3, 'a five-minute recording is sent as three bounded uploads')
+assert.equal(longTranscript, 'first part second part last part', 'chunk responses combine in recording order')
+const chunks = [...splitVoiceWav(longWav)]
+assert.deepEqual(Buffer.concat(chunks.map(chunk => chunk.subarray(44))), longWav.subarray(44), 'pause-seeking splits neither lose nor repeat any PCM samples')
+const abortLong = new AbortController()
+let cancelledChunkCalls = 0
+await assert.rejects(transcribeCodexVoiceWithDependencies(longInput, {
+    resolveCredentials: async () => ({ accessToken: 'fixture', accountId: 'fixture' }),
+    requestTranscription: async () => { cancelledChunkCalls++; abortLong.abort(new Error('cancel long note')); return new Response(JSON.stringify({ text: 'first part' })) }
+}, abortLong.signal), /cancel long note/)
+assert.equal(cancelledChunkCalls, 1, 'cancelling a long transcription never dispatches later chunks')
+let quietCalls = 0
+assert.equal(await transcribeCodexVoiceWithDependencies(longInput, {
+    resolveCredentials: async () => ({ accessToken: 'fixture', accountId: 'fixture' }),
+    requestTranscription: async () => new Response(JSON.stringify({ text: ++quietCalls === 2 ? '' : quietCalls === 1 ? 'before pause' : 'after pause' }))
+}), 'before pause after pause', 'a silence-only chunk does not fail an otherwise valid long note')
+Object.assign(globalThis, { window: { btoa: (value: string) => Buffer.from(value, 'binary').toString('base64') } })
+const pcmPayload = createAssistantVoicePcmPayload([new Int16Array([32767, -32768]), new Int16Array([123, -456])])!
+const pcmWav = Buffer.from(pcmPayload.audioBase64, 'base64')
+assert.equal(pcmWav.readInt16LE(44), 32767)
+assert.equal(pcmWav.readInt16LE(46), -32768)
+assert.equal(pcmWav.readInt16LE(48), 123)
+assert.equal(pcmWav.readInt16LE(50), -456)
+assert.equal(pcmWav.readUInt32LE(40), 8, 'bounded PCM recording writes one complete WAV without float merging')
+
 assert.deepEqual(decodeCodexVoiceInput(baseInput), wav, 'valid 24 kHz mono WAV data should pass validation')
 assert.throws(
     () => decodeCodexVoiceInput({ ...baseInput, sampleRateHz: 16_000 as 24_000 }),
@@ -74,8 +114,8 @@ assert.throws(
     'non-normalized sample rates must be rejected'
 )
 assert.throws(
-    () => decodeCodexVoiceInput({ ...baseInput, durationMs: 120_001 }),
-    /120 seconds/u,
+    () => decodeCodexVoiceInput({ ...baseInput, durationMs: 480_001 }),
+    /eight minutes/u,
     'recordings beyond the duration bound must be rejected'
 )
 assert.throws(
@@ -242,7 +282,7 @@ assert.match(transcriptionSource, /getSharedProviderWorkerClient\(\)\.account\.r
 assert.match(transcriptionSource, /session\.defaultSession\.fetch/u, 'desktop transcription must use Chromium networking so ChatGPT browser checks can reuse the app session')
 assert.match(mainIndexSource, /setupServices\.auth\.prewarm\(\)/u, 'Desktop startup must warm Pi auth before the first ChatGPT recording')
 assert.doesNotMatch(mainIndexSource, /if \(setupServices\.onboarding\.shouldShowOnboarding\(\)\) \{[\s\S]{0,200}auth\.prewarm/u, 'auth warming must not be limited to onboarding')
-assert.match(speechHookSource, /ASSISTANT_VOICE_MAX_DURATION_MS/u, 'the recorder should enforce the 120-second client bound')
+assert.match(speechHookSource, /ASSISTANT_VOICE_MAX_DURATION_MS/u, 'the recorder should enforce the separate long-note capture bound')
 assert.match(speechHookSource, /capturedSampleCount/u, 'captured PCM must stay bounded even while renderer timers are throttled')
 assert.match(speechHookSource, /latest\.scopeKey !== recordingScopeKey/u, 'a recording must not cross into another chat')
 assert.match(speechHookSource, /transcribeVoice\(payload\)/u, 'only the finalized WAV payload should cross IPC')

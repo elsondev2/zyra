@@ -75,6 +75,8 @@ export type CanonicalAgentChatPresence = {
 }
 
 export type CanonicalAgentChat = {
+    settled?: boolean
+    settlementManual?: boolean
     agentConversationKind?: 'thread' | 'subagent' | null
     agentCreatedBy?: string | null
     agentLabel?: string | null
@@ -264,7 +266,7 @@ export class DesktopAgentServerConnection {
 
     async updateCanonicalChat(
         session: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean; settled?: boolean; settlementIfAbsent?: boolean }
     ): Promise<CanonicalAgentChat | null> {
         const client = await this.getClient()
         const result = await client.request('catalog.update', { session, ...patch }, { timeoutMs: 5_000 })
