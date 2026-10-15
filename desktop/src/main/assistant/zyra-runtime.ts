@@ -1410,6 +1410,8 @@ export class ZyraRuntime extends EventEmitter {
     private readonly sessions = new Map<string, ZyraSessionContext>()
     private readonly aliases = new Map<string, string>()
     private readonly navigationBackgroundedThreadIds = new Set<string>()
+    private readonly sessionConnectPromises = new Map<string, Promise<void>>()
+    private readonly sessionConnectTokens = new Map<string, symbol>()
     private warmWorker: ZyraWorker | null = null
     private warmPromise: Promise<AssistantModelInfo[]> | null = null
     private warmWorkerKey: string | null = null
@@ -1749,6 +1751,48 @@ export class ZyraRuntime extends EventEmitter {
         pluginSkillSources: AssistantPluginSkillSource[] = [],
         pluginMcpSources: AssistantPluginMcpSource[] = []
     ): Promise<void> {
+        const keys = [...new Set([thread.id, thread.providerThreadId].filter((value): value is string => Boolean(value)))]
+        const existingKey = keys.find((key) => this.sessionConnectPromises.has(key))
+        const existing = existingKey ? this.sessionConnectPromises.get(existingKey) : undefined
+        if (existing) {
+            const existingToken = this.sessionConnectTokens.get(existingKey!)
+            if (existingToken) {
+                for (const key of keys) {
+                    this.sessionConnectPromises.set(key, existing)
+                    this.sessionConnectTokens.set(key, existingToken)
+                }
+            }
+            await existing
+            const context = this.getSessionContext(thread.id)
+                || (thread.providerThreadId ? this.getSessionContext(thread.providerThreadId) : null)
+            if (context && !context.activeTurnId
+                && (JSON.stringify(context.pluginSkillSources) !== JSON.stringify(pluginSkillSources)
+                    || JSON.stringify(context.pluginMcpSources) !== JSON.stringify(pluginMcpSources))) {
+                return this.connect(thread, cwd, filesystemScope, pluginSkillSources, pluginMcpSources)
+            }
+            return
+        }
+        const token = Symbol(thread.id)
+        for (const key of keys) this.sessionConnectTokens.set(key, token)
+        const pending = this.connectSession(thread, cwd, token, keys, filesystemScope, pluginSkillSources, pluginMcpSources)
+        for (const key of keys) this.sessionConnectPromises.set(key, pending)
+        try {
+            await pending
+        } finally {
+            for (const [key, candidateToken] of this.sessionConnectTokens) {
+                if (candidateToken !== token) continue
+                this.sessionConnectTokens.delete(key)
+                if (this.sessionConnectPromises.get(key) === pending) this.sessionConnectPromises.delete(key)
+            }
+        }
+    }
+
+    private async connectSession(
+        thread: AssistantThread, cwd: string, token: symbol, keys: string[],
+        filesystemScope?: AssistantChatScope | null,
+        pluginSkillSources: AssistantPluginSkillSource[] = [],
+        pluginMcpSources: AssistantPluginMcpSource[] = []
+    ): Promise<void> {
         let existingContext = this.getSessionContext(thread.id)
             || (thread.providerThreadId ? this.getSessionContext(thread.providerThreadId) : null)
         if (existingContext && !existingContext.activeTurnId
@@ -1773,6 +1817,7 @@ export class ZyraRuntime extends EventEmitter {
         if (!availability.available) {
             throw new Error(availability.reason || 'Zyra runtime is unavailable.')
         }
+        if (keys.some((key) => this.sessionConnectTokens.get(key) !== token)) return
 
         const root = resolveZyraRoot()
         // The registry has verified these installed release pins. Publish the
@@ -1780,6 +1825,7 @@ export class ZyraRuntime extends EventEmitter {
         await this.getAgentServerConnection(root).updatePluginAuthority({ chats: [{
             sessionKey: getAssistantCanonicalThreadId(thread), sources: pluginSkillSources
         }] })
+        if (keys.some((key) => this.sessionConnectTokens.get(key) !== token)) return
         const worker = this.getAgentServerConnection(root).createWorker(
             cwd,
             thread.canonicalPresence?.latestSequence || 0
@@ -2480,6 +2526,18 @@ export class ZyraRuntime extends EventEmitter {
 
     disconnect(threadId: string, options?: { preserveThreadState?: boolean }): void {
         const context = this.getSessionContext(threadId)
+        const token = this.sessionConnectTokens.get(context?.localThreadId || threadId)
+            || this.sessionConnectTokens.get(threadId)
+        if (token) {
+            for (const [key, candidate] of this.sessionConnectTokens) {
+                if (candidate !== token) continue
+                this.sessionConnectTokens.delete(key)
+                this.sessionConnectPromises.delete(key)
+            }
+        } else {
+            this.sessionConnectPromises.delete(threadId)
+            this.sessionConnectTokens.delete(threadId)
+        }
         if (!context) {
             this.navigationBackgroundedThreadIds.delete(threadId)
             return
@@ -2503,6 +2561,8 @@ export class ZyraRuntime extends EventEmitter {
     }
 
     dispose(): void {
+        this.sessionConnectPromises.clear()
+        this.sessionConnectTokens.clear()
         this.disposePreparedPrivateVoiceTask()
         for (const worker of this.privateVoiceWorkers.values()) worker.dispose()
         this.privateVoiceWorkers.clear()
