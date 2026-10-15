@@ -1233,6 +1233,8 @@ class ZyraPiWorker {
 export class ZyraPiRuntime extends EventEmitter {
     private readonly sessions = new Map<string, ZyraSessionContext>()
     private readonly aliases = new Map<string, string>()
+    private readonly sessionConnectPromises = new Map<string, Promise<void>>()
+    private readonly sessionConnectTokens = new Map<string, symbol>()
     private warmWorker: ZyraPiWorker | null = null
     private warmPromise: Promise<AssistantModelInfo[]> | null = null
     private warmWorkerKey: string | null = null
@@ -1468,6 +1470,37 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     async connect(thread: AssistantThread, cwd: string): Promise<void> {
+        const keys = [...new Set([thread.id, thread.providerThreadId].filter((value): value is string => Boolean(value)))]
+        const existingKey = keys.find((key) => this.sessionConnectPromises.has(key))
+        const existing = existingKey ? this.sessionConnectPromises.get(existingKey) : undefined
+        if (existing) {
+            const existingToken = this.sessionConnectTokens.get(existingKey!)
+            if (existingToken) {
+                for (const key of keys) {
+                    this.sessionConnectPromises.set(key, existing)
+                    this.sessionConnectTokens.set(key, existingToken)
+                }
+            }
+            return existing
+        }
+        const token = Symbol(thread.id)
+        for (const key of keys) this.sessionConnectTokens.set(key, token)
+        const pending = this.connectSession(thread, cwd, token, keys)
+        for (const key of keys) this.sessionConnectPromises.set(key, pending)
+        try {
+            await pending
+        } finally {
+            for (const [key, candidateToken] of this.sessionConnectTokens) {
+                if (candidateToken !== token) continue
+                this.sessionConnectTokens.delete(key)
+                if (this.sessionConnectPromises.get(key) === pending) {
+                    this.sessionConnectPromises.delete(key)
+                }
+            }
+        }
+    }
+
+    private async connectSession(thread: AssistantThread, cwd: string, token: symbol, keys: string[]): Promise<void> {
         const existingContext = this.getSessionContext(thread.id)
             || (thread.providerThreadId ? this.getSessionContext(thread.providerThreadId) : null)
         if (existingContext) {
@@ -1484,6 +1517,7 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!availability.available) {
             throw new Error(availability.reason || 'Zyra Pi runtime is unavailable.')
         }
+        if (keys.some((key) => this.sessionConnectTokens.get(key) !== token)) return
 
         const root = resolveZyraRoot()
         const worker = this.getAgentServerConnection(root).createWorker(
@@ -2037,6 +2071,18 @@ export class ZyraPiRuntime extends EventEmitter {
 
     disconnect(threadId: string): void {
         const context = this.getSessionContext(threadId)
+        const token = this.sessionConnectTokens.get(context?.localThreadId || threadId)
+            || this.sessionConnectTokens.get(threadId)
+        if (token) {
+            for (const [key, candidate] of this.sessionConnectTokens) {
+                if (candidate !== token) continue
+                this.sessionConnectTokens.delete(key)
+                this.sessionConnectPromises.delete(key)
+            }
+        } else {
+            this.sessionConnectPromises.delete(threadId)
+            this.sessionConnectTokens.delete(threadId)
+        }
         if (!context) return
         if (context.activeTurnId) {
             getAgentControlBroker().revokePrincipal(
@@ -2056,6 +2102,8 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     dispose(): void {
+        this.sessionConnectPromises.clear()
+        this.sessionConnectTokens.clear()
         this.disposePreparedPrivateVoiceTask()
         for (const worker of this.privateVoiceWorkers.values()) worker.dispose()
         this.privateVoiceWorkers.clear()
