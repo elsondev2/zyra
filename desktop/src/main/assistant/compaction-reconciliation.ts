@@ -16,14 +16,19 @@ function resultKey(payload: Payload | null | undefined): string | null {
 
 /** Modern results carry their original completion time. Equal metrics alone
  * remain a legacy fallback, not evidence that two known occurrences are one. */
-function matchesCanonicalResult(activity: AssistantActivity, payload: Payload): boolean {
+function matchesStoredCompactionResult(activity: AssistantActivity, payload: Payload): boolean {
     if (resultKey(activity.payload) !== resultKey(payload)) return false
     if (typeof activity.payload?.sourceSequence === 'number' && typeof payload.sourceSequence === 'number') {
         return activity.payload.sourceSequence === payload.sourceSequence
             || (typeof payload.startedSequence === 'number' && activity.payload.startedSequence === payload.startedSequence)
     }
     const completedAt = typeof payload.completedAt === 'string' ? Date.parse(payload.completedAt) : NaN
-    const committedAt = Date.parse(String((activity.payload?.canonicalEntry as Payload | undefined)?.timestamp || activity.createdAt))
+    const storedCompletion = typeof activity.payload?.completedAt === 'string' ? Date.parse(activity.payload.completedAt) : NaN
+    if (Number.isFinite(completedAt) && Number.isFinite(storedCompletion)) return completedAt === storedCompletion
+    const canonical = activity.payload?.canonicalEntry as Payload | undefined
+    if (canonical?.type !== 'compaction') return true // Older runtime copies may have no original completion time.
+    const committedAt = Date.parse(String(canonical.timestamp || activity.createdAt))
+    // The canonical commit precedes delivery of the runtime terminal event.
     return !Number.isFinite(completedAt) || !Number.isFinite(committedAt) || Math.abs(completedAt - committedAt) <= 5000
 }
 
@@ -42,7 +47,7 @@ export function findReplayedCompaction(activities: AssistantActivity[], payload:
         const key = resultKey(payload)
         const canonical = key && activities.find(activity => isCompaction(activity)
             && (activity.payload?.canonicalEntry as Payload | undefined)?.type === 'compaction'
-            && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number') && matchesCanonicalResult(activity, payload))
+            && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number') && matchesStoredCompactionResult(activity, payload))
         if (canonical) return canonical
     }
     if (settled) return settled
@@ -51,7 +56,7 @@ export function findReplayedCompaction(activities: AssistantActivity[], payload:
     const key = resultKey(payload)
     if (!key) return null
     return activities.find(activity => isCompaction(activity) && activity.payload?.status === 'completed'
-        && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number') && resultKey(activity.payload) === key) || null
+        && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number') && matchesStoredCompactionResult(activity, payload)) || null
 }
 
 /** Canonical entries are durable, distinct operations. Drop their live/replay
@@ -62,7 +67,7 @@ export function findSupersededRuntimeCompactionIds(existing: AssistantActivity[]
     return existing.filter(activity => activity.kind === 'context.compaction'
         && activity.payload?.status === 'completed'
         && !activity.payload?.canonicalEntry
-        && committed.some(entry => matchesCanonicalResult(entry, activity.payload!))).map(activity => activity.id)
+        && committed.some(entry => matchesStoredCompactionResult(entry, activity.payload!))).map(activity => activity.id)
 }
 
 /** Reconcile one operation only. A stale start from another operation is history,

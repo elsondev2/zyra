@@ -32,4 +32,7 @@ assert.equal(reconcileRuntimeCompaction([recoveredStart], oldTerminal, 'new-end-
 assert.equal(reconcileRuntimeCompaction([recoveredStart, { ...recoveredStart, id: 'ambiguous-start' }], oldTerminal, 'new-end-id', live.turnId).target, null, 'ambiguous legacy starts are never guessed')
 assert.equal(reconcileRuntimeCompaction([recoveredStart], { ...oldTerminal, startedSequence: 99 }, 'new-end-id', live.turnId).target, null, 'explicit start identity cannot fall back to another attempt')
 assert.equal(reconcileRuntimeCompaction([{ ...recoveredStart, payload: { ...recoveredStart.payload, status: 'completed' } }], oldTerminal, 'new-end-id', live.turnId).target, null, 'legacy matching does not reuse an already completed attempt')
+const timedLegacy = { ...live, id: 'timed-legacy', payload: { ...live.payload, sourceSequence: undefined, startedSequence: undefined, completedAt: '2026-01-01T12:00:00Z' } }
+assert.equal(findReplayedCompaction([timedLegacy], laterResult), null, 'legacy runtime result matching preserves distinct known completion times')
+assert.equal(findReplayedCompaction([timedLegacy], { ...laterResult, completedAt: '2026-01-01T12:00:00.000Z' })?.id, timedLegacy.id, 'the same legacy completion still reconciles')
 console.log('Compaction replay identity, legacy-copy cleanup and distinct operations: ok')

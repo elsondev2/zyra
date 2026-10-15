@@ -37,12 +37,13 @@ const stale: AssistantActivity = { id: 'persisted-start', kind: 'context.compact
     payload: { status: 'running', sourceSequence: 50, startedSequence: 50 } }
 const canonical: AssistantActivity = { id: 'shared-activity:completed', kind: 'context-compaction', tone: 'info', summary: 'Context compacted', turnId: 'canonical-turn', createdAt,
     payload: { canonicalEntry: { type: 'compaction', firstKeptEntryId: 'kept-entry', tokensBefore: 4000 } } }
+const timedLegacy: AssistantActivity = { ...stale, id: 'timed-legacy', summary: 'AUTO-COMPACTED', payload: { status: 'completed', completedAt: createdAt, firstKeptEntryId: 'legacy-kept', tokensBefore: 6000 } }
 const thread: AssistantThread = {
     id: 'local-thread', providerThreadId: 'canonical-thread', source: 'root', parentThreadId: null, providerParentThreadId: null, subagentDepth: null,
     agentNickname: null, agentRole: null, model: 'fixture/model', cwd: root, messageCount: 1, lastSeenCompletedTurnId: null,
     runtimeMode: 'full-access', interactionMode: 'default', state: 'ready', lastError: null, createdAt, updatedAt: createdAt, latestTurn: null, activePlan: null,
     messages: [{ id: 'prior-user', role: 'user', text: 'Preserve this message.', turnId: null, streaming: false, createdAt, updatedAt: createdAt }],
-    activities: [stale, canonical, { ...stale, id: 'duplicate-completed-start', turnId: 'duplicate-turn', payload: { status: 'running', sourceSequence: 70, startedSequence: 70 } }, { ...stale, id: 'current-start', turnId: 'current-turn', createdAt: '2026-10-01T00:59:00Z', payload: { status: 'running', sourceSequence: 80, startedSequence: 80 } }], proposedPlans: [], pendingApprovals: [], pendingUserInputs: []
+    activities: [stale, canonical, timedLegacy, { ...stale, id: 'duplicate-completed-start', turnId: 'duplicate-turn', payload: { status: 'running', sourceSequence: 70, startedSequence: 70 } }, { ...stale, id: 'current-start', turnId: 'current-turn', createdAt: '2026-10-01T00:59:00Z', payload: { status: 'running', sourceSequence: 80, startedSequence: 80 } }], proposedPlans: [], pendingApprovals: [], pendingUserInputs: []
 }
 const session: AssistantSession = { id: 'session', title: 'Compaction fixture', mode: 'work', projectPath: null, playgroundLabId: null, pendingLabRequest: null,
     archived: false, createdAt, updatedAt: createdAt, activeThreadId: thread.id, threadIds: [thread.id], threads: [thread] }
@@ -81,13 +82,17 @@ try {
         ;(service as any).runtime.emit('runtime', { eventId: `legacy-end-only-${visit}`, type: 'activity', threadId: thread.id,
             createdAt: '2026-10-01T00:59:59Z', turnId: 'current-turn', payload: { activityId: `end-only-${visit}`, kind: 'context.compaction', tone: 'tool', summary: 'AUTO-COMPACTED',
                 data: { replay: true, status: 'completed', sourceSequence: 81, completedAt: '2026-10-01T00:59:59Z', firstKeptEntryId: 'current-kept', tokensBefore: 5000 } } })
+        ;(service as any).runtime.emit('runtime', { eventId: `distinct-legacy-completion-${visit}`, type: 'activity', threadId: thread.id,
+            createdAt: '2026-10-01T00:58:00Z', turnId: 'later-legacy-turn', payload: { activityId: `later-legacy-${visit}`, kind: 'context.compaction', tone: 'tool', summary: 'AUTO-COMPACTED',
+                data: { replay: true, status: 'completed', sourceSequence: 66, completedAt: '2026-10-01T00:58:00Z', firstKeptEntryId: 'legacy-kept', tokensBefore: 6000 } } })
         await (service as any).persistence.flush()
         const rows = (await service.getThreadDetailBootstrap(thread.id)).detail.history
         assert.equal(rows.activities.find((row: AssistantActivity) => row.id === stale.id)?.payload?.status, 'cancelled', 'cold attachment must settle the persisted orphan outside the resident shell')
         assert.equal(hasActiveAssistantCompaction(rows.activities), false, 'a saved orphan cannot indefinitely queue the next message')
         assert.equal(rows.activities.find((row: AssistantActivity) => row.id === canonical.id)?.kind, canonical.kind)
         assert.equal(rows.messages[0]?.text, 'Preserve this message.')
-        assert.equal(rows.activities.length, 3)
+        assert.equal(rows.activities.length, 5)
+        assert.equal(rows.activities.filter((row: AssistantActivity) => row.payload?.firstKeptEntryId === 'legacy-kept').length, 2, 'actual persisted history retains both known legacy completion times')
         assert.equal(rows.activities.find((row: AssistantActivity) => row.id === 'current-start')?.payload?.status, 'completed', 'end-only legacy replay updates the persisted start after early orphan recovery')
         await service.dispose()
     }
