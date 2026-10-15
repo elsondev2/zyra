@@ -532,7 +532,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:indexAllFolders', handleIndexAllFolders)
     ipcMain.handle('devscope:searchIndexedPaths', handleSearchIndexedPaths)
     ipcMain.handle('devscope:searchProjectContents', handleSearchProjectContents)
-    registerDeveloperWorkflowHandlers()
+    registerDeveloperWorkflowHandlers(ipcMain)
     ipcMain.handle('devscope:openInExplorer', handleOpenInExplorer)
     ipcMain.handle('devscope:openInTerminal', handleOpenInTerminal)
     ipcMain.handle('devscope:listInstalledIdes', handleListInstalledIdes)
