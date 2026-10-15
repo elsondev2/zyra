@@ -2289,6 +2289,109 @@ if (completedCompactionEvent?.type === 'activity') {
     assert.equal(findProjectedRecord(context.localThreadId)?.thread.activities.filter(activity => activity.kind === 'context.compaction').length, 2, 'a genuine new compaction remains separate even with equal metrics')
 }
 
+// Reopening can hydrate the canonical row before replaying a completed lifecycle.
+{
+    const savedSnapshot = projectedSnapshot
+    const completion = completedCompactionEvent.payload.data || {}
+    const canonical = {
+        id: 'shared-activity:canonical-reopen', kind: 'context-compaction', tone: 'info', summary: 'Context compacted',
+        turnId: 'original-canonical-turn', createdAt: completedCompactionEvent.createdAt,
+        payload: { canonicalEntry: { type: 'compaction', firstKeptEntryId: completion.firstKeptEntryId, tokensBefore: completion.tokensBefore } }
+    } as AssistantThread['activities'][number]
+    projectedSnapshot = structuredClone(savedSnapshot)
+    const thread = findProjectedRecord(context.localThreadId)!.thread
+    thread.activities = [canonical]
+    thread.activityCount = 1
+    for (let visit = 0; visit < 4; visit++) {
+        const offset = runtimeEvents.length
+        handleEvent({ type: 'compaction_start', reason: 'threshold' }, { replay: true, sequence: 199, occurredAt: runningCompactionEvent!.createdAt, turnId: 'reopened-alias' })
+        handleEvent({ type: 'compaction_end', reason: 'threshold', result: { firstKeptEntryId: completion.firstKeptEntryId, tokensBefore: completion.tokensBefore } }, { replay: true, sequence: 200, occurredAt: completedCompactionEvent.createdAt, turnId: 'reopened-alias' })
+        await Promise.resolve()
+        assert.equal(runtimeEvents.slice(offset).some(event => event.type === 'activity' && event.payload.data?.status === 'running'), false, 'completed replay cannot flash active compaction or block sending')
+        for (const event of runtimeEvents.slice(offset).filter(event => event.type === 'activity')) handleAssistantRuntimeEvent(event, projectedDeps)
+        const rows = findProjectedRecord(context.localThreadId)!.thread.activities
+        assert.equal(rows.length, 1, 'canonical hydration followed by replay must retain one compaction')
+        assert.equal(rows[0].id, canonical.id)
+        assert.equal(rows[0].kind, 'context-compaction', 'replay preserves the canonical row kind')
+        assert.equal(rows[0].turnId, canonical.turnId)
+    }
+    projectedSnapshot = savedSnapshot
+}
+
+// Recovery of an older missing end must not consume current live maintenance.
+{
+    handleEvent({ type: 'compaction_start', reason: 'manual' }, { sequence: 600, turnId: 'current-maintenance' })
+    const active = context.activeCompaction
+    handleEvent({ type: 'compaction_end', reason: 'threshold', aborted: true, recoveredAfterRestart: true }, { replay: true, sequence: 500, turnId: 'old-maintenance' })
+    assert.equal(context.activeCompaction, active, 'settling abandoned history preserves the current lifecycle')
+    handleEvent({ type: 'compaction_end', reason: 'manual', aborted: true }, { sequence: 601, turnId: 'current-maintenance' })
+    assert.equal(context.activeCompaction, null)
+}
+
+// A saved running row can outlive both its worker and the bounded journal.
+{
+    const savedSnapshot = projectedSnapshot
+    projectedSnapshot = structuredClone(savedSnapshot)
+    const thread = findProjectedRecord(context.localThreadId)!.thread
+    const stale = { ...projectedCompactionActivities[0], id: 'saved-orphan', payload: { status: 'running', sourceSequence: 50, startedSequence: 50 } }
+    const active = { ...stale, id: 'still-maintaining', payload: { status: 'running', sourceSequence: 60, startedSequence: 60 } }
+    thread.activities = [stale, active]
+    thread.activityCount = 2
+    const { default: initSqlJs } = await import('sql.js/dist/sql-asm.js')
+    const { initializeAssistantPersistenceSchema } = await import('../src/main/assistant/persistence-utils')
+    const { replaceAssistantSnapshot, persistAssistantEvent } = await import('../src/main/assistant/persistence-write')
+    const { readAssistantTimelineProjectionRows } = await import('../src/main/assistant/persistence-read')
+    const { hasActiveAssistantCompaction } = await import('../src/shared/assistant/compaction-state')
+    const SQL = await initSqlJs()
+    const db = new SQL.Database()
+    initializeAssistantPersistenceSchema(db)
+    replaceAssistantSnapshot(db, projectedSnapshot)
+    const append = projectedDeps.appendEvent
+    projectedDeps.appendEvent = (...args: Parameters<typeof append>) => {
+        append(...args)
+        persistAssistantEvent(db, { sequence: projectedSequence, eventId: `compaction-db-${projectedSequence}`, type: args[0], occurredAt: args[1], payload: args[2], sessionId: args[3], threadId: args[4] }, projectedSnapshot)
+    }
+    handleAssistantRuntimeEvent({ eventId: 'authoritative-attachment', type: 'thread.started', createdAt: '2026-07-10T18:00:00Z', threadId: context.localThreadId,
+        payload: { providerThreadId: context.providerThreadId, activeCompactions: [{ sequence: 60 }] } } as AssistantRuntimeEvent, projectedDeps)
+    const rows = findProjectedRecord(context.localThreadId)!.thread.activities
+    assert.equal(rows.find(row => row.id === stale.id)?.payload?.status, 'cancelled', 'authoritative attach settles cached maintenance absent from the server')
+    assert.equal(rows.find(row => row.id === active.id)?.payload?.status, 'running', 'genuine active maintenance remains visible')
+    assert.equal(hasActiveAssistantCompaction(rows), true, 'the composer still waits for real maintenance')
+    handleAssistantRuntimeEvent({ eventId: 'maintenance-ended-while-away', type: 'thread.started', createdAt: '2026-07-10T18:01:00Z', threadId: context.localThreadId,
+        payload: { providerThreadId: context.providerThreadId, activeCompactions: [] } }, projectedDeps)
+    const reopened = new SQL.Database(db.export())
+    const persisted = readAssistantTimelineProjectionRows(reopened, context.localThreadId)
+    const { readAssistantActivity } = await import('../src/main/assistant/persistence-history')
+    persisted.activities = persisted.activities.map(activity => readAssistantActivity(reopened, context.localThreadId, activity.id)!)
+    assert.ok(persisted.activities.every(activity => activity.payload?.status === 'cancelled'), 'the actual persisted payloads are settled')
+    assert.equal(persisted.activities.length, 2, 'restart reconciliation preserves both historical attempts')
+    assert.equal(persisted.messages.length, thread.messages.length, 'compaction recovery preserves the transcript')
+    assert.equal(hasActiveAssistantCompaction(persisted.activities), false, 'a second database reopen cannot block sending on abandoned maintenance')
+    reopened.close()
+    db.close()
+    projectedDeps.appendEvent = append
+    projectedSnapshot = savedSnapshot
+}
+
+// A missed end from an older run must not absorb a distinct later operation.
+{
+    const savedSnapshot = projectedSnapshot
+    projectedSnapshot = structuredClone(savedSnapshot)
+    const thread = findProjectedRecord(context.localThreadId)!.thread
+    const stale = { ...projectedCompactionActivities[0], id: 'old-unfinished', payload: { status: 'running', sourceSequence: 50, startedSequence: 50 } }
+    thread.activities = [stale]
+    thread.activityCount = 1
+    const offset = runtimeEvents.length
+    handleEvent({ type: 'compaction_start', reason: 'manual' }, { sequence: 300, occurredAt: '2026-07-10T17:00:00Z', turnId: 'new-operation-turn' })
+    handleEvent({ type: 'compaction_end', reason: 'manual', aborted: true }, { sequence: 301, occurredAt: '2026-07-10T17:00:01Z', turnId: 'new-operation-turn' })
+    for (const event of runtimeEvents.slice(offset).filter(event => event.type === 'activity')) handleAssistantRuntimeEvent(event, projectedDeps)
+    const rows = findProjectedRecord(context.localThreadId)!.thread.activities
+    assert.equal(rows.length, 2, 'distinct sequence identities retain distinct attempts')
+    assert.equal(rows.find(row => row.id === stale.id)?.payload?.status, 'running', 'the older attempt must not be rewritten by the newer result')
+    assert.equal(rows.find(row => row.id !== stale.id)?.payload?.status, 'cancelled')
+    projectedSnapshot = savedSnapshot
+}
+
 handleAssistantRuntimeEvent(observedRunningCommand, projectedDeps)
 const runningProjectedActivity = findProjectedRecord(context.localThreadId)?.thread.activities.find((activity) => activity.id === 'zyra-tool-tool-observed-command')
 assert.match(String(runningProjectedActivity?.payload?.['output'] || ''), /Command still running/)

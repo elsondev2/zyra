@@ -2879,7 +2879,9 @@ export class ZyraRuntime extends EventEmitter {
                 createdAt: nowIso(),
                 threadId: context.localThreadId,
                 providerThreadId,
-                payload: { providerThreadId, cwd: context.cwd, state: agentServerActiveTurnId ? 'running' : 'ready' }
+                payload: { providerThreadId, cwd: context.cwd, state: agentServerActiveTurnId ? 'running' : 'ready',
+                    activeCompactions: Array.isArray(result['agentServerPendingCompactions'])
+                        ? result['agentServerPendingCompactions'] as Array<{ sequence?: number; occurredAt?: string }> : undefined }
             })
             if (agentServerOrphanedTurnId && !context.completedTurnIds.has(agentServerOrphanedTurnId)) {
                 markTurnCompleted(context, agentServerOrphanedTurnId)
@@ -3458,39 +3460,49 @@ export class ZyraRuntime extends EventEmitter {
                 turnId
             }
             context.activeCompaction = lifecycle
-            this.emitRuntime({
-                eventId: randomUUID(),
-                type: 'activity',
-                createdAt: startedAt,
-                threadId: context.localThreadId,
-                providerThreadId: context.providerThreadId,
-                turnId: turnId || undefined,
-                payload: {
-                    activityId: lifecycle.activityId,
-                    kind: 'context.compaction',
-                    summary: 'AUTO-COMPACTING',
-                    detail: 'Conversation context is being compacted.',
-                    tone: 'tool',
-                    data: {
-                        category: 'context-compaction',
-                        sourceMethod: 'pi-sdk',
-                        status: 'running',
-                        replay: metadata?.replay === true,
-                        sourceSequence: metadata?.sequence,
-                        startedSequence: lifecycle.startedSequence,
-                        reason,
-                        startedAt
+            const emitStart = (): void => {
+                if (context.activeCompaction !== lifecycle) return
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'activity',
+                    createdAt: startedAt,
+                    threadId: context.localThreadId,
+                    providerThreadId: context.providerThreadId,
+                    turnId: turnId || undefined,
+                    payload: {
+                        activityId: lifecycle.activityId,
+                        kind: 'context.compaction',
+                        summary: 'AUTO-COMPACTING',
+                        detail: 'Conversation context is being compacted.',
+                        tone: 'tool',
+                        data: {
+                            category: 'context-compaction',
+                            sourceMethod: 'pi-sdk',
+                            status: 'running',
+                            replay: metadata?.replay === true,
+                            sourceSequence: metadata?.sequence,
+                            startedSequence: lifecycle.startedSequence,
+                            reason,
+                            startedAt
+                        }
                     }
-                }
-            })
+                })
+            }
+            // Snapshot replay is synchronous. A paired historical end clears the
+            // lifecycle before this callback, so reopening cannot flash a spinner.
+            if (metadata?.replay === true) queueMicrotask(emitStart)
+            else emitStart()
             return
         }
 
         if (type === 'compaction_end') {
             const completedAt = metadata?.occurredAt || nowIso()
             const reason = asString(event['reason']) || context.activeCompaction?.reason || 'threshold'
-            const lifecycle = context.activeCompaction || {
+            const matchingLifecycle = event['recoveredAfterRestart'] === true && context.activeCompaction?.startedSequence !== metadata?.sequence
+                ? null : context.activeCompaction
+            const lifecycle = matchingLifecycle || {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
+                startedSequence: event['recoveredAfterRestart'] === true ? metadata?.sequence : undefined,
                 startedAt: completedAt,
                 reason,
                 turnId
@@ -3528,6 +3540,7 @@ export class ZyraRuntime extends EventEmitter {
                         sourceMethod: 'pi-sdk',
                         status,
                         replay: metadata?.replay === true,
+                        recoveredAfterRestart: event['recoveredAfterRestart'] === true,
                         sourceSequence: metadata?.sequence,
                         startedSequence: 'startedSequence' in lifecycle ? lifecycle.startedSequence : undefined,
                         reason,
@@ -3566,7 +3579,7 @@ export class ZyraRuntime extends EventEmitter {
                     })
                 }
             }
-            context.activeCompaction = null
+            if (context.activeCompaction === matchingLifecycle) context.activeCompaction = null
             return
         }
     }

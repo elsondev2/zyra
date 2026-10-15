@@ -35,7 +35,7 @@ import { is } from '../utils'
 import { backupAssistantDatabaseSet } from './assistant-database-files'
 import { recoverLegacyAssistantInterruptions } from './legacy-terminal-recovery'
 import { createDefaultSnapshot, recoverPersistedSnapshot } from './projector'
-import { mergeAssistantSearchTurnIds, readAssistantActivity, readAssistantHistoryAroundMessage, readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
+import { mergeAssistantSearchTurnIds, readAssistantActivity, readAssistantCompactionActivities, readAssistantHistoryAroundMessage, readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
 import { hydrateSnapshotThreads, summarizeThread } from './persistence-snapshot'
 import { initializeAssistantSearchIndex, searchAssistantChatsFallback } from './assistant-search-index'
 import { AssistantSearchWorkerClient } from './assistant-search-worker-client'
@@ -370,6 +370,13 @@ export class AssistantPersistence {
         this.clearPendingEventTimer()
         await this.processPendingEvents()
         return this.enqueue(() => readAssistantTimelineProjectionRows(this.requireDb(), threadId))
+    }
+
+    async readCompactionActivities(threadId: string): Promise<AssistantActivity[]> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantCompactionActivities(this.requireDb(), threadId))
     }
 
     async readActivity(threadId: string, activityId: string): Promise<AssistantActivity | null> {

@@ -212,6 +212,30 @@ try {
         assert.equal(recoveredEvents.filter(event => event.type === 'tool_execution_start' && event.toolCallId === 'tool:journal-gap').length, 1, 'Desktop must recover pending tools after a journal gap')
     } finally { gapWorker.dispose(); gapConnection.close() }
 
+    // Pending maintenance can start before both the retained replay and UI watermark.
+    workers[1].emit('event', { type: 'compaction_start', reason: 'manual' })
+    const maintainedSession = server.sessions.get('chat:desktop-test')!
+    const maintainedSequence = maintainedSession.sequence
+    for (let index = 0; index < 520; index++) workers[1].emit('event', { type: 'status', index })
+    const maintenanceConnection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false, authorityProof: 'desktop-test-authority' })
+    const maintenanceWorker = maintenanceConnection.createWorker(project, maintainedSession.sequence)
+    const maintenanceEvents: Array<{ event: any; metadata: any }> = []
+    maintenanceWorker.onEvent((event, metadata) => maintenanceEvents.push({ event, metadata }))
+    try {
+        const connected = await maintenanceWorker.request('connect', {
+            cwd: project, localThreadId: 'assistant-thread:desktop-test', threadId: 'chat:desktop-test', providerThreadId: 'chat:desktop-test',
+            pluginSkillSources: workers[1].connectPayloads[0]?.pluginSkillSources
+        })
+        assert.deepEqual(connected.agentServerPendingCompactions, [{ sequence: maintainedSequence, occurredAt: maintainedSession.pendingOperationEvents.get('compaction').occurredAt }])
+        const watermark = maintenanceWorker.latestSequence
+        maintenanceWorker.flushReplay()
+        assert.equal(maintenanceEvents.filter(entry => entry.event.type === 'compaction_start').length, 1, 'authoritative maintenance bypasses the old watermark exactly once per attachment')
+        assert.equal(maintenanceEvents.find(entry => entry.event.type === 'compaction_start')?.metadata.sequence, maintainedSequence)
+        assert.equal(maintenanceWorker.latestSequence, watermark, 'older authoritative recovery never rewinds the event cursor')
+        workers[1].emit('event', { type: 'compaction_end', reason: 'manual', aborted: true })
+        await waitUntil(() => maintenanceEvents.some(entry => entry.event.type === 'compaction_end'))
+    } finally { maintenanceWorker.dispose(); maintenanceConnection.close() }
+
     const retryProbe = new DesktopAgentServerConnection(root, { autoStart: false })
     const recoveredClient = { close: () => undefined }
     let clientCreationAttempts = 0

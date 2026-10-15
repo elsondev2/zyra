@@ -20,17 +20,24 @@ export function findReplayedCompaction(activities: AssistantActivity[], payload:
     if (payload.replay !== true) return null
     const sequence = payload.sourceSequence
     const hasSequence = typeof sequence === 'number' && Number.isFinite(sequence)
-    const exact = hasSequence ? activities.find(activity => isCompaction(activity) && (
-        activity.payload?.sourceSequence === sequence || activity.payload?.startedSequence === sequence
-    )) : null
-    if (exact) return exact
+    const sequences = [sequence, payload.startedSequence].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    const matches = activities.filter(activity => isCompaction(activity) && sequences.some(value =>
+        activity.payload?.sourceSequence === value || activity.payload?.startedSequence === value))
+    const settled = matches.find(activity => activity.payload?.status !== 'running')
+    if (settled) return settled
+    if (payload.status === 'completed') {
+        const key = resultKey(payload)
+        const canonical = key && activities.find(activity => isCompaction(activity)
+            && (activity.payload?.canonicalEntry as Payload | undefined)?.type === 'compaction'
+            && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number') && resultKey(activity.payload) === key)
+        if (canonical) return canonical
+    }
+    if (matches[0]) return matches[0]
     if (payload.status !== 'completed') return null
     const key = resultKey(payload)
     if (!key) return null
-    return activities.find(activity => isCompaction(activity) && (
-        activity.payload?.status === 'completed' || (activity.payload?.canonicalEntry as Payload | undefined)?.type === 'compaction'
-    ) && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number')
-        && resultKey(activity.payload) === key) || null
+    return activities.find(activity => isCompaction(activity) && activity.payload?.status === 'completed'
+        && (!hasSequence || typeof activity.payload?.sourceSequence !== 'number') && resultKey(activity.payload) === key) || null
 }
 
 /** Canonical entries are durable, distinct operations. Drop their live/replay
@@ -42,4 +49,22 @@ export function findSupersededRuntimeCompactionIds(existing: AssistantActivity[]
         && activity.payload?.status === 'completed'
         && !activity.payload?.canonicalEntry
         && keys.has(resultKey(activity.payload))).map(activity => activity.id)
+}
+
+/** Reconcile one operation only. A stale start from another operation is history,
+ * not a candidate for the next start/end, even when it is still marked running. */
+export function reconcileRuntimeCompaction(activities: AssistantActivity[], payload: Payload, activityId?: string): { target: AssistantActivity | null; duplicateIds: string[] } {
+    const sequences = [payload.sourceSequence, payload.startedSequence].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    const matching = activities.filter(activity => isCompaction(activity) && (
+        activity.id === activityId || sequences.some(value => activity.payload?.sourceSequence === value || activity.payload?.startedSequence === value)
+    ))
+    const target = findReplayedCompaction(activities, payload) || matching.find(activity => activity.payload?.status !== 'running') || matching[0] || null
+    return { target, duplicateIds: matching.filter(activity => activity.id !== target?.id && !activity.payload?.canonicalEntry).map(activity => activity.id) }
+}
+
+export function findInactiveRuntimeCompactions(activities: AssistantActivity[], active: Array<{ sequence?: number; occurredAt?: string }>): AssistantActivity[] {
+    return activities.filter(activity => isCompaction(activity) && activity.payload?.status === 'running'
+        && !activity.payload?.canonicalEntry && !active.some(entry =>
+            (entry.sequence != null && (activity.payload?.sourceSequence === entry.sequence || activity.payload?.startedSequence === entry.sequence))
+            || (entry.occurredAt && entry.occurredAt === (activity.payload?.startedAt || activity.createdAt))))
 }

@@ -3694,6 +3694,16 @@ export class AssistantService {
             connect: async ({ session: currentSession, thread: currentThread, pluginSkillSources, pluginMcpSources }) => {
                 const cwd = this.getSessionRuntimeCwd(currentSession, currentThread)
                 await prepareDefaultChatWorkspace(cwd, this.options.getDefaultProjectsFolder?.())
+                // Startup shells omit activities. Reconcile against the exact saved
+                // compaction rows before the runtime emits its attachment snapshot.
+                if (!this.runtime.hasSession(getAssistantCanonicalThreadId(currentThread))) {
+                    const saved = await this.persistence.readCompactionActivities(currentThread.id)
+                    const resident = findThreadRecord(this.state.snapshot, currentThread.id)?.thread
+                    if (!resident) throw new Error('Assistant thread no longer exists.')
+                    const residentIds = new Set(resident.activities.map(activity => activity.id))
+                    resident.activities = [...saved.filter(activity => !residentIds.has(activity.id)), ...resident.activities]
+                    return this.runtime.connect(resident, cwd, currentSession.chatScope, pluginSkillSources, pluginMcpSources)
+                }
                 return this.runtime.connect(currentThread, cwd, currentSession.chatScope, pluginSkillSources, pluginMcpSources)
             },
             disconnect: ({ thread: currentThread }) => this.runtime.disconnect(getAssistantCanonicalThreadId(currentThread))

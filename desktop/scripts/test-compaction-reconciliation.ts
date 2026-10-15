@@ -15,4 +15,8 @@ assert.deepEqual(findSupersededRuntimeCompactionIds([live, ...copies, canonical]
 const secondCanonical = { ...canonical, id: 'shared-activity:canonical-2' }
 assert.deepEqual(findSupersededRuntimeCompactionIds([canonical, secondCanonical], [canonical, secondCanonical]), [], 'separate canonical compactions remain even with identical result metrics')
 assert.deepEqual(findSupersededRuntimeCompactionIds([{ ...live, payload: { ...live.payload, status: 'failed' } }], [canonical]), [], 'failed attempts are not hidden by successful canonical compactions')
+
+assert.equal(findReplayedCompaction([live], { replay: true, status: 'completed', sourceSequence: 21, startedSequence: 19 })?.id, live.id, 'a terminal replay matches its original start identity')
+const duplicateStart = { ...live, id: 'duplicate-running', payload: { status: 'running', sourceSequence: 19, startedSequence: 19 } }
+assert.equal(findReplayedCompaction([duplicateStart, live], { replay: true, status: 'running', sourceSequence: 19 })?.id, live.id, 'a settled result takes priority over a stale duplicate start')
 console.log('Compaction replay identity, legacy-copy cleanup and distinct operations: ok')

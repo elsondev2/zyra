@@ -1,4 +1,4 @@
-import { recoverAttachmentReplay } from './agent-server-attachment-recovery'
+import { recoverAttachmentReplay, type ReplayEntry } from './agent-server-attachment-recovery'
 import { selectDesktopControlWorker } from './external-tool-routing'
 import { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
 export { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
@@ -47,13 +47,6 @@ type AgentServerClient = EventEmitter & {
     setDesktopWorkspaceTurnHandler(handler: (canonicalChatId: string, turnId: string) => void): void
     setDesktopWorkspaceTurnEndHandler(handler: (canonicalChatId: string, turnId: string) => void): void
     close(): void
-}
-
-type ReplayEntry = {
-    sequence?: number
-    occurredAt?: string
-    event?: unknown
-    requestContext?: { turnId?: string; localThreadId?: string } | null
 }
 
 export type CanonicalAgentChatPresence = {
@@ -338,6 +331,9 @@ export class DesktopAgentServerConnection {
                 ...connected,
                 threadId: String(result['canonicalChatId'] || connected['threadId'] || sessionKey),
                 providerThreadId: String(connected['providerThreadId'] || result['canonicalChatId'] || sessionKey),
+                agentServerPendingCompactions: Array.isArray(result['pendingOperations'])
+                    ? (result['pendingOperations'] as ReplayEntry[]).filter(entry => asRecord(entry.event)?.type === 'compaction_start').map(entry => ({ sequence: entry.sequence, occurredAt: entry.occurredAt }))
+                    : undefined,
                 agentServerActiveTurnId: activeRequestContext?.['turnId'],
                 agentServerLatestTurnId: presenceLatestTurn?.['id'],
                 agentServerLatestTurnState: presenceLatestTurn?.['state'],
@@ -760,8 +756,8 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
 
     receive(entry: ReplayEntry, replay: boolean): void {
         const sequence = Number(entry.sequence) || 0
-        if (sequence && sequence <= this.latestSequence) return
-        if (sequence) this.latestSequence = sequence
+        if (sequence && sequence <= this.latestSequence && !entry.recovery) return
+        if (sequence) this.latestSequence = Math.max(this.latestSequence, sequence)
         const metadata: ZyraWorkerEventMetadata = {
             ...(sequence ? { sequence } : {}),
             ...(entry.occurredAt ? { occurredAt: entry.occurredAt } : {}),

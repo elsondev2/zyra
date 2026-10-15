@@ -8,6 +8,8 @@ Preserve the release gates. A focused unit test proves its own behavior; add the
 
 [Shipping](shipping.md) separates quick checks, explicitly requested personal previews and stable publication. Private release evidence stays under ignored `docs.local/`.
 
+For repeated compaction after reopening, start with `npm --prefix desktop run test:compaction-replay`. It covers canonical-first hydration, distinct sequence identities, abandoned saved starts, real-service cold shells and native SQLite reopen, authoritative maintenance beyond the replay cursor and completed replay without a transient spinner. Then use `test:assistant-switching` and `test:timeline-presentation` for navigation and queued sends. Installed-app/provider acceptance remains separate.
+
 ## Command map
 
 For the Desktop developer workflow, start with `npm --prefix desktop run test:developer-workflow`: bounded content search, worktree isolation/scopes, real task exits and stale evidence, per-edit restore conflicts, and isolated Electron search/selection/prompt flow. See [developer workflow](developer-workflow.md) for the commands, behavior and verification boundaries. File publication changes also use `bun --cwd desktop scripts/test-file-preview-opening.tsx`; shortcut changes use `npm --prefix desktop run test:keybindings`.
