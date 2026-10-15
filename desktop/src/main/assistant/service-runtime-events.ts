@@ -818,6 +818,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
             for (const activity of findInactiveRuntimeCompactions(existing.thread.activities, event.payload.activeCompactions)) {
                 deps.appendEvent('thread.activity.appended', event.createdAt, {
                     threadId: targetThreadId,
+                    updateOnly: true,
                     activity: { ...activity, summary: 'COMPACTION INTERRUPTED', tone: 'warning',
                         detail: 'Previous context compaction is no longer active.',
                         payload: { ...activity.payload, status: 'cancelled',
@@ -1443,7 +1444,8 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         }
         deps.appendEvent('thread.activity.appended', event.createdAt, {
             threadId: eventThreadId,
-            activity
+            activity,
+            ...(compactionTarget ? { updateOnly: true } : {})
         }, eventSession.id, eventThreadId)
     }
 }

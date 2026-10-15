@@ -31,6 +31,7 @@ ZyraRuntime.prototype.connect = async function(thread) {
         payload: { providerThreadId: thread.providerThreadId, state: 'ready', activeCompactions } })
 }
 const { AssistantService } = await import('../src/main/assistant/service')
+const { applyAssistantDomainEvent } = await import('../src/shared/assistant/projector')
 const { hasActiveAssistantCompaction } = await import('../src/shared/assistant/compaction-state')
 const createdAt = '2026-10-01T00:00:00Z'
 const stale: AssistantActivity = { id: 'persisted-start', kind: 'context.compaction', tone: 'tool', summary: 'AUTO-COMPACTING', turnId: 'old-turn', createdAt,
@@ -40,9 +41,9 @@ const canonical: AssistantActivity = { id: 'shared-activity:completed', kind: 'c
 const timedLegacy: AssistantActivity = { ...stale, id: 'timed-legacy', summary: 'AUTO-COMPACTED', payload: { status: 'completed', completedAt: createdAt, firstKeptEntryId: 'legacy-kept', tokensBefore: 6000 } }
 const thread: AssistantThread = {
     id: 'local-thread', providerThreadId: 'canonical-thread', source: 'root', parentThreadId: null, providerParentThreadId: null, subagentDepth: null,
-    agentNickname: null, agentRole: null, model: 'fixture/model', cwd: root, messageCount: 1, lastSeenCompletedTurnId: null,
+    agentNickname: null, agentRole: null, model: 'fixture/model', cwd: root, messageCount: 2, lastSeenCompletedTurnId: null,
     runtimeMode: 'full-access', interactionMode: 'default', state: 'ready', lastError: null, createdAt, updatedAt: createdAt, latestTurn: null, activePlan: null,
-    messages: [{ id: 'prior-user', role: 'user', text: 'Preserve this message.', turnId: null, streaming: false, createdAt, updatedAt: createdAt }],
+    messages: [{ id: 'prior-user', role: 'user', text: 'Preserve this message.', turnId: 'visible-turn', streaming: false, createdAt: '2026-09-30T23:59:00Z', updatedAt: '2026-09-30T23:59:00Z' }, { id: 'current-user', role: 'user', text: 'Current fixture request.', turnId: 'current-request', streaming: false, createdAt: '2026-09-30T23:59:30Z', updatedAt: '2026-09-30T23:59:30Z' }],
     activities: [stale, canonical, timedLegacy, { ...stale, id: 'duplicate-completed-start', turnId: 'duplicate-turn', payload: { status: 'running', sourceSequence: 70, startedSequence: 70 } }, { ...stale, id: 'current-start', turnId: 'current-turn', createdAt: '2026-10-01T00:59:00Z', payload: { status: 'running', sourceSequence: 80, startedSequence: 80 } }], proposedPlans: [], pendingApprovals: [], pendingUserInputs: []
 }
 const session: AssistantSession = { id: 'session', title: 'Compaction fixture', mode: 'work', projectPath: null, playgroundLabId: null, pendingLabRequest: null,
@@ -65,8 +66,18 @@ try {
         const coldThread = coldSession.threads[0]
         assert.equal((await (service as any).persistence.readCompactionActivities("foreign' OR 1=1--")).length, 0, 'saved lookup is bound to the exact owning thread')
         assert.equal(coldThread.activities.length, 0, 'startup uses the real activity-free shell')
+        const { page } = await (service as any).persistence.readHistoryAroundMessage({ threadId: thread.id, messageId: 'prior-user', turnLimit: 1 })
+        let renderer = structuredClone((service as any).state.snapshot)
+        renderer.sessions[0].threads[0].messages = page.messages
+        renderer.sessions[0].threads[0].activities = page.activities
+        assert.equal(page.activities.length, 0, 'the actual bounded page contains only the selected older message turn')
+        const activityCount = renderer.sessions[0].threads[0].activityCount
+        const firstEvent = (service as any).state.events.length
         activeCompactions = visit === 0 ? [{ sequence: 80 }] : []
         await (service as any).connectSessionRuntime(coldSession, coldThread)
+        for (const event of (service as any).state.events.slice(firstEvent)) renderer = applyAssistantDomainEvent(renderer, event)
+        assert.equal(renderer.sessions[0].threads[0].activities.length, 0, 'reconciliation cannot inject off-page compactions into a bounded renderer page')
+        assert.equal(renderer.sessions[0].threads[0].activityCount, activityCount, 'already-counted compactions do not inflate renderer totals')
         if (visit === 0) {
             await (service as any).persistence.flush()
             const active = (await service.getThreadDetailBootstrap(thread.id)).detail.history
@@ -90,7 +101,9 @@ try {
         assert.equal(rows.activities.find((row: AssistantActivity) => row.id === stale.id)?.payload?.status, 'cancelled', 'cold attachment must settle the persisted orphan outside the resident shell')
         assert.equal(hasActiveAssistantCompaction(rows.activities), false, 'a saved orphan cannot indefinitely queue the next message')
         assert.equal(rows.activities.find((row: AssistantActivity) => row.id === canonical.id)?.kind, canonical.kind)
-        assert.equal(rows.messages[0]?.text, 'Preserve this message.')
+        const preserved = await (service as any).persistence.readTimelineProjectionRows(thread.id)
+        assert.equal(preserved.messages.find((message: any) => message.id === 'prior-user')?.text, 'Preserve this message.')
+        assert.equal(preserved.messages.length, 2, 'both original prompt turns remain in SQLite')
         assert.equal(rows.activities.length, 5)
         assert.equal(rows.activities.filter((row: AssistantActivity) => row.payload?.firstKeptEntryId === 'legacy-kept').length, 2, 'actual persisted history retains both known legacy completion times')
         assert.equal(rows.activities.find((row: AssistantActivity) => row.id === 'current-start')?.payload?.status, 'completed', 'end-only legacy replay updates the persisted start after early orphan recovery')

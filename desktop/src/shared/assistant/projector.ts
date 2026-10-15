@@ -484,6 +484,9 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
 
             const activity = event.payload['activity'] as AssistantThread['activities'][number]
             const index = writable.thread.activities.findIndex((entry) => entry.id === activity.id)
+            // Reconciliation updates an existing persisted row. A paged client
+            // that has not loaded it must retain its window and global count.
+            if (index < 0 && event.payload['updateOnly'] === true) break
             const nextActivity = {
                 ...activity,
                 timelineSequence: writable.thread.activities[index]?.timelineSequence

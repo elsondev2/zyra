@@ -1,19 +1,16 @@
 import { execFile } from 'node:child_process'
-import { lstat, readdir, open, realpath } from 'node:fs/promises'
+import { lstat, readdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { ProjectContentSearchInput, ProjectContentSearchResult } from '../../shared/contracts/project-content-search'
+
+import { isPathInsideRoot, readProjectSearchFile } from './project-search-file'
 
 const exec = promisify(execFile)
 const MAX_FILES = 5_000
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_TOTAL_BYTES = 24 * 1024 * 1024
 const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules', '.next', '.venv', '__pycache__', 'dist', 'build', 'target', 'vendor'])
-
-function inside(root: string, target: string): boolean {
-    const relative = path.relative(root, target)
-    return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-}
 
 async function hasGitMetadata(root: string): Promise<boolean> {
     if (process.env.GIT_DIR || process.env.GIT_COMMON_DIR || process.env.GIT_WORK_TREE) return true
@@ -71,20 +68,10 @@ export async function searchProjectContents(input: ProjectContentSearchInput, si
         if (Date.now() > deadline || totalBytes >= MAX_TOTAL_BYTES) { result.truncated = true; break }
         if (pattern && !pattern.test(relativePath.replace(/\\/g, '/'))) continue
         const filename = path.resolve(root, relativePath)
-        if (!inside(root, filename)) continue
+        if (!isPathInsideRoot(root, filename)) continue
         try {
-            const info = await lstat(filename)
-            if (!info.isFile() || info.size > MAX_FILE_BYTES) continue
-            if (!inside(root, await realpath(filename))) continue
-            const handle = await open(filename, 'r')
-            let bytes: Buffer
-            try {
-                signal?.throwIfAborted()
-                const buffer = Buffer.allocUnsafe(MAX_FILE_BYTES + 1)
-                const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-                if (bytesRead > MAX_FILE_BYTES) continue
-                bytes = buffer.subarray(0, bytesRead)
-            } finally { await handle.close() }
+            const bytes = await readProjectSearchFile(root, filename, MAX_FILE_BYTES, signal)
+            if (!bytes) continue
             totalBytes += bytes.length
             if (bytes.includes(0)) continue
             result.scannedFiles++
