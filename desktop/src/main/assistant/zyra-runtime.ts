@@ -3502,8 +3502,9 @@ export class ZyraRuntime extends EventEmitter {
                 ? null : context.activeCompaction
             const lifecycle = matchingLifecycle || {
                 activityId: `zyra-context-compaction-${randomUUID()}`,
-                startedSequence: event['recoveredAfterRestart'] === true ? metadata?.sequence : undefined,
-                startedAt: completedAt,
+                startedSequence: typeof event['startedSequence'] === 'number' ? event['startedSequence']
+                    : event['recoveredAfterRestart'] === true ? metadata?.sequence : undefined,
+                startedAt: asString(event['startedAt']) || completedAt,
                 reason,
                 turnId
             }

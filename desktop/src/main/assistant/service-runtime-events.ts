@@ -820,7 +820,8 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                     threadId: targetThreadId,
                     activity: { ...activity, summary: 'COMPACTION INTERRUPTED', tone: 'warning',
                         detail: 'Previous context compaction is no longer active.',
-                        payload: { ...activity.payload, status: 'cancelled', completedAt: event.createdAt, recoveredAfterRestart: true } }
+                        payload: { ...activity.payload, status: 'cancelled',
+                            completedAt: activity.payload?.startedAt || activity.createdAt, recoveredAt: event.createdAt, recoveredAfterRestart: true } }
                 }, existing.session.id, targetThreadId)
             }
         }
@@ -1399,7 +1400,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         const isContextCompaction = event.payload.kind === 'context.compaction'
             || readRuntimePayloadString(payload['category']) === 'context-compaction'
         const contextCompactionReconciliation = isContextCompaction
-            ? reconcileRuntimeCompaction(existingThread.activities, payload, event.payload.activityId) : null
+            ? reconcileRuntimeCompaction(existingThread.activities, payload, event.payload.activityId, turnId) : null
         const compactionTarget = contextCompactionReconciliation?.target
         if (compactionTarget?.payload?.startedAt) payload.startedAt = compactionTarget.payload.startedAt
         if (compactionTarget?.payload?.startedSequence) payload.startedSequence = compactionTarget.payload.startedSequence

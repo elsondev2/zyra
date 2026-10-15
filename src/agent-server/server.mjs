@@ -1414,6 +1414,10 @@ class ServerOwnedSession {
         this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, title: true });
       });
     }
+    if (event?.type === 'compaction_end') {
+      const start = this.pendingOperationEvents.get('compaction');
+      if (start) event = { ...event, startedSequence: start.sequence, startedAt: start.occurredAt };
+    }
     const entry = {
       sequence: ++this.sequence,
       occurredAt,
@@ -1597,7 +1601,17 @@ class ServerOwnedSession {
   }
 
   replay(afterSequence) {
-    return this.events.filter((entry) => entry.sequence > afterSequence);
+    let compactionStart = null;
+    return this.events.map((entry) => {
+      if (entry.event?.type === 'compaction_start') compactionStart = entry;
+      if (entry.event?.type !== 'compaction_end') return entry;
+      const start = compactionStart;
+      compactionStart = null;
+      // Old journal terminals can still recover exact identity when their start
+      // remains retained, even if the client's cursor already passed that start.
+      return start && entry.event.startedSequence == null
+        ? { ...entry, event: { ...entry.event, startedSequence: start.sequence, startedAt: start.occurredAt } } : entry;
+    }).filter((entry) => entry.sequence > afterSequence);
   }
 
   summary() {
