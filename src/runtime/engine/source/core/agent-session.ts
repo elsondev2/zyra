@@ -1196,11 +1196,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					this._queueFollowUp(expandedText, currentImages);
-					for (const message of contextMessages) this.agent.followUp(message);
+					this._queueFollowUp(expandedText, currentImages, contextMessages);
 				} else {
-					this._queueSteer(expandedText, currentImages);
-					for (const message of contextMessages) this.agent.steer(message);
+					this._queueSteer(expandedText, currentImages, contextMessages);
 				}
 				preflightResult?.(true);
 				return;
@@ -1405,35 +1403,29 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private _queueSteer(text: string, images?: ImageContent[]): void {
+	private _queueSteer(text: string, images?: ImageContent[], contextMessages: CustomMessage[] = []): void {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		this.agent.steer(contextMessages.length ? [message, ...contextMessages] : message);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private _queueFollowUp(text: string, images?: ImageContent[]): void {
+	private _queueFollowUp(text: string, images?: ImageContent[], contextMessages: CustomMessage[] = []): void {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		this.agent.followUp(contextMessages.length ? [message, ...contextMessages] : message);
 	}
 
 	/**

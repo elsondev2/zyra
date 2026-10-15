@@ -32,8 +32,9 @@ An optional catalog overlay requires an explicitly configured
 Prompt-scoped hidden context uses `PromptOptions.contextMessages`. The engine
 accepts it with its original user message only after prompt preflight; failed
 authentication, compaction or input handling must not leave an orphan custom
-entry. Streaming delivery queues the user and context together without an
-intervening await. Ordinary `sendCustomMessage` retains its existing semantics.
+entry. Streaming delivery queues the user and context as one message batch,
+including in one-at-a-time mode. Agent steering/follow-up APIs still accept a
+single message, or an array that must be consumed together. Ordinary `sendCustomMessage` retains its existing semantics.
 
 Extensions can import `@zyra/engine`, `@zyra/agent`, `@zyra/providers`, and
 `@zyra/terminal` through the local extension loader. Historical Pi import names

@@ -786,11 +786,9 @@ class AgentSession {
           );
         }
         if (options.streamingBehavior === "followUp") {
-          this._queueFollowUp(expandedText, currentImages);
-          for (const message of contextMessages) this.agent.followUp(message);
+          this._queueFollowUp(expandedText, currentImages, contextMessages);
         } else {
-          this._queueSteer(expandedText, currentImages);
-          for (const message of contextMessages) this.agent.steer(message);
+          this._queueSteer(expandedText, currentImages, contextMessages);
         }
         preflightResult?.(true);
         return;
@@ -952,34 +950,28 @@ ${args}` : skillBlock;
   /**
    * Internal: Queue a steering message (already expanded, no extension command check).
    */
-  _queueSteer(text, images) {
+  _queueSteer(text, images, contextMessages = []) {
     this._steeringMessages.push(text);
     this._emitQueueUpdate();
     const content = [{ type: "text", text }];
     if (images) {
       content.push(...images);
     }
-    this.agent.steer({
-      role: "user",
-      content,
-      timestamp: Date.now()
-    });
+    const message = { role: "user", content, timestamp: Date.now() };
+    this.agent.steer(contextMessages.length ? [message, ...contextMessages] : message);
   }
   /**
    * Internal: Queue a follow-up message (already expanded, no extension command check).
    */
-  _queueFollowUp(text, images) {
+  _queueFollowUp(text, images, contextMessages = []) {
     this._followUpMessages.push(text);
     this._emitQueueUpdate();
     const content = [{ type: "text", text }];
     if (images) {
       content.push(...images);
     }
-    this.agent.followUp({
-      role: "user",
-      content,
-      timestamp: Date.now()
-    });
+    const message = { role: "user", content, timestamp: Date.now() };
+    this.agent.followUp(contextMessages.length ? [message, ...contextMessages] : message);
   }
   /**
    * Throw an error if the text is an extension command.

@@ -72,8 +72,19 @@ try {
   try {
     await session.prompt('/skill:fixture queued', { streamingBehavior: 'followUp', expandPromptTemplates: false,
       contextMessages: [{ customType: 'queued_skill_context', display: false, content: 'Queued fixture instructions' }],
-      preflightResult: accepted => { if (accepted) assert.deepEqual(queuedSkillMessages.map(message => message.role), ['user', 'custom']); } });
+      preflightResult: accepted => { if (accepted) { assert.equal(queuedSkillMessages.length, 1); assert.deepEqual(queuedSkillMessages.flat().map(message => message.role), ['user', 'custom']); } } });
   } finally { session.agent.followUp = followUp; }
+  assert.equal(session.agent.followUpMode, 'one-at-a-time');
+  const drainedSkill = session.agent.followUpQueue.drain();
+  assert.deepEqual(drainedSkill.map(message => message.role), ['user', 'custom'], 'One-at-a-time drains the skill request and its hidden instructions together');
+  assert.deepEqual(session.agent.followUpQueue.drain(), [], 'Skill context cannot remain as a standalone follow-up continuation');
+  session.agent.followUp(drainedSkill);
+  await session.prompt('/skill:fixture steered', { streamingBehavior: 'steer', expandPromptTemplates: false,
+    contextMessages: [{ customType: 'steered_skill_context', display: false, content: 'Steered fixture instructions' }] });
+  const steeredSkill = session.agent.steeringQueue.drain();
+  assert.deepEqual(steeredSkill.map(message => message.role), ['user', 'custom'], 'One-at-a-time steering also drains a whole skill request batch');
+  assert.deepEqual(session.agent.steeringQueue.drain(), []);
+  session.agent.steer(steeredSkill);
   const callsBeforeStop = providerCalls;
   await session.sendCustomMessage({ customType: 'zyra_thread_message', content: 'Queued peer evidence', display: true,
     details: { messageId: 'queued-peer-stop' } }, { triggerTurn: true, deliverAs: 'followUp' });
@@ -109,6 +120,18 @@ try {
   assert.equal(session.isStreaming, false);
   session._checkCompaction = checkCompaction;
   session.clearQueue();
+  for (const [method, queueName, modeName] of [['steer', 'steeringQueue', 'steeringMode'], ['followUp', 'followUpQueue', 'followUpMode']]) {
+    for (const mode of ['one-at-a-time', 'all']) {
+      session.agent[modeName] = mode;
+      const user = { role: 'user', content: [{ type: 'text', text: 'Batch fixture' }], timestamp: Date.now() };
+      const context = { role: 'custom', customType: 'batch_fixture', content: 'Batch instructions', display: false, timestamp: Date.now() };
+      session.agent[method]([user, context]); session.agent[method](user);
+      assert.deepEqual(session.agent[queueName].drain().map(message => message.role), mode === 'all' ? ['user', 'custom', 'user'] : ['user', 'custom']);
+      assert.equal(session.agent[queueName].drain().length, mode === 'all' ? 0 : 1);
+      assert.deepEqual(session.agent[queueName].drain(), []);
+    }
+    session.agent[modeName] = 'one-at-a-time';
+  }
   const hiddenSkill = { customType: 'zyra_skill_context', display: false, content: 'Instructions for the accepted fixture skill.', details: { originalPrompt: '/skill:fixture accepted' } };
   const entriesBeforeRejectedContext = sessionManager.getEntries().length;
   session._checkCompaction = async () => { throw Error('Synthetic native preflight failure'); };
