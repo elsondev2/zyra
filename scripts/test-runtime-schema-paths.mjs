@@ -9,12 +9,28 @@ const directory = await mkdtemp(path.join(tmpdir(), 'zyra-schema-paths-'));
 const trees = [path.join(directory, 'flat'), path.join(directory, 'nested', 'worktree')];
 try {
   const generator = await readFile(path.join(root, 'scripts/build-runtime-schema.mjs'));
+  const strictLicenseCase = path.join(directory, 'strict-license-case.cjs');
+  await writeFile(strictLicenseCase, `
+const fs = require('node:fs');
+const path = require('node:path');
+const { fileURLToPath } = require('node:url');
+const read = fs.promises.readFile;
+fs.promises.readFile = async (input, ...options) => {
+  const file = input instanceof URL ? fileURLToPath(input) : input;
+  if (typeof file === 'string' && path.basename(file).toLowerCase() === 'license') {
+    const names = await fs.promises.readdir(path.dirname(file));
+    if (!names.includes(path.basename(file))) throw Object.assign(new Error('Case-sensitive license filename mismatch: ' + file), {code:'ENOENT'});
+  }
+  return read(input, ...options);
+};
+require('node:module').syncBuiltinESMExports();
+`);
   const dependencies = await realpath(path.join(root, 'node_modules'));
   for (const tree of trees) {
     await mkdir(path.join(tree, 'scripts'), { recursive: true });
     await symlink(dependencies, path.join(tree, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(path.join(tree, 'scripts/build-runtime-schema.mjs'), generator);
-    execFileSync(process.execPath, [path.join(tree, 'scripts/build-runtime-schema.mjs')], { cwd: tree, stdio: 'pipe', timeout: 30_000 });
+    execFileSync(process.execPath, ['--require', strictLicenseCase, path.join(tree, 'scripts/build-runtime-schema.mjs')], { cwd: tree, stdio: 'pipe', timeout: 30_000 });
   }
   const outputs = trees.map(tree => path.join(tree, 'src/runtime/schema/bundled'));
   const files = (await readdir(outputs[0])).sort();

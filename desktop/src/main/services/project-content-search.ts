@@ -15,6 +15,15 @@ function inside(root: string, target: string): boolean {
     return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
 }
 
+async function hasGitMetadata(root: string): Promise<boolean> {
+    if (process.env.GIT_DIR || process.env.GIT_COMMON_DIR || process.env.GIT_WORK_TREE) return true
+    for (let folder = root; ; folder = path.dirname(folder)) {
+        try { await lstat(path.join(folder, '.git')); return true }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+        if (path.dirname(folder) === folder) return false
+    }
+}
+
 async function candidates(root: string, signal?: AbortSignal): Promise<{ files: string[]; truncated: boolean }> {
     try {
         const { stdout } = await exec('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'], {
@@ -24,6 +33,7 @@ async function candidates(root: string, signal?: AbortSignal): Promise<{ files: 
         return { files: files.slice(0, MAX_FILES), truncated: files.length > MAX_FILES }
     } catch (error) {
         if (signal?.aborted) throw error
+        if (await hasGitMetadata(root)) throw new Error('Could not list repository files while preserving Git ignore rules.', { cause: error })
         const files: string[] = []
         const folders = ['']
         let visited = 0
