@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mock } from 'bun:test'
+import './fixtures/unused-diff-worker'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { projectThreadMessage } from '../src/shared/assistant/thread-message'
 import { buildTimelineRows, getTimelineEntries } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
@@ -10,9 +11,6 @@ import type { AssistantSession, AssistantThread } from '../src/shared/assistant/
 import { findAssistantThreadLink } from '../src/renderer/src/pages/assistant/assistant-thread-navigation'
 // Canvas-dependent Markdown is verified in the hidden renderer fixture.
 mock.module('../src/renderer/src/pages/assistant/AssistantTimelineText', () => ({ CollapsibleUserMessageBody: ({ content }: { content: string }) => <span>{content}</span> }))
-// The header also imports developer diffs. Their Vite worker boundary is covered
-// by the renderer suite; this plain Bun presentation test has no worker loader.
-mock.module('@pierre/diffs/worker/worker.js?worker', () => ({ default: class UnusedDiffWorker { constructor() { throw new Error('Unexpected diff worker in peer-message presentation fixture') } } }))
 const { AssistantConversationHeader } = await import('../src/renderer/src/pages/assistant/AssistantConversationHeader')
 const { AssistantTimelineThreadMessage } = await import('../src/renderer/src/pages/assistant/AssistantTimelineThreadMessage')
 

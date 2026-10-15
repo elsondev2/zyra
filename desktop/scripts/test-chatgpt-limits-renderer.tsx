@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { ZyraCredentialStore, createZyraCredentialAuthStorage } from '../../src/zyra-auth-store.mjs'
 import { ChatGptAccountPool, chatGptIdentity } from '../../src/chatgpt-account-pool.mjs'
+import { saveChatGptAccountAlias } from '../../src/chatgpt-account-aliases.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'zyra-limits-renderer-'))
 const authPath = join(root, 'credentials', 'auth.json')
@@ -19,6 +20,7 @@ for (const id of ['a', 'b']) {
     ids.push(chatGptIdentity(credential).id)
 }
 const pool = new ChatGptAccountPool(store)
+for (const [index, id] of ids.entries()) await saveChatGptAccountAlias(authPath, id, index ? 'Fixture B' : 'Fixture A')
 for (const [index, id] of ids.entries()) await pool.recordUsage(id, { primary: { usedPercent: index ? 20 : 90, resetAt: new Date(Date.now() + 1800000).toISOString(), windowSeconds: 18000 }, secondary: { usedPercent: 30, resetAt: new Date(Date.now() + 86400000).toISOString(), windowSeconds: 604800 } })
 const renderer = resolve(import.meta.dir, '../src/renderer/src')
 const harness = `
@@ -37,7 +39,10 @@ function Harness(){const pool=useChatGptAccountPool(),slot=useRef(null),[url,set
 const root=createRoot(document.getElementById('root'))
 try{
  await act(async()=>root.render(<Harness/>));await wait(()=>document.querySelector('[aria-label="ChatGPT usage strategy"]'))
- check(document.body.textContent.includes('a@example.test')&&document.body.textContent.includes('b@example.test'),'separate account rows render')
+ check(document.querySelector('[data-chatgpt-usage-account="'+${JSON.stringify(ids[0])}+'"]').textContent.includes('Fixture A')&&document.querySelector('[data-chatgpt-usage-account="'+${JSON.stringify(ids[1])}+'"]').textContent.includes('Fixture B'),'separate aliases render on their exact account rows')
+ check(!document.body.textContent.includes('a@example.test')&&!document.body.textContent.includes('b@example.test'),'account emails remain hidden by default')
+ await act(async()=>document.querySelector('[aria-label="Show email for Fixture A"]').click());check(document.body.textContent.includes('a@example.test')&&!document.body.textContent.includes('b@example.test'),'revealing one account preserves the other account privacy')
+ await act(async()=>document.querySelector('[aria-label="Hide email for Fixture A"]').click());check(!document.body.textContent.includes('a@example.test'),'hiding email restores the account alias')
  check(document.querySelectorAll('[role=meter]').length===1&&document.querySelector('[role=meter]').getAttribute('aria-label')==='Weekly average remaining','one Weekly summary, with both individual windows below')
  check(!document.body.textContent.includes('Add account')&&!document.body.textContent.includes('ChatGPT account'),'Limits does not contain account sign-in or the old primary account panel')
  check(document.querySelectorAll('[data-chatgpt-usage-window]').length===4,'each reported usage window appears once')
@@ -46,11 +51,11 @@ try{
  await change('ChatGPT usage strategy','fill-first');check(document.querySelector('[aria-label="ChatGPT preferred account"]'),'drain-first reveals account preference')
  await change('ChatGPT preferred account',${JSON.stringify(ids[1])});check((await window.devscope.onboarding.getChatGptAccounts()).pool.policy.preferredAccountId===${JSON.stringify(ids[1])},'preference persists in native backend')
  await change('Allowed ChatGPT accounts','selected');check(!document.querySelector('input[type=checkbox]'),'selected accounts do not create a duplicated list')
- await act(async()=>document.querySelector('button[title="Usage options for a@example.test"]').click());await wait(()=>document.querySelector('[role=menu]'))
+ await act(async()=>document.querySelector('button[title="Usage options for Fixture A"]').click());await wait(()=>document.querySelector('[role=menu]'))
  await act(async()=>[...document.querySelectorAll('[role^=menuitem]')].find(item=>item.textContent.includes('Exclude this account')).click());await wait(()=>!document.querySelector('[aria-label="ChatGPT usage strategy"]').disabled)
  check((await window.devscope.onboarding.getChatGptAccounts()).pool.policy.accountIds.length===1,'selected-only change reaches the saved policy')
- await act(async()=>document.querySelector('[aria-label="Enable b@example.test"]').click());await wait(()=>!document.querySelector('[aria-label="ChatGPT usage strategy"]').disabled)
- check((await window.devscope.onboarding.getChatGptAccounts()).pool.accounts.find(a=>a.email==='b@example.test').state==='paused','pause reaches saved account state')
+ await act(async()=>document.querySelector('[aria-label="Enable Fixture B"]').click());await wait(()=>!document.querySelector('[aria-label="ChatGPT usage strategy"]').disabled)
+ check((await window.devscope.onboarding.getChatGptAccounts()).pool.accounts.find(a=>a.id===${JSON.stringify(ids[1])}).state==='paused','alias-labelled pause reaches the exact saved account state')
  check(document.querySelector('a[href="https://openai.com/brand/"]').className.includes('decoration-dotted'),'website hover uses dotted decoration')
  await window.fixture.hover();await wait(()=>document.querySelector('[data-browser-link-hover]')?.textContent==='https://example.test/destination','Chromium link hover')
  const hint=document.querySelector('[data-browser-link-hover]');check(hint.style.left==='648px'&&parseFloat(hint.style.maxWidth)<=284,'native link hint uses browser slot left edge and width')
