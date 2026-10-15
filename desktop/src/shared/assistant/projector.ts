@@ -286,6 +286,8 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             if (!writable) break
 
             Object.assign(writable.session, event.payload['patch'])
+            if (typeof writable.session.settled !== 'boolean') delete writable.session.settled
+            if (typeof writable.session.settlementManual !== 'boolean') delete writable.session.settlementManual
             writable.session.mode = 'work'
             writable.session.playgroundLabId = null
             writable.session.pendingLabRequest = null

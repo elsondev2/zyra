@@ -3069,8 +3069,16 @@ export class AssistantService {
                     sessionPatch['projectPath'] = canonicalProjectPath
                 }
                 if (chat.archived !== existing.session.archived) sessionPatch['archived'] = chat.archived
-                if (typeof chat.settled === 'boolean' && chat.settled !== existing.session.settled) sessionPatch['settled'] = chat.settled
-                if (typeof chat.settlementManual === 'boolean' && chat.settlementManual !== existing.session.settlementManual) sessionPatch['settlementManual'] = chat.settlementManual
+                if (typeof chat.settled === 'boolean') {
+                    if (chat.settled !== existing.session.settled) sessionPatch['settled'] = chat.settled
+                    const manual = chat.settlementManual === true
+                    if (manual !== existing.session.settlementManual) sessionPatch['settlementManual'] = manual
+                } else if (existing.session.settled !== undefined || existing.session.settlementManual !== undefined) {
+                    // Explicit null survives durable event serialization; the
+                    // projector removes these optional fields for legacy fallback.
+                    sessionPatch['settled'] = null
+                    sessionPatch['settlementManual'] = null
+                }
                 if (Object.keys(sessionPatch).length > 0) {
                     sessionPatch['updatedAt'] = updatedAt
                     this.appendEvent('session.updated', updatedAt, {

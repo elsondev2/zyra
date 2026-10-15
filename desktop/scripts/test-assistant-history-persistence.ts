@@ -102,6 +102,21 @@ initializeAssistantPersistenceSchema(db)
 replaceAssistantSnapshot(db, snapshot)
 assert.equal(readAssistantPersistenceRecord(db).snapshot.sessions[0]?.settled, true, 'Cold desktop catalog retains server settlement without reapplying local age rules')
 assert.equal(readAssistantPersistenceRecord(db).snapshot.sessions[0]?.settlementManual, true, 'Canonical migration marker survives catalog cache hydration')
+const clearSettlementEvent: AssistantDomainEvent = {
+    sequence: 2, eventId: 'clear-legacy-canonical-settlement', type: 'session.updated',
+    occurredAt: createdAt, sessionId: session.id,
+    payload: { sessionId: session.id, patch: { settled: null, settlementManual: null } }
+}
+const replayedClear = JSON.parse(JSON.stringify(clearSettlementEvent))
+const clearedSettlement = applyAssistantDomainEvent(snapshot, replayedClear)
+assert.equal(clearedSettlement.sessions[0]?.settled, undefined, 'Serializable clearing markers remove canonical authority in every client projector')
+assert.equal(clearedSettlement.sessions[0]?.settlementManual, undefined)
+persistAssistantEvent(db, replayedClear, clearedSettlement)
+const reopenedSettlementDb = new SQL.Database(db.export())
+assert.equal(readAssistantPersistenceRecord(reopenedSettlementDb).snapshot.sessions[0]?.settled, undefined, 'Cleared metadata stays absent after database reopen')
+assert.equal(readAssistantPersistenceRecord(reopenedSettlementDb).snapshot.sessions[0]?.settlementManual, undefined)
+reopenedSettlementDb.close()
+replaceAssistantSnapshot(db, snapshot)
 const persistedThread = readAssistantPersistenceRecord(db).snapshot.sessions[0]?.threads[0]
 assert.equal(persistedThread?.canonicalHistoryModifiedAt, thread.canonicalHistoryModifiedAt)
 assert.equal(persistedThread?.canonicalHistoryEntryCount, thread.canonicalHistoryEntryCount)

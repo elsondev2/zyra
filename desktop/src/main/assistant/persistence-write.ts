@@ -297,6 +297,7 @@ function upsertAssistantSession(db: SqlDatabase, session: AssistantSession): voi
     if (session.chatScope !== undefined) upsertAssistantChatScope(db, session.id, session.chatScope)
     // This is a cached server projection, never a local settlement decision.
     if (typeof session.settled === 'boolean') upsertAssistantMeta(db, `canonicalSettlement:${session.id}`, jsonStringify({ settled: session.settled, settlementManual: session.settlementManual === true }))
+    else db.run('DELETE FROM assistant_meta WHERE key = ?', [`canonicalSettlement:${session.id}`])
 }
 
 function replaceAssistantPlaygroundLabs(db: SqlDatabase, labs: AssistantPlaygroundLab[]): void {

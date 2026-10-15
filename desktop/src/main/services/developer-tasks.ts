@@ -82,6 +82,7 @@ export class DeveloperTasks {
     private stopping = new Map<string, Promise<void>>()
     private stopRequested = new Set<string>()
     private starting = new Set<string>()
+    private closing = false
     private ready: Promise<void>
     private saves = Promise.resolve()
     constructor(
@@ -113,8 +114,10 @@ export class DeveloperTasks {
         return { root, gitRoot, branch, worktrees, ...await projectScripts(root), tasks: rootTasks.map(task => ({ ...task, stale: revision === 'unverified' || task.sourceRevision !== revision })) }
     }
     async start(path: string, name: string): Promise<DeveloperTask> {
+        if (this.closing) throw new Error('Developer tasks are shutting down.')
         if (!isAbsolute(path)) throw new Error('Choose an absolute project folder.')
         const root = await realpath(path), key = `${root}\0${name}`
+        if (this.closing) throw new Error('Developer tasks are shutting down.')
         if (this.starting.has(key)) throw new Error('This task is already starting.')
         if (this.processes.size + this.starting.size >= 8) throw new Error('Stop a running task before starting another.')
         this.starting.add(key)
@@ -131,6 +134,7 @@ export class DeveloperTasks {
         if (!/^[\w:.-]+$/.test(name) || !Object.hasOwn(scripts, name)) throw new Error('Choose an existing package script.')
         if (this.tasks.some(task => task.root === root && task.name === name && (task.state === 'running' || this.processes.has(task.id)))) throw new Error('This task is already running.')
         const task: DeveloperTask = { id: randomUUID(), root, name, command: `${runner} run ${name}`, state: 'running', startedAt: new Date().toISOString(), output: '', urls: [], sourceRevision: await workspaceRevision(root), stale: false }
+        if (this.closing) throw new Error('Developer tasks are shutting down.')
         this.tasks.push(task)
         // Keep running processes and a bounded amount of completed evidence.
         this.tasks = [...this.tasks.filter(item => item.state !== 'running').slice(-92), ...this.tasks.filter(item => item.state === 'running')]
@@ -173,5 +177,16 @@ export class DeveloperTasks {
         try { await pending }
         finally { if (this.stopping.get(id) === pending) this.stopping.delete(id) }
     }
-    async dispose(): Promise<void> { await Promise.allSettled([...this.processes.keys()].map(id => this.stop(id))) }
+    async dispose(): Promise<void> {
+        this.closing = true
+        try {
+            const outcomes = await Promise.allSettled([...this.processes.keys()].map(id => this.stop(id)))
+            const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected')
+            if (failure) throw failure.reason
+            if (this.tasks.length) await this.save()
+        } catch (error) {
+            this.closing = false
+            throw error
+        }
+    }
 }

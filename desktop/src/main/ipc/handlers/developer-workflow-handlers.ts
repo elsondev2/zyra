@@ -4,8 +4,14 @@ import { DeveloperTasks } from '../../services/developer-tasks'
 import { previewRecordedUndo, applyRecordedUndo } from '../../services/developer-undo'
 import { getAugmentedEnv } from '../../inspectors/safe-exec'
 
+let developerTasks: DeveloperTasks | null = null
+
+export async function disposeDeveloperWorkflowTasks(): Promise<void> {
+    await developerTasks?.dispose()
+}
+
 export function registerDeveloperWorkflowHandlers() {
-    const tasks = new DeveloperTasks(join(app.getPath('userData'), 'developer-tasks.json'), getAugmentedEnv())
+    const tasks = developerTasks = new DeveloperTasks(join(app.getPath('userData'), 'developer-tasks.json'), getAugmentedEnv())
     const undoOwners = new Map<string, { senderId: number; expiresAt: number }>()
     const handle = (channel: string, execute: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => Promise<object>) => ipcMain.handle(channel, async (event, ...args) => {
         try { return { success: true, ...await execute(event, ...args) } }
@@ -26,5 +32,4 @@ export function registerDeveloperWorkflowHandlers() {
         if (owner?.senderId !== event.sender.id || owner.expiresAt < Date.now()) throw new Error('Restore preview is unavailable in this window.')
         undoOwners.delete(token); await applyRecordedUndo(token); return {}
     })
-    app.once('before-quit', () => { void tasks.dispose() })
 }
