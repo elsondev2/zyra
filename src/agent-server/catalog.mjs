@@ -10,7 +10,7 @@ import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";
 import { ZyraSessionManager } from "./zyra-session-manager.mjs";
-import { projectChatSettlement, automaticSettlementDeadline } from './chat-settlement.mjs';
+import { projectChatSettlement, automaticSettlementDeadline, currentChatSettlementChoice } from './chat-settlement.mjs';
 import {
   EAGER_HISTORY_TOOL_RESULTS,
   HISTORY_TOOL_RESULT_BODY_POLICY,
@@ -295,7 +295,7 @@ export class CanonicalChatCatalog {
     const existing = this.record.metadata[canonicalChatId] || {};
     const next = {
       ...existing,
-      ...(patch.settled !== undefined && !(patch.settlementIfAbsent && existing.settlement) ? { settlement: {
+      ...(patch.settled !== undefined && !(patch.settlementIfAbsent && currentChatSettlementChoice(chat, existing)) ? { settlement: {
         state: patch.settled ? 'settled' : 'active', messageCount: Math.max(0, Number(chat.messageCount) || 0), changedAt: new Date().toISOString()
       } } : {}),
       ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
@@ -390,7 +390,7 @@ function applyMetadata(chat, metadata = {}, record = {}) {
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,
     settled: projectChatSettlement(chat, metadata),
-    settlementManual: Boolean(metadata.settlement),
+    settlementManual: Boolean(currentChatSettlementChoice(chat, metadata)),
     archivedAt: metadata.archivedAt || null,
     deleted: metadata.deleted === true,
     deletedAt: metadata.deletedAt || null,

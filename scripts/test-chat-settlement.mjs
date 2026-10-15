@@ -65,6 +65,22 @@ try {
   await update(browser, true);
   chat.messageCount += 1;
   assert.equal((await read(desktop)).settled, false, 'new content revives the chat');
+  for (const migratedState of [true, false]) {
+    await update(desktop, !migratedState);
+    chat.messageCount += 1;
+    const expired = await read(mobile);
+    assert.equal(expired.settlementManual, false, 'expired settlement metadata cannot claim current manual authority');
+    await update(browser, migratedState, { settlementIfAbsent: true });
+    for (const client of clients) {
+      const current = await read(client);
+      assert.equal(current.settled, migratedState, 'a current local migration replaces an expired server choice');
+      assert.equal(current.settlementManual, true);
+    }
+    const afterMigration = new CanonicalChatCatalog({ stateDirectory: dir, index });
+    assert.equal((await afterMigration.find(chat.canonicalChatId)).settled, migratedState, 'replacement of expired authority survives restart');
+    await update(mobile, !migratedState, { settlementIfAbsent: true });
+    assert.equal((await read(desktop)).settled, migratedState, 'a current server choice still wins over a competing migration');
+  }
   await update(desktop, true);
   const session = server.sessions.get(chat.canonicalChatId);
   session.activeRequestContext = { turnId: 'new-work' };
