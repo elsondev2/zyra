@@ -1,6 +1,6 @@
 import { runtimeModelCost } from './model-pricing/index.mjs';
 import { assistantMessageCost } from './model-pricing/message-cost.mjs';
-import { publishSkillPromptContext } from './skill-prompt-context.mjs';
+import { prepareSkillPromptContext } from './skill-prompt-context.mjs';
 import { refreshSavedProviderModels, registerSavedProviders, resolveHarnessModelSelection } from "./provider-connections.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -1838,7 +1838,7 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
     prepareZyraBrowserToolsForPrompt(runtime, prompt);
     prepareZyraComputerToolsForPrompt(runtime, prompt);
     const promptResource = expandZyraPromptResource(runtime, prompt);
-    const skillContext = await publishSkillPromptContext(runtime.session, prompt, promptResource);
+    const skillContext = prepareSkillPromptContext(prompt, promptResource);
     const expanded = expandFileMentions(runtime, skillContext ? prompt : promptResource);
     const layeredMemoryPrompt = injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
     const additionalContextTokens = layeredMemoryPrompt
@@ -1851,11 +1851,11 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
     await compactZyraContextBeforePrompt(runtime, expanded.text, {
       images: options.images,
       thresholdTokens: options.contextCompactionThresholdTokens,
-      additionalContextTokens,
+      additionalContextTokens: additionalContextTokens + (skillContext ? estimateMessageTokens({ role: 'user', content: [{ type: 'text', text: skillContext.content }], timestamp: Date.now() }) : 0),
     });
     const beforeEntryCount = sessionEntries(runtime).length;
     try {
-      await runtime.session.prompt(expanded.text, { source: "interactive", images: options.images, ...(skillContext ? { expandPromptTemplates: false } : {}) });
+      await runtime.session.prompt(expanded.text, { source: "interactive", images: options.images, ...(skillContext ? { expandPromptTemplates: false, contextMessages: [skillContext] } : {}) });
     } finally {
       markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
     }
@@ -1887,11 +1887,11 @@ export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
   prepareZyraComputerToolsForPrompt(runtime, prompt);
   const mode = normalizeInterruptModePreference(options.mode) ?? runtime.interruptMode ?? "steer";
   const promptResource = expandZyraPromptResource(runtime, prompt);
-  const skillContext = await publishSkillPromptContext(runtime.session, prompt, promptResource, mode === 'queue' ? 'followUp' : 'steer');
+  const skillContext = prepareSkillPromptContext(prompt, promptResource);
   const expanded = expandFileMentions(runtime, skillContext ? prompt : promptResource);
   injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   if (skillContext) {
-    await runtime.session.prompt(expanded.text, { source: 'interactive', images: options.images, expandPromptTemplates: false, streamingBehavior: mode === 'queue' ? 'followUp' : 'steer' });
+    await runtime.session.prompt(expanded.text, { source: 'interactive', images: options.images, expandPromptTemplates: false, contextMessages: [skillContext], streamingBehavior: mode === 'queue' ? 'followUp' : 'steer' });
   } else if (mode === "queue") {
     await runtime.session.followUp(expanded.text, options.images);
   } else {
@@ -1939,11 +1939,15 @@ export async function runZyraHarnessBackgroundTextPrompt(modelSelector, prompt, 
 export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
   const beforeEntryCount = sessionEntries(runtime).length;
   const promptResource = expandZyraPromptResource(runtime, prompt);
-  const skillContext = await publishSkillPromptContext(runtime.session, prompt, promptResource);
+  const skillContext = prepareSkillPromptContext(prompt, promptResource);
   const expanded = expandFileMentions(runtime, skillContext ? prompt : promptResource);
   injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
+  if (skillContext) await compactZyraContextBeforePrompt(runtime, expanded.text, {
+    images: options.images, thresholdTokens: options.contextCompactionThresholdTokens,
+    additionalContextTokens: estimateMessageTokens({ role: 'user', content: [{ type: 'text', text: skillContext.content }], timestamp: Date.now() }),
+  });
   try {
-    await runtime.session.prompt(expanded.text, { source: "print", images: options.images, ...(skillContext ? { expandPromptTemplates: false } : {}) });
+    await runtime.session.prompt(expanded.text, { source: "print", images: options.images, ...(skillContext ? { expandPromptTemplates: false, contextMessages: [skillContext] } : {}) });
   } finally {
     removeSystemPromptBlock(runtime.session, 'ZYRA_NEW_WORKTREE');
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);

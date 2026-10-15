@@ -18,7 +18,9 @@ try {
   let providerCalls = 0;
   let cancelMode = false;
   let signalReceived;
+  let lastModelMessages;
   const stream = (_model, context, options) => {
+    lastModelMessages = context.messages;
     providerCalls++;
     const result = new AssistantMessageEventStream();
     signalReceived = options.signal;
@@ -64,6 +66,14 @@ try {
     if (i > 100) throw new Error('Session did not begin the cancellation fixture.');
     await new Promise(resolve => setTimeout(resolve, 5));
   }
+  const queuedSkillMessages = [];
+  const followUp = session.agent.followUp;
+  session.agent.followUp = function (message) { queuedSkillMessages.push(message); return followUp.call(this, message); };
+  try {
+    await session.prompt('/skill:fixture queued', { streamingBehavior: 'followUp', expandPromptTemplates: false,
+      contextMessages: [{ customType: 'queued_skill_context', display: false, content: 'Queued fixture instructions' }],
+      preflightResult: accepted => { if (accepted) assert.deepEqual(queuedSkillMessages.map(message => message.role), ['user', 'custom']); } });
+  } finally { session.agent.followUp = followUp; }
   const callsBeforeStop = providerCalls;
   await session.sendCustomMessage({ customType: 'zyra_thread_message', content: 'Queued peer evidence', display: true,
     details: { messageId: 'queued-peer-stop' } }, { triggerTurn: true, deliverAs: 'followUp' });
@@ -99,6 +109,19 @@ try {
   assert.equal(session.isStreaming, false);
   session._checkCompaction = checkCompaction;
   session.clearQueue();
+  const hiddenSkill = { customType: 'zyra_skill_context', display: false, content: 'Instructions for the accepted fixture skill.', details: { originalPrompt: '/skill:fixture accepted' } };
+  const entriesBeforeRejectedContext = sessionManager.getEntries().length;
+  session._checkCompaction = async () => { throw Error('Synthetic native preflight failure'); };
+  await assert.rejects(session.prompt('/skill:fixture rejected', { expandPromptTemplates: false, contextMessages: [hiddenSkill] }), /Synthetic native preflight failure/);
+  assert.equal(sessionManager.getEntries().length, entriesBeforeRejectedContext, 'Native preflight rejection cannot persist hidden skill context or its user request');
+  assert.equal(session.state.messages.some(message => message.customType === hiddenSkill.customType), false);
+  session._checkCompaction = checkCompaction;
+  await session.prompt('/skill:fixture accepted', { expandPromptTemplates: false, contextMessages: [hiddenSkill] });
+  assert.equal(lastModelMessages.filter(message => message.role === 'user' && JSON.stringify(message.content).includes('/skill:fixture accepted')).length, 1);
+  assert.equal(lastModelMessages.filter(message => message.role === 'user' && JSON.stringify(message.content).includes(hiddenSkill.content)).length, 1, 'Accepted hidden context reaches the actual model transformer once');
+  const skillReplay = ZyraSessionManager.open(sessionManager.getSessionFile()).buildSessionContext().messages;
+  assert.equal(skillReplay.filter(message => message.customType === hiddenSkill.customType).length, 1, 'Accepted skill context persists through native session replay');
+  assert.equal(skillReplay.some(message => JSON.stringify(message.content).includes('/skill:fixture rejected')), false, 'Rejected request leaves no replay entry');
   for (const [name, specifier] of [['zyra', '@zyra/engine'], ['legacy', '@earendil-works/pi-coding-agent']]) {
     const extension = path.join(directory, `${name}.ts`);
     await writeFile(extension, `import { DynamicBorder } from '${specifier}'; import { Text } from '@zyra/terminal'; export default function(api) { if (typeof DynamicBorder !== 'function' || typeof Text !== 'function') throw Error('Missing local runtime'); api.registerCommand('fixture_${name}', { description: 'Fixture', handler: async () => {} }); }`);

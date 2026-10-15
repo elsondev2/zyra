@@ -19,6 +19,10 @@ function createRuntime(finalMessage) {
       this.observedPrompt = text;
       this.observedPromptOptions = options;
       this.observedSystemPrompt = this.agent.state.systemPrompt;
+      for (const message of options?.contextMessages || []) {
+        this.observedContextMessages?.push(message);
+        this.state.messages.push({ role: 'custom', timestamp: Date.now(), ...message });
+      }
       this.state.messages.push({ role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() });
       this.state.messages.push(finalMessage);
       entries.push({ type: "message", message: finalMessage });
@@ -109,6 +113,7 @@ try {
   writeFileSync(skillPath, '# Fixture skill\n\nSynthetic skill instructions for this test.');
   const skillRuntime = createRuntime({ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' });
   const skillMessages = [];
+  skillRuntime.session.observedContextMessages = skillMessages;
   skillRuntime.resourceLoader = { getSkills: () => ({ skills: [{ name: 'fixture-skill', filePath: skillPath }] }) };
   skillRuntime.session.sendCustomMessage = async (message, options) => {
     skillMessages.push({ ...message, options });
@@ -118,12 +123,26 @@ try {
   assert.equal(skillRuntime.session.observedPrompt, '/skill:fixture-skill whats this for?', 'The user prompt remains the visible prompt; skill instructions are not a second user message');
   assert.equal(skillMessages.length, 1);
   assert.equal(skillMessages[0].display, false);
-  assert.equal(skillMessages[0].options.triggerTurn, false, 'Loading skill context cannot start its own turn');
+  assert.equal(skillRuntime.session.observedPromptOptions.contextMessages.length, 1, 'Skill context is submitted as part of the accepted original prompt, not as an independent turn');
   assert.match(skillMessages[0].content, /Synthetic skill instructions/);
   assert.equal(skillRuntime.session.observedPromptOptions.expandPromptTemplates, false, 'The native SDK cannot expand the visible reference again');
   const modelRequestText = convertToLlm(skillRuntime.session.state.messages).flatMap(message => typeof message.content === 'string' ? [message.content] : message.content.filter(block => block.type === 'text').map(block => block.text)).join('\n');
   assert.equal(modelRequestText.split('whats this for?').length - 1, 1, 'Actual model context must receive the skill request only once');
   assert.match(convertToLlm(skillRuntime.session.state.messages)[0].content[0].text, /Synthetic skill instructions/, 'Hidden skill context still reaches the actual model-message transformer');
+  for (const failure of ['Synthetic failed preflight compaction', 'Synthetic cancelled preflight compaction']) {
+    const rejected = createRuntime({ role: 'assistant', content: [], stopReason: 'stop' });
+    rejected.resourceLoader = skillRuntime.resourceLoader;
+    rejected.session.model = { contextWindow: 400_000 };
+    rejected.session.getContextUsage = () => ({ tokens: 390_000, contextWindow: 400_000 });
+    rejected.session.sessionManager.getEntries().push({ type: 'message', message: { role: 'user', content: 'Earlier request' } });
+    const pendingContext = [];
+    rejected.session.sendCustomMessage = async message => { pendingContext.push(message); rejected.session.state.messages.push({ role: 'custom', ...message }); };
+    rejected.session.compact = async () => { throw new Error(failure); };
+    await assert.rejects(runZyraPrompt(rejected, '/skill:fixture-skill rejected request'), new RegExp(failure));
+    assert.equal(pendingContext.length, 0, 'Rejected preflight must not persist orphan skill instructions');
+    assert.equal(rejected.session.observedPrompt, undefined);
+    assert.equal(rejected.session.state.messages.length, 0);
+  }
   await runZyraPrintPrompt(skillRuntime, '/skill:fixture-skill describe it');
   assert.equal(skillRuntime.session.observedPrompt, '/skill:fixture-skill describe it', 'Print prompts retain the same context boundary');
   assert.equal(skillMessages.length, 2);
@@ -132,7 +151,7 @@ try {
   for (const mode of ['steer', 'queue']) {
     assert.equal(await queueZyraMidRunInput(skillRuntime, '/skill:fixture-skill continue', { mode }), mode);
     const delivery = mode === 'queue' ? 'followUp' : 'steer';
-    assert.equal(skillMessages.at(-1).options.deliverAs, delivery);
+    assert.equal(skillRuntime.session.observedPromptOptions.streamingBehavior, delivery, 'Skill context shares the original queued prompt delivery');
     assert.equal(skillRuntime.session.observedPrompt, '/skill:fixture-skill continue');
     assert.doesNotMatch(skillMessages.at(-1).content, /User: continue/, 'Queued and steering skill context excludes the repeated request');
     assert.equal(skillRuntime.session.observedPromptOptions.streamingBehavior, delivery);

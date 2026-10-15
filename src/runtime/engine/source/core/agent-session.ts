@@ -247,6 +247,8 @@ export interface PromptOptions {
 	images?: ImageContent[];
 	/** When streaming, how to queue the message: "steer" (interrupt) or "followUp" (wait). Required if streaming. */
 	streamingBehavior?: "steer" | "followUp";
+	/** Hidden context accepted and persisted with this prompt, never before its preflight. */
+	contextMessages?: Array<Pick<CustomMessage, "customType" | "content" | "display" | "details">>;
 	/** Source of input for extension input event handlers. Defaults to "interactive". */
 	source?: InputSource;
 	/** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
@@ -1181,6 +1183,11 @@ export class AgentSession {
 				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 			}
 
+			const contextMessages: CustomMessage[] = (options?.contextMessages ?? []).map((message) => ({
+				role: "custom", customType: message.customType, content: message.content ?? [],
+				display: message.display, details: message.details, timestamp: Date.now(),
+			}));
+
 			// If streaming, queue via steer() or followUp() based on option
 			if (this.isStreaming) {
 				if (!options?.streamingBehavior) {
@@ -1189,9 +1196,11 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					this._queueFollowUp(expandedText, currentImages);
+					for (const message of contextMessages) this.agent.followUp(message);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					this._queueSteer(expandedText, currentImages);
+					for (const message of contextMessages) this.agent.steer(message);
 				}
 				preflightResult?.(true);
 				return;
@@ -1240,6 +1249,8 @@ export class AgentSession {
 				content: userContent,
 				timestamp: Date.now(),
 			});
+
+			messages.push(...contextMessages);
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
 			for (const msg of this._pendingNextTurnMessages) {
@@ -1394,7 +1405,7 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private _queueSteer(text: string, images?: ImageContent[]): void {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
@@ -1411,7 +1422,7 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private _queueFollowUp(text: string, images?: ImageContent[]): void {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
