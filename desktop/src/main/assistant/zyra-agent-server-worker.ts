@@ -98,7 +98,7 @@ export type CanonicalAgentChat = {
 export type CanonicalAgentChatHistoryOptions = {
     before?: string | null
     limit?: number
-    toolResultBodies?: 'lazy-v1'
+    toolResultBodies?: 'lazy-v1' | 'lazy-desktop-v2'
 }
 
 export type CanonicalAgentChatHistory = {

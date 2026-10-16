@@ -14,6 +14,7 @@ import { projectChatSettlement, automaticSettlementDeadline, currentChatSettleme
 import {
   EAGER_HISTORY_TOOL_RESULTS,
   HISTORY_TOOL_RESULT_BODY_POLICY,
+  HISTORY_ON_DEMAND_BODY_POLICY,
   inspectToolResultEntry,
   projectLoadedHistoryEntries,
   toolResultMatches,
@@ -147,7 +148,7 @@ export class CanonicalChatCatalog {
       const limit = Math.max(1, Math.min(2000, Number(options.limit) || 500));
       const end = options.before == null ? entries.length : Math.max(0, Math.min(entries.length, Number(options.before) || 0));
       let start = Math.max(0, end - limit);
-      if (options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY) {
+      if ([HISTORY_TOOL_RESULT_BODY_POLICY, HISTORY_ON_DEMAND_BODY_POLICY].includes(options.toolResultBodies)) {
         while (start > 0 && entries[start]?.type === "message" && entries[start].message?.role === "toolResult") start -= 1;
       }
       if (options.toolResultBodies === "lazy-mobile-v1" && options.before == null) {

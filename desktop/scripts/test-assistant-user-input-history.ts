@@ -30,6 +30,17 @@ const entries = [
     { type: 'message', timestamp: resolved.resolvedAt, message: { role: 'user', content: [{ type: 'text', text }] } }
 ]
 const recovered = recoverCanonicalUserInputReceipts(entries, [{ ...canonical, timelineSequence: 3 }])
+const { projectLoadedHistoryEntries } = await import('../../src/agent-server/history-bodies.mjs')
+const locatedEntries = entries.map((entry, index) => ({ ...entry, id: `control-entry-${index}` }))
+const onDemandEntries = projectLoadedHistoryEntries(locatedEntries, 0, { toolResultBodies: 'lazy-desktop-v2', canonicalChatId: 'question-history' })
+const onDemandRecovered = recoverCanonicalUserInputReceipts(onDemandEntries, [{ ...canonical, timelineSequence: 3 }])
+assert.equal(onDemandRecovered[0]?.requestId, 'question-request', 'on-demand output history preserves the real question request owner')
+const unnamedLocated = structuredClone(locatedEntries)
+delete (unnamedLocated[1]!.message as any).toolName
+assert.equal(recoverCanonicalUserInputReceipts(projectLoadedHistoryEntries(unnamedLocated, 0, { toolResultBodies: 'lazy-desktop-v2', canonicalChatId: 'question-history' }), [{ ...canonical, timelineSequence: 3 }])[0]?.requestId, 'question-request', 'unnamed legacy question results retain their control metadata')
+const cancelledLocated = structuredClone(locatedEntries)
+;(cancelledLocated[1]!.message.details as any).cancelled = true
+assert.equal(recoverCanonicalUserInputReceipts(projectLoadedHistoryEntries(cancelledLocated, 0, { toolResultBodies: 'lazy-desktop-v2', canonicalChatId: 'question-history' }), [{ ...canonical, timelineSequence: 3 }]).length, 0, 'lazy history cannot revive cancelled questions')
 assert.equal(recovered.length, 1, 'legacy cold canonical history restores missing question receipts')
 assert.equal(recovered[0]!.responseMessageId, canonical.id)
 assert.deepEqual(recovered[0]!.answers, resolved.answers)

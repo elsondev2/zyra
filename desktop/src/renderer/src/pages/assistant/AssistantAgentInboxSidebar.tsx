@@ -363,10 +363,11 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
         const scroller = scrollRef.current
         const header = settledHeaderRef.current
         if (!scroller || !header) return
-        const scrollerBounds = scroller.getBoundingClientRect()
-        const headerBounds = header.getBoundingClientRect()
-        const headerContentBottom = headerBounds.bottom - scrollerBounds.top + scroller.scrollTop
-        const availableHeight = Math.max(0, scrollerBounds.height - headerContentBottom)
+        // Use layout coordinates within the positioned scroller. Visual rects
+        // include in-flight motion and scroll anchoring; feeding those back
+        // into the rendered row count can oscillate at a row boundary.
+        const headerContentBottom = header.offsetTop + header.offsetHeight
+        const availableHeight = Math.max(0, scroller.clientHeight - headerContentBottom)
         const nextCount = resolveAssistantAgentInboxSettledInitialCount(availableHeight)
         setSettledInitialCount((current) => current === nextCount ? current : nextCount)
     }, [])
@@ -508,7 +509,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
             </div>
             <div ref={scrollRef} onPointerEnter={stableLayout.hold} onPointerLeave={stableLayout.release}
                 onFocusCapture={stableLayout.hold} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) stableLayout.release() }}
-                className="assistant-chat-scrollbar assistant-sidebar-scrollbar min-h-0 flex-1 overflow-y-scroll overflow-x-hidden pr-0.5">
+                className="assistant-chat-scrollbar assistant-sidebar-scrollbar relative min-h-0 flex-1 overflow-y-scroll overflow-x-hidden pr-0.5">
                 <ul ref={listRef} role="list" className="flex flex-col gap-px">
                     {priorityItems.length > 0 ? (
                         <li className="list-none">

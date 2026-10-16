@@ -161,6 +161,8 @@ export interface AssistantThreadShell {
     profile?: string | null
     cwd: string | null
     messageCount: number
+    /** Latest known message creation time, retained when history is unloaded. */
+    lastMessageAt?: string | null
     activityCount: number
     proposedPlanCount: number
     lastSeenCompletedTurnId: string | null

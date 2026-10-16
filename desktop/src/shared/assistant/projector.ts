@@ -10,6 +10,7 @@ import type {
 } from './contracts'
 import { reconcileAssistantMessageReplays } from './message-reconciliation'
 import { preserveAssistantMessagePhases } from './message-phase'
+import { latestAssistantMessageAt } from './message-recency'
 import { upsertAssistantRequest } from './request-identity'
 
 // A tool-start notification can precede its permission decision. Keep that
@@ -337,6 +338,8 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
 
             const patch = { ...((event.payload['patch'] as Record<string, unknown> | undefined) || {}) }
             const messages = Array.isArray(patch.messages) ? patch.messages as AssistantThread['messages'] : null
+            const removedMessageIds = new Set(Array.isArray(event.payload['removedMessageIds']) ? event.payload['removedMessageIds'] as string[] : [])
+            const removedLatestMessage = writable.thread.messages.some(message => removedMessageIds.has(message.id) && message.createdAt === writable.thread.lastMessageAt)
             const activities = Array.isArray(patch.activities) ? patch.activities as AssistantThread['activities'] : null
             const proposedPlans = Array.isArray(patch.proposedPlans) ? patch.proposedPlans as AssistantThread['proposedPlans'] : null
             const pendingApprovals = Array.isArray(patch.pendingApprovals) ? patch.pendingApprovals as AssistantThread['pendingApprovals'] : null
@@ -351,6 +354,8 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                 writable.thread.messages = reconcileAssistantMessageReplays(
                     mergeThreadRecordsById(writable.thread.messages, preserveAssistantMessagePhases(writable.thread.messages, messages || []), event.payload['removedMessageIds'])
                 )
+                writable.thread.lastMessageAt = latestAssistantMessageAt(writable.thread.messages,
+                    removedLatestMessage ? null : writable.thread.lastMessageAt)
             }
             if (activities || Array.isArray(event.payload['removedActivityIds'])) writable.thread.activities = mergeThreadRecordsById(writable.thread.activities, activities || [], event.payload['removedActivityIds'])
             if (proposedPlans || Array.isArray(event.payload['removedProposedPlanIds'])) writable.thread.proposedPlans = mergeThreadRecordsById(writable.thread.proposedPlans, proposedPlans || [], event.payload['removedProposedPlanIds'])
@@ -432,6 +437,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             }
 
             writable.thread.messages = reconcileAssistantMessageReplays(writable.thread.messages)
+            writable.thread.lastMessageAt = latestAssistantMessageAt(writable.thread.messages, writable.thread.lastMessageAt)
             const addedMessageCount = Math.max(0, writable.thread.messages.length - loadedMessageCountBefore)
             if (addedMessageCount > 0) writable.thread.messageCount += addedMessageCount
             if (event.type !== 'thread.message.assistant.delta') {

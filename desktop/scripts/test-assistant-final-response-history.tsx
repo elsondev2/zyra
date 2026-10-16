@@ -129,7 +129,7 @@ const coldService = Object.assign(Object.create(AssistantService.prototype), {
     runtime: { listCanonicalChats: async () => [canonicalChat], releaseNavigationBackgroundedThread: noop,
         readCanonicalChatHistory: async (_id: string, _cwd: string, options: Record<string, unknown>) => {
             metadataReads += 1
-            assert.deepEqual(options, { limit: 160, toolResultBodies: 'lazy-v1' }, 'metadata recovery reads only one bounded latest page')
+            assert.deepEqual(options, { limit: 160, toolResultBodies: 'lazy-desktop-v2' }, 'metadata recovery reads only one bounded latest page')
             return { chat: canonicalChat, entries: [{ type: 'message', id: 'entry-final', message: { id: 'history-final', role: 'assistant',
                 content: [{ type: 'text', text: 'The final answer', textSignature: signature }] } }],
                 pageInfo: { startCursor: '9999', oldestCursor: '9999', hasOlder: true, totalEntries: 10_000 } }

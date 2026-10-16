@@ -11,6 +11,7 @@ import { getAgentServerPaths } from "./paths.mjs";
 import {
   findRecordByEntryIndex,
   HISTORY_TOOL_RESULT_BODY_POLICY,
+  HISTORY_ON_DEMAND_BODY_POLICY,
   inspectToolResultEntry,
   isDeferrableHistoryRecord,
   projectIndexedHistoryEntries,
@@ -152,7 +153,7 @@ export class CanonicalChatIndex extends EventEmitter {
       ? offsets.length
       : Math.max(0, Math.min(offsets.length, Number(options.before) || 0));
     let start = Math.max(0, requestedEnd - limit);
-    if (options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY) {
+    if ([HISTORY_TOOL_RESULT_BODY_POLICY, HISTORY_ON_DEMAND_BODY_POLICY].includes(options.toolResultBodies)) {
       while (start > 0 && includesSortedNumber(chat.toolResultEntryIndexes || [], start)) start -= 1;
     }
     if (options.toolResultBodies === "lazy-mobile-v1" && (options.before == null || options.before === "")) {

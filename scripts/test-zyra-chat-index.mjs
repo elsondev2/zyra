@@ -161,6 +161,12 @@ try {
   const eagerHistory = index.history("canonical:test", { limit: 100 });
   const lazyHistory = index.history("canonical:test", { limit: 100, toolResultBodies: "lazy-v1" });
   const deferredEntries = lazyHistory.entries.filter((entry) => entry.historyBodyRef);
+  const onDemandHistory = index.history("canonical:test", { limit: 100, toolResultBodies: "lazy-desktop-v2" });
+  const onDemandResults = onDemandHistory.entries.filter(entry => entry.message?.role === "toolResult");
+  assert.equal(onDemandResults.length, 21);
+  assert.ok(onDemandResults.every(entry => entry.historyBodyRef && !("content" in entry.message)), "Desktop defers every saved output, including the newest results");
+  const onDemandLoaded = projectLoadedHistoryEntries(historicalToolEntries, 0, { toolResultBodies: "lazy-desktop-v2", canonicalChatId: "canonical:test" });
+  assert.ok(onDemandLoaded.filter(entry => entry.message?.role === "toolResult").every(entry => entry.historyBodyRef), "SDK-backed history uses the same on-demand policy");
   assert.equal(deferredEntries.length, 6, "only the latest 15 of 21 tool results should keep eager bodies");
   assert.equal("content" in deferredEntries[0].message, false, "deferred history must distinguish an omitted body from a canonical empty result");
   assert.equal(deferredEntries.some((entry) => entry.historyBodyRef.toolName === "edit"), true, "old mutation results follow the same lazy-body policy");
@@ -193,6 +199,21 @@ try {
     "body hydration must bind the reference to the exact canonical line"
   );
 
+  appendFileSync(sessionPath, `${[
+    { type: "message", id: "control-call", timestamp: "2026-07-01T01:00:00.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "question-call", name: "request_user_input", arguments: { questions: [] } }] } },
+    { type: "message", id: "control-result", timestamp: "2026-07-01T01:00:01.000Z", message: { role: "toolResult", toolCallId: "question-call", toolName: "request_user_input", details: { requestId: "owned-question", cancelled: true }, content: [] } },
+    { type: "message", id: "unnamed-control-call", timestamp: "2026-07-01T01:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "unnamed-question-call", name: "request_user_input", arguments: { questions: [] } }] } },
+    { type: "message", id: "unnamed-control-result", timestamp: "2026-07-01T01:00:03.000Z", message: { role: "toolResult", toolCallId: "unnamed-question-call", details: { requestId: "owned-unnamed-question" }, content: [] } }
+  ].map(entry => JSON.stringify(entry)).join("\n")}\n`);
+  await index.listProjects([project]);
+  const controlHistory = index.history("canonical:test", { limit: 4, toolResultBodies: "lazy-desktop-v2" });
+  const controlResult = controlHistory.entries.find(entry => entry.id === "control-result");
+  assert.equal(controlResult.message.details.requestId, "owned-question", "indexed on-demand history preserves interactive request ownership");
+  assert.equal(controlResult.message.details.cancelled, true, "indexed history cannot revive cancelled question controls");
+  assert.equal(controlResult.historyBodyRef, undefined, "question control results remain available independently of output disclosure");
+  assert.equal(controlHistory.entries.find(entry => entry.id === "unnamed-control-result").message.details.requestId, "owned-unnamed-question", "indexed legacy control ownership follows its actual tool call");
+  const unnamedOutput = projectLoadedHistoryEntries([{ type: "message", id: "unnamed-output", message: { role: "toolResult", toolCallId: "ordinary-call", content: [{ type: "text", text: "large display output" }] } }], 0, { toolResultBodies: "lazy-desktop-v2", canonicalChatId: "canonical:test" });
+  assert.ok(unnamedOutput[0].historyBodyRef, "ordinary unnamed outputs remain on demand instead of making legacy history eager");
   process.stdout.write("zyra incremental chat index tests passed\n");
 } finally {
   rmSync(root, { recursive: true, force: true });

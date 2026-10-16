@@ -378,7 +378,13 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
         }
         return counts
     }
-    const messageCountByThreadId = readCountMap('assistant_messages')
+    const messageCountByThreadId = new Map<string, number>()
+    const lastMessageAtByThreadId = new Map<string, string>()
+    for (const row of db.exec("SELECT thread_id, COUNT(*), MAX(CASE WHEN role != 'system' THEN created_at END) FROM assistant_messages GROUP BY thread_id")[0]?.values || []) {
+        if (typeof row[0] !== 'string') continue
+        messageCountByThreadId.set(row[0], toNumber(row[1]))
+        if (typeof row[2] === 'string') lastMessageAtByThreadId.set(row[0], row[2])
+    }
     const activityCountByThreadId = readCountMap('assistant_activities')
     const proposedPlanCountByThreadId = readCountMap('assistant_proposed_plans')
     const pendingApprovalCountByThreadId = readCountMap('assistant_pending_approvals', ` WHERE status = 'pending'`)
@@ -439,6 +445,7 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             profile: toNullableString(row[11]),
             cwd: toNullableString(row[12]),
             messageCount,
+            lastMessageAt: lastMessageAtByThreadId.get(threadId) || null,
             activityCount: activityCountByThreadId.get(threadId) ?? 0,
             proposedPlanCount: proposedPlanCountByThreadId.get(threadId) ?? 0,
             lastSeenCompletedTurnId: toNullableString(row[14]),

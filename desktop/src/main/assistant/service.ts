@@ -1381,7 +1381,7 @@ export class AssistantService {
                 try {
                     const history = await this.runtime.readCanonicalChatHistory(refreshedRecord.thread.providerThreadId!, this.getSessionRuntimeCwd(refreshedRecord.session, refreshedRecord.thread), {
                         limit: CANONICAL_CHAT_HISTORY_PAGE_LIMIT,
-                        toolResultBodies: 'lazy-v1'
+                        toolResultBodies: 'lazy-desktop-v2'
                     })
                     return history?.entries || null
                 } catch (error) {
@@ -3285,7 +3285,7 @@ export class AssistantService {
             const history = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
                 before: input.before,
                 limit: CANONICAL_CHAT_HISTORY_PAGE_LIMIT,
-                toolResultBodies: 'lazy-v1'
+                toolResultBodies: 'lazy-desktop-v2'
             })
             if (!history) return false
             let canonicalEntries = history.entries || []
@@ -3318,7 +3318,7 @@ export class AssistantService {
                 const older = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
                     before: canonicalOldestCursor,
                     limit: CANONICAL_CHAT_HISTORY_PAGE_LIMIT,
-                    toolResultBodies: 'lazy-v1'
+                    toolResultBodies: 'lazy-desktop-v2'
                 })
                 if (!older) break
                 canonicalEntries = [...(older.entries || []), ...canonicalEntries]
@@ -3441,7 +3441,7 @@ export class AssistantService {
         const project = this.getSessionRuntimeCwd(session, thread)
         const latest = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, {
             limit: 2_000,
-            toolResultBodies: 'lazy-v1'
+            toolResultBodies: 'lazy-desktop-v2'
         })
         if (!latest) return
 
@@ -3478,7 +3478,7 @@ export class AssistantService {
                 const older = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, {
                     before,
                     limit: 2_000,
-                    toolResultBodies: 'lazy-v1'
+                    toolResultBodies: 'lazy-desktop-v2'
                 })
                 if (!older) break
                 pages.push(older.entries || [])
@@ -3629,7 +3629,7 @@ export class AssistantService {
         let firstUserMessage: string | null
         if (thread.providerThreadId && !this.canonicalReviewHistoryState.has(thread.providerThreadId)) {
             const prefix = await this.runtime.readCanonicalChatHistory(thread.providerThreadId, this.getSessionRuntimeCwd(session, thread), {
-                before: '128', limit: 128, toolResultBodies: 'lazy-v1'
+                before: '128', limit: 128, toolResultBodies: 'lazy-desktop-v2'
             })
             if (!prefix || prefix.pageInfo?.startCursor !== '0') return false
             firstUserMessage = projectCanonicalTimeline(prefix.entries, thread.providerThreadId, thread.id,
