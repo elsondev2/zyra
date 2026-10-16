@@ -21,7 +21,7 @@ export function inspectToolResultEntry(entry, entryIndex, byteLength, identity =
     ? entry.message
     : null;
   if (message?.role !== "toolResult") return null;
-  const toolName = stringValue(message.toolName) || "tool";
+  const toolName = stringValue(identity.resolvedToolName) || stringValue(message.toolName) || "tool";
   const entryId = stringValue(entry.id);
   const toolCallId = stringValue(message.toolCallId) || stringValue(message.tool_call_id);
   const canonicalChatId = stringValue(identity.canonicalChatId);
@@ -102,7 +102,9 @@ export function projectIndexedHistoryEntries(input = {}) {
     const record = findRecordByEntryIndex(deferredRecords, selection.entryIndex);
     return record && !requiresInlineControlResult(record, input.options, questionCallIds) ? createDeferredEntry(record) : null;
   }, input.options?.entryLocators === true, input.options?.mediaBodies === "lazy-v1",
-  input.options?.toolResultBodies === HISTORY_ON_DEMAND_BODY_POLICY ? entry => trackQuestionCalls(entry, questionCallIds) : null);
+  input.options?.toolResultBodies === HISTORY_ON_DEMAND_BODY_POLICY ? entry => trackQuestionCalls(entry, questionCallIds) : null,
+  (entry, selection) => requiresInlineControlResult(findRecordByEntryIndex(deferredRecords, selection.entryIndex), input.options, questionCallIds)
+    ? projectQuestionResult(entry) : entry);
 }
 
 export function projectLoadedHistoryEntries(entries, startIndex, options = {}) {
@@ -123,11 +125,12 @@ export function projectLoadedHistoryEntries(entries, startIndex, options = {}) {
     ? options.toolResultEntryIndexes
     : records.filter(Boolean).map((record) => record.entryIndex);
   const eagerIndexes = eagerToolResultIndexSet(toolResultIndexes, records.filter(isDeferrableHistoryRecord), normalized.deferAll);
-  const questionCallIds = new Set();
+  const questionCallIds = new Set(options.questionCallIds || []);
   return located(entries.map((entry, localIndex) => {
     if (options.toolResultBodies === HISTORY_ON_DEMAND_BODY_POLICY) trackQuestionCalls(entry, questionCallIds);
     const record = records[localIndex];
-    return isDeferrableHistoryRecord(record) && !requiresInlineControlResult(record, options, questionCallIds) && !eagerIndexes.has(record.entryIndex)
+    if (record && requiresInlineControlResult(record, options, questionCallIds)) return projectQuestionResult(entry);
+    return isDeferrableHistoryRecord(record) && !eagerIndexes.has(record.entryIndex)
       ? createDeferredEntry(record)
       : cloneJson(entry);
   }));
@@ -139,13 +142,13 @@ export function isDeferrableHistoryRecord(record) {
 
 function requiresInlineControlResult(record, options = {}, questionCallIds = new Set()) {
   if (options?.toolResultBodies !== HISTORY_ON_DEMAND_BODY_POLICY) return false;
-  const toolName = stringValue(record?.envelope?.message?.toolName) || "";
+  const toolName = stringValue(record?.toolName) || "";
   // Question receipts carry request ownership/cancellation, not merely output.
   // Legacy unnamed results are identified by their actual preceding call.
   return toolName.toLowerCase().split(/[./:]/).at(-1) === "request_user_input" || questionCallIds.has(record?.toolCallId);
 }
 
-function trackQuestionCalls(entry, questionCallIds) {
+export function trackQuestionCalls(entry, questionCallIds) {
   if (entry?.type !== "message" || entry.message?.role !== "assistant" || !Array.isArray(entry.message.content)) return;
   for (const part of entry.message.content) {
     if (part?.type !== "toolCall") continue;
@@ -153,6 +156,18 @@ function trackQuestionCalls(entry, questionCallIds) {
     if (id && part.name === "request_user_input") questionCallIds.add(id);
     else if (id) questionCallIds.delete(id);
   }
+}
+
+export function historyQuestionCallIds(entries, endIndex) {
+  const ids = new Set();
+  for (let index = 0; index < endIndex; index += 1) trackQuestionCalls(entries[index], ids);
+  return [...ids];
+}
+
+function projectQuestionResult(entry) {
+  const projected = cloneJson(entry);
+  projected.message.toolName = "request_user_input";
+  return projected;
 }
 
 export function validateHistoryBodyRef(record, ref = {}) {
@@ -234,7 +249,7 @@ function createEnvelope(entry, message) {
   };
 }
 
-function readSelectedEntries(file, selected, replacement, locators = false, media = false, visit = null) {
+function readSelectedEntries(file, selected, replacement, locators = false, media = false, visit = null, transform = null) {
   const entries = [];
   if (!Array.isArray(selected) || selected.length === 0 || !existsSync(file)) return entries;
   const fd = openSync(file, "r");
@@ -251,7 +266,13 @@ function readSelectedEntries(file, selected, replacement, locators = false, medi
       if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || length <= 0) continue;
       const buffer = Buffer.allocUnsafe(length);
       if (readSync(fd, buffer, 0, length, offset) !== length) continue;
-      try { const raw = JSON.parse(buffer.toString("utf8")); const entry = media ? projectHistoryMedia(raw, selection.entryIndex) : raw; visit?.(entry); entries.push(locators ? { ...entry, historyEntryIndex: selection.entryIndex } : entry); }
+      try {
+        const parsed = JSON.parse(buffer.toString("utf8"));
+        const raw = transform ? transform(parsed, selection) : parsed;
+        const entry = media ? projectHistoryMedia(raw, selection.entryIndex) : raw;
+        visit?.(entry);
+        entries.push(locators ? { ...entry, historyEntryIndex: selection.entryIndex } : entry);
+      }
       catch {}
     }
   } finally {

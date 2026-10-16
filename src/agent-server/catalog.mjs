@@ -16,6 +16,7 @@ import {
   HISTORY_TOOL_RESULT_BODY_POLICY,
   HISTORY_ON_DEMAND_BODY_POLICY,
   inspectToolResultEntry,
+  historyQuestionCallIds,
   projectLoadedHistoryEntries,
   toolResultMatches,
   validateHistoryBodyRef
@@ -166,6 +167,7 @@ export class CanonicalChatCatalog {
       const projected = projectLoadedHistoryEntries(entries.slice(start, end), start, {
         ...options,
         canonicalChatId: chat.canonicalChatId,
+        questionCallIds: options.toolResultBodies === HISTORY_ON_DEMAND_BODY_POLICY ? historyQuestionCallIds(entries, start) : [],
         toolResultEntryIndexes
       });
       return {

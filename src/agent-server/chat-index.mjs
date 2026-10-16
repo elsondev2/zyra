@@ -17,6 +17,7 @@ import {
   projectIndexedHistoryEntries,
   readIndexedHistoryRecord,
   searchIndexedToolResults,
+  trackQuestionCalls,
   validateHistoryBodyRef
 } from "./history-bodies.mjs";
 
@@ -145,7 +146,7 @@ export class CanonicalChatIndex extends EventEmitter {
   }
 
   history(canonicalChatId, options = {}) {
-    const chat = this.refreshChat(canonicalChatId);
+    const chat = this.refreshChat(canonicalChatId, options.toolResultBodies === HISTORY_ON_DEMAND_BODY_POLICY);
     if (!chat) return null;
     const offsets = Array.isArray(chat.entryOffsets) ? chat.entryOffsets : [];
     const limit = Math.max(1, Math.min(2_000, Number(options.limit) || 500));
@@ -186,7 +187,7 @@ export class CanonicalChatIndex extends EventEmitter {
     };
   }
 
-  refreshChat(canonicalChatId) {
+  refreshChat(canonicalChatId, requireQuestionIdentity = false) {
     const id = String(canonicalChatId || "").trim();
     const current = this.record.chats[id];
     if (!current) return null;
@@ -198,7 +199,8 @@ export class CanonicalChatIndex extends EventEmitter {
       this.persist();
       return null;
     }
-    if (current.fileSize === stats.size && current.fileMtimeMs === stats.mtimeMs) return current;
+    if (current.fileSize === stats.size && current.fileMtimeMs === stats.mtimeMs
+      && (!requireQuestionIdentity || hasQuestionIdentity(current))) return current;
     // A runtime can append without a catalog list between successive history reads.
     // Reuse the incremental scanner for this file only, including rewrite detection.
     const next = scanSessionFile(current.sessionPath, current.storageProject, current, stats);
@@ -209,6 +211,7 @@ export class CanonicalChatIndex extends EventEmitter {
       return null;
     }
     this.record.chats[id] = next;
+    if (current.agentThread) next.agentThread = true;
     this.persist();
     return next;
   }
@@ -254,6 +257,7 @@ export class CanonicalChatIndex extends EventEmitter {
 
 function scanSessionFile(file, storageProject, current, stats) {
   const canAppend = current
+    && hasQuestionIdentity(current)
     && current.fileSize < stats.size
     && Number.isSafeInteger(current.scanOffset)
     && current.scanOffset <= stats.size
@@ -288,6 +292,7 @@ function scanSessionFile(file, storageProject, current, stats) {
         scanOffset: 0
       };
   const start = canAppend ? record.scanOffset : 0;
+  const questionCallIds = new Set(canAppend ? record.questionCallIds : []);
   const fd = openSync(file, "r");
   const decoder = new StringDecoder("utf8");
   const buffer = Buffer.allocUnsafe(READ_BUFFER_SIZE);
@@ -306,7 +311,7 @@ function scanSessionFile(file, storageProject, current, stats) {
         const newline = pending.indexOf(10, lineStart);
         if (newline < 0) break;
         const lineBuffer = pending.subarray(lineStart, newline);
-        consumeLine(record, decoder.write(lineBuffer), absoluteOffset + lineStart, lineBuffer.length);
+        consumeLine(record, decoder.write(lineBuffer), absoluteOffset + lineStart, lineBuffer.length, questionCallIds);
         lineStart = newline + 1;
       }
       absoluteOffset += lineStart;
@@ -314,7 +319,7 @@ function scanSessionFile(file, storageProject, current, stats) {
     }
     if (pending.length > 0 && position >= stats.size) {
       const tail = decoder.end(pending);
-      if (consumeLine(record, tail, absoluteOffset, pending.length)) absoluteOffset += pending.length;
+      if (consumeLine(record, tail, absoluteOffset, pending.length, questionCallIds)) absoluteOffset += pending.length;
     }
   } finally {
     closeSync(fd);
@@ -328,12 +333,18 @@ function scanSessionFile(file, storageProject, current, stats) {
   record.fileSize = stats.size;
   record.fileMtimeMs = stats.mtimeMs;
   record.scanOffset = absoluteOffset;
+  record.questionCallIds = [...questionCallIds];
+  record.questionIdentityScanOffset = absoluteOffset;
   record.entryCount = record.entryOffsets.length;
   record.indexedAt = new Date().toISOString();
   return record;
 }
 
-function consumeLine(record, line, offset, byteLength) {
+function hasQuestionIdentity(record) {
+  return Array.isArray(record.questionCallIds) && record.questionIdentityScanOffset === record.scanOffset;
+}
+
+function consumeLine(record, line, offset, byteLength, questionCallIds) {
   const trimmed = String(line || "").trim();
   if (!trimmed) return true;
   let entry;
@@ -350,9 +361,11 @@ function consumeLine(record, line, offset, byteLength) {
   }
 
   const entryIndex = record.entryOffsets.length;
+  trackQuestionCalls(entry, questionCallIds);
   record.entryOffsets.push([offset, byteLength]);
   const toolResult = inspectToolResultEntry(entry, entryIndex, byteLength, {
     canonicalChatId: record.canonicalChatId,
+    resolvedToolName: questionCallIds.has(entry.message?.toolCallId || entry.message?.tool_call_id) ? "request_user_input" : undefined,
     rawLine: line
   });
   if (toolResult) {
@@ -466,6 +479,8 @@ function cloneChat(chat) {
     toolResultEntryIndexes,
     deferredToolResults,
     scanOffset,
+    questionCallIds,
+    questionIdentityScanOffset,
     fileSize,
     fileMtimeMs,
     indexedAt,
