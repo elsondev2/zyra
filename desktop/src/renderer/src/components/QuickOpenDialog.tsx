@@ -50,7 +50,7 @@ export default function QuickOpenDialog() {
         window.addEventListener('zyra:quick-open', show)
         return () => window.removeEventListener('zyra:quick-open', show)
     }, [])
-    useEffect(() => { setIndex(0); setOpenError('') }, [query, root, mode])
+    useEffect(() => { setIndex(0); setOpenError('') }, [query, root, mode, filter])
     useEffect(() => { input.current?.ownerDocument.getElementById(`quick-open-${index}`)?.scrollIntoView({ block: 'nearest' }) }, [index])
     const activate = async (file: QuickOpenFile) => {
         if (opening || results.pending) return
