@@ -22,10 +22,11 @@ try {
     await mkdir(root)
     for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'Cleanup fixture'], ['config', 'user.email', 'cleanup@example.test']]) await developerGit(root, args)
     await writeFile(join(root, 'file.txt'), 'committed\n')
+    await writeFile(join(root, '.gitignore'), '.env\n')
     await developerGit(root, ['add', '.'])
     await developerGit(root, ['commit', '-m', 'fixture'])
     await writeFile(join(root, 'file.txt'), 'user edit\n')
-    for (const stage of ['scope', 'plugin', 'session', 'published', 'dirty', 'existing', 'success']) {
+    for (const stage of ['scope', 'plugin', 'session', 'published', 'dirty', 'ignored', 'existing', 'success']) {
         const snapshot = createDefaultAssistantSnapshot()
         const folders: Array<{ folderId: string; path: string }> = []
         const service = Object.create(AssistantService.prototype) as any
@@ -47,7 +48,8 @@ try {
                 createChatScope: async () => {},
                 ensureAvailableChatScope: async () => {
                     if (stage === 'dirty') await writeFile(join(selectedPath, 'user.txt'), 'keep this edit')
-                    if (['plugin', 'dirty', 'existing'].includes(stage)) throw Error('fixture failure')
+                    if (stage === 'ignored') await writeFile(join(selectedPath, '.env'), 'fixture ignored content')
+                    if (['plugin', 'dirty', 'ignored', 'existing'].includes(stage)) throw Error('fixture failure')
                 },
                 removeChatScope: async () => { removedScopes++ }
             },
@@ -65,11 +67,12 @@ try {
         const creating = service.createSession({ projectId: 'project', projectPath: root, workspace: inputWorkspace })
         if (stage === 'success') await creating
         else await assert.rejects(creating, /fixture failure/)
-        const retained = ['published', 'dirty', 'existing', 'success'].includes(stage)
+        const retained = ['published', 'dirty', 'ignored', 'existing', 'success'].includes(stage)
         assert.equal((await listDeveloperWorktrees(root)).some(tree => tree.path.replace(/\\/g, '/') === selectedPath.replace(/\\/g, '/')), retained, `${stage}: only an owned unchanged pre-session tree is removed`)
         assert.equal(folders.length, retained ? 1 : 0, `${stage}: the folder association follows the retained tree`)
         assert.equal((await developerGit(root, ['branch', '--list', `fixture/${stage}`])).trim().length > 0, retained)
         if (stage === 'dirty') assert.equal(await readFile(join(selectedPath, 'user.txt'), 'utf8'), 'keep this edit')
+        if (stage === 'ignored') assert.equal(await readFile(join(selectedPath, '.env'), 'utf8'), 'fixture ignored content')
         if (stage === 'published' || stage === 'success') assert.equal(removedScopes, 0, 'published sessions keep their plugin scope')
         if (!retained) await assert.rejects(stat(selectedPath), { code: 'ENOENT' })
         assert.equal(await readFile(join(root, 'file.txt'), 'utf8'), 'user edit\n')

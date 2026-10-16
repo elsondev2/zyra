@@ -51,7 +51,10 @@ export async function prepareChatWorktree(root: string, choice: ChatWorkspaceCho
     return { path: directory, rollback: async () => {
         const tree = (await listDeveloperWorktrees(canonical)).find(tree => tree.path.replace(/\\/g, '/') === directory.replace(/\\/g, '/'))
         if (!tree || tree.locked || tree.branch !== branch || tree.head !== createdHead) throw new Error('The new worktree changed and was retained after chat creation failed.')
-        // Git refuses changed/untracked files. Never force removal or branch deletion.
+        // Unforced worktree removal can still delete ignored files. Preserve all
+        // tracked, untracked and ignored additions before requesting any removal.
+        if (await developerGit(directory, ['status', '--porcelain', '-z', '--untracked-files=all', '--ignored'])) throw new Error('The new worktree contains files or edits and was retained after chat creation failed.')
+        // Never force removal or branch deletion.
         await developerGit(canonical, ['worktree', 'remove', '--', directory])
         await developerGit(canonical, ['branch', '-d', '--', branch])
     } }
