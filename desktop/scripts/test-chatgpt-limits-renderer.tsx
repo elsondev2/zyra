@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { ZyraCredentialStore, createZyraCredentialAuthStorage } from '../../src/zyra-auth-store.mjs'
 import { ChatGptAccountPool, chatGptIdentity } from '../../src/chatgpt-account-pool.mjs'
 import { saveChatGptAccountAlias } from '../../src/chatgpt-account-aliases.mjs'
@@ -63,6 +65,10 @@ try{
  await act(async()=>root.unmount());console.log('LIMITS_RENDERER_PASS')
 }catch(error){console.error('LIMITS_RENDERER_FAIL',error.stack)}
 `
+const hoverServer = createServer((_request, response) => {
+    response.setHeader('Content-Type', 'text/html; charset=utf-8')
+    response.end('<!doctype html><a href="https://example.test/destination" style="position:absolute;left:10px;top:10px">Link</a>')
+})
 try {
     const build = await Bun.build({ entrypoints: ['limits-renderer-harness'], target: 'browser', plugins: [{ name: 'limits-fixture', setup(builder) {
         builder.onResolve({ filter: /^limits-renderer-harness$/ }, () => ({ path: 'harness', namespace: 'fixture' }))
@@ -72,8 +78,10 @@ try {
     await writeFile(join(root, 'harness.js'), await build.outputs.find(output => output.path.endsWith('.js'))!.text())
     await writeFile(join(root, 'test.html'), '<style>body{margin:12px;background:#191919;color:#ddd;font:13px sans-serif}section{border:1px solid #444;margin:8px;padding:10px}button,select{padding:5px;margin:3px;background:#292929;color:#ddd;border:1px solid #555}h3,p{margin:4px}select{width:190px}p{color:#aaa}</style><div id="root"></div><script type="module" src="harness.js"></script>')
     await writeFile(join(root, 'preload.cjs'), `const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('devscope',{onboarding:{getChatGptAccounts:()=>ipcRenderer.invoke('pool-get'),updateChatGptAccounts:input=>ipcRenderer.invoke('pool-update',input)}});contextBridge.exposeInMainWorld('fixture',{onHover:fn=>{const handler=(_e,url)=>fn(url);ipcRenderer.on('hover',handler);return()=>ipcRenderer.removeListener('hover',handler)},hover:()=>ipcRenderer.invoke('hover'),leave:()=>ipcRenderer.invoke('leave')});`)
+    await new Promise<void>((accept, reject) => { hoverServer.once('error', reject); hoverServer.listen(0, '127.0.0.1', () => accept()) })
+    const hoverUrl = `http://127.0.0.1:${(hoverServer.address() as AddressInfo).port}/`
     const backend = pathToFileURL(resolve(import.meta.dir, '../../src/chatgpt-pool-service.mjs')).href
-    await writeFile(join(root, 'main.cjs'), `const {app,BrowserWindow,WebContentsView,ipcMain}=require('electron');app.setPath('userData',${JSON.stringify(join(root, 'profile'))});app.whenReady().then(async()=>{const api=await import(${JSON.stringify(backend)}),options={authPath:${JSON.stringify(authPath)}};ipcMain.handle('pool-get',async()=>({success:true,pool:await api.getChatGptAccounts(options)}));ipcMain.handle('pool-update',async(_e,input)=>({success:true,pool:await api.updateChatGptAccounts(input,options)}));const window=new BrowserWindow({show:false,width:1000,height:600,webPreferences:{preload:${JSON.stringify(join(root, 'preload.cjs'))},backgroundThrottling:false}});window.webContents.on('console-message',event=>{const text=event.message;console.log(text);if(text.includes('LIMITS_RENDERER_PASS'))app.exit(0);if(text.includes('LIMITS_RENDERER_FAIL'))app.exit(1)});const guest=new WebContentsView({webPreferences:{backgroundThrottling:false}});window.contentView.addChildView(guest);guest.setBounds({x:640,y:420,width:300,height:100});guest.webContents.on('update-target-url',(_e,url)=>window.webContents.send('hover',url));guest.webContents.debugger.attach('1.3');ipcMain.handle('hover',async()=>{console.log('HOVER_GEOMETRY',JSON.stringify({window:window.getContentBounds(),guest:guest.getBounds(),layout:await guest.webContents.executeJavaScript("({width:innerWidth,height:innerHeight,hit:document.elementFromPoint(25,20)?.outerHTML})")}));await guest.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:25,y:20});});ipcMain.handle('leave',()=>guest.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:250,y:90}));await guest.webContents.loadURL('data:text/html,<a href="https://example.test/destination" style="position:absolute;left:10px;top:10px">Link</a>');await window.loadFile(${JSON.stringify(join(root, 'test.html'))});});setTimeout(()=>app.exit(1),45000);`)
+    await writeFile(join(root, 'main.cjs'), `const {app,BrowserWindow,WebContentsView,ipcMain}=require('electron');app.setPath('userData',${JSON.stringify(join(root, 'profile'))});app.whenReady().then(async()=>{const api=await import(${JSON.stringify(backend)}),options={authPath:${JSON.stringify(authPath)}};ipcMain.handle('pool-get',async()=>({success:true,pool:await api.getChatGptAccounts(options)}));ipcMain.handle('pool-update',async(_e,input)=>({success:true,pool:await api.updateChatGptAccounts(input,options)}));const window=new BrowserWindow({show:false,width:1000,height:600,webPreferences:{preload:${JSON.stringify(join(root, 'preload.cjs'))},backgroundThrottling:false}});window.webContents.on('console-message',event=>{const text=event.message;console.log(text);if(text.includes('LIMITS_RENDERER_PASS'))app.exit(0);if(text.includes('LIMITS_RENDERER_FAIL'))app.exit(1)});const guest=new WebContentsView({webPreferences:{backgroundThrottling:false}});window.contentView.addChildView(guest);guest.setBounds({x:640,y:420,width:300,height:100});guest.webContents.on('update-target-url',(_e,url)=>window.webContents.send('hover',url));guest.webContents.debugger.attach('1.3');ipcMain.handle('hover',async()=>{console.log('HOVER_GEOMETRY',JSON.stringify({window:window.getContentBounds(),guest:guest.getBounds(),layout:await guest.webContents.executeJavaScript("({width:innerWidth,height:innerHeight,hit:document.elementFromPoint(25,20)?.outerHTML})")}));await guest.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:25,y:20});});ipcMain.handle('leave',()=>guest.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:250,y:90}));await guest.webContents.loadURL(${JSON.stringify(hoverUrl)});await window.loadFile(${JSON.stringify(join(root, 'test.html'))});}).catch(error=>{console.error('LIMITS_FIXTURE_BOOTSTRAP_FAIL',error);app.exit(1)});setTimeout(()=>app.exit(1),45000);`)
     const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE
     const electron = createRequire(import.meta.url)('electron') as string
     const args = [...(process.platform === 'linux' && process.env.CI ? ['--no-sandbox'] : []), join(root, 'main.cjs')]
@@ -83,6 +91,8 @@ try {
     if (code) throw Error(`Limits renderer fixture exited ${code}`)
     console.log('Live Limits renderer -> saved policy/account controls and Chromium hover -> browser destination hint: ok')
 } finally {
+    hoverServer.closeAllConnections()
+    await new Promise<void>(accept => hoverServer.close(() => accept()))
     if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('zyra-limits-renderer-')) throw Error('Unexpected fixture cleanup path')
     await rm(root, { recursive: true, force: true })
 }
