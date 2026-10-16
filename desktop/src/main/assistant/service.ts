@@ -1233,6 +1233,7 @@ export class AssistantService {
         if (!pluginSelection) await this.stopCanonicalVoiceForNavigation()
         const plannedSessionId = createAssistantId('assistant-session')
         let sessionCreated = false
+        let rollbackWorkspace: (() => Promise<void>) | undefined
         try {
             let requestedPath = String(input?.workingRoot || input?.projectPath || '').trim()
             const project = input?.projectId || input?.mode === 'playground'
@@ -1241,9 +1242,18 @@ export class AssistantService {
             const projectId = String(input?.projectId || project?.id || '').trim()
             if (input?.workspace) {
                 if (!projectId || !requestedPath || input.mode === 'playground') throw new Error('Worktrees require a project chat.')
-                const { resolveChatWorktree } = await import('../services/developer-worktrees')
-                requestedPath = await resolveChatWorktree(requestedPath, input.workspace)
-                await this.persistence.associateProjectFolder({ projectId, path: requestedPath, access: 'read-write' })
+                const { prepareChatWorktree } = await import('../services/developer-worktrees')
+                const workspace = await prepareChatWorktree(requestedPath, input.workspace)
+                requestedPath = workspace.path
+                rollbackWorkspace = workspace.rollback
+                const associated = await this.persistence.associateProjectFolder({ projectId, path: requestedPath, access: 'read-write' })
+                if (workspace.rollback) {
+                    const folder = associated.folders.find(folder => folder.path.replace(/\\/g, '/').toLowerCase() === requestedPath.replace(/\\/g, '/').toLowerCase())
+                    rollbackWorkspace = async () => {
+                        await workspace.rollback!()
+                        if (folder) await this.persistence.removeProjectFolder({ projectId, folderId: folder.folderId })
+                    }
+                }
             }
             let chatScope = projectId
                 ? await this.persistence.createProjectChatScope(projectId, requestedPath || null)
@@ -1279,7 +1289,11 @@ export class AssistantService {
             this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'create', outcome: 'completed' } })
             return result
         } catch (error) {
-            if (!sessionCreated) await this.pluginRegistry.removeChatScope(plannedSessionId).catch(() => undefined)
+            sessionCreated ||= this.state.snapshot.sessions.some(session => session.id === plannedSessionId)
+            if (!sessionCreated) {
+                await this.pluginRegistry.removeChatScope(plannedSessionId).catch(() => undefined)
+                await rollbackWorkspace?.().catch(cleanupError => log.warn('[Assistant] Failed chat workspace cleanup:', cleanupError))
+            }
             this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'create', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
             throw error
         }

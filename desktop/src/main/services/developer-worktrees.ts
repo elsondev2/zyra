@@ -25,12 +25,16 @@ export async function listDeveloperWorktrees(root: string): Promise<DeveloperWor
     })
 }
 export async function resolveChatWorktree(root: string, choice: ChatWorkspaceChoice): Promise<string> {
+    return (await prepareChatWorktree(root, choice)).path
+}
+
+export async function prepareChatWorktree(root: string, choice: ChatWorkspaceChoice): Promise<{ path: string; rollback?: () => Promise<void> }> {
     if (!isAbsolute(root)) throw new Error('Choose an absolute project folder.')
     const canonical = await realpath(root)
     if (choice.kind === 'existing-worktree') {
         const target = await realpath(choice.path)
         const trees = await listDeveloperWorktrees(canonical)
-        for (const tree of trees) if (!tree.locked && await realpath(tree.path) === target) return target
+        for (const tree of trees) if (!tree.locked && await realpath(tree.path) === target) return { path: target }
         throw new Error('Choose an unlocked worktree belonging to this repository.')
     }
     if (choice.kind !== 'new-worktree') throw new Error('Invalid workspace choice.')
@@ -41,7 +45,14 @@ export async function resolveChatWorktree(root: string, choice: ChatWorkspaceCho
     const gitRoot = (await developerGit(canonical, ['rev-parse', '--show-toplevel'])).trim()
     // A sibling keeps the main tree clean and lets users inspect retained worktrees.
     const directory = join(dirname(gitRoot), '.zyra-worktrees', `${basename(gitRoot)}-${id}`)
+    const createdHead = (await developerGit(canonical, ['rev-parse', 'HEAD'])).trim()
     await mkdir(dirname(directory), { recursive: true })
-    await developerGit(canonical, ['worktree', 'add', '-b', branch, '--', directory, 'HEAD'])
-    return directory
+    await developerGit(canonical, ['worktree', 'add', '-b', branch, '--', directory, createdHead])
+    return { path: directory, rollback: async () => {
+        const tree = (await listDeveloperWorktrees(canonical)).find(tree => tree.path.replace(/\\/g, '/') === directory.replace(/\\/g, '/'))
+        if (!tree || tree.locked || tree.branch !== branch || tree.head !== createdHead) throw new Error('The new worktree changed and was retained after chat creation failed.')
+        // Git refuses changed/untracked files. Never force removal or branch deletion.
+        await developerGit(canonical, ['worktree', 'remove', '--', directory])
+        await developerGit(canonical, ['branch', '-d', '--', branch])
+    } }
 }
