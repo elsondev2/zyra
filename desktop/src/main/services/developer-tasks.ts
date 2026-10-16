@@ -3,11 +3,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile, realpath, stat, lstat } from 'node:fs/promises'
 import { join, isAbsolute } from 'node:path'
 import type { DeveloperTask, DeveloperWorkspace } from '../../shared/contracts/developer-workflow'
-import { developerGit, listDeveloperWorktrees } from './developer-worktrees'
+import { developerGit, hasProtectedWorktreeIndex, listDeveloperWorktrees } from './developer-worktrees'
 import { writeJsonAtomically } from '../setup/atomic-json'
 
 export async function workspaceRevision(root: string): Promise<string> {
     try {
+        if (await hasProtectedWorktreeIndex(root)) return 'unverified'
         const hash = createHash('sha256')
         hash.update(await developerGit(root, ['rev-parse', 'HEAD']))
         hash.update(await developerGit(root, ['diff', '--binary', 'HEAD', '--', '.']))

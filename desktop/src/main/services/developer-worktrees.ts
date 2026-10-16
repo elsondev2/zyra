@@ -17,6 +17,10 @@ export async function developerGit(root: string, args: string[], input?: string)
         child.stdin?.end(input)
     })
 }
+export async function hasProtectedWorktreeIndex(root: string): Promise<boolean> {
+    const indexed = await developerGit(root, ['ls-files', '-v', '-z'])
+    return indexed.split('\0').some(entry => entry && !entry.startsWith('H '))
+}
 export async function listDeveloperWorktrees(root: string): Promise<DeveloperWorktree[]> {
     const raw = await developerGit(root, ['worktree', 'list', '--porcelain', '-z'])
     return raw.split('\0\0').flatMap(record => {
@@ -53,8 +57,7 @@ export async function prepareChatWorktree(root: string, choice: ChatWorkspaceCho
         if (!tree || tree.locked || tree.branch !== branch || tree.head !== createdHead) throw new Error('The new worktree changed and was retained after chat creation failed.')
         // Status omits assume-unchanged and skip-worktree entries. Only normal
         // cached entries (H) are eligible for cleanup; retain every other state.
-        const indexed = await developerGit(directory, ['ls-files', '-v', '-z'])
-        if (indexed.split('\0').some(entry => entry && !entry.startsWith('H '))) throw new Error('The new worktree has protected index entries and was retained after chat creation failed.')
+        if (await hasProtectedWorktreeIndex(directory)) throw new Error('The new worktree has protected index entries and was retained after chat creation failed.')
         // Unforced worktree removal can still delete ignored files. Preserve all
         // tracked, untracked and ignored additions before requesting any removal.
         if (await developerGit(directory, ['-c', 'core.fsmonitor=false', 'status', '--porcelain', '-z', '--untracked-files=all', '--ignored'])) throw new Error('The new worktree contains files or edits and was retained after chat creation failed.')

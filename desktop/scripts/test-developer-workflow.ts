@@ -76,6 +76,19 @@ try {
     const pass = await waitTask((await tasks.start(root, 'test')).id)
     assert.equal(pass.state, 'passed'); assert.equal(pass.exitCode, 0); assert.match(pass.output, /passed/)
     assert.equal(pass.stale, false)
+    const manifestBefore = await readFile(join(root, 'package.json'), 'utf8')
+    for (const flag of ['assume-unchanged', 'skip-worktree']) {
+        await developerGit(root, ['update-index', `--${flag}`, '--', 'package.json'])
+        try {
+            await writeFile(join(root, 'package.json'), manifestBefore + '\n')
+            assert.equal(await workspaceRevision(root), 'unverified', `${flag} cannot certify hidden source edits`)
+            assert.equal((await tasks.workspace(root)).tasks.find(task => task.id === pass.id)?.stale, true, 'completed task evidence is stale when tracked edits cannot be verified')
+        } finally {
+            await writeFile(join(root, 'package.json'), manifestBefore)
+            await developerGit(root, ['update-index', `--no-${flag}`, '--', 'package.json'])
+        }
+    }
+    assert.equal((await tasks.workspace(root)).tasks.find(task => task.id === pass.id)?.stale, false, 'clearing the flag and restoring exact source restores evidence validity')
     await writeFile(join(root, 'untracked.txt'), 'changed')
     assert.equal((await tasks.workspace(root)).tasks.find(task => task.id === pass.id)?.stale, true)
     const fail = await waitTask((await tasks.start(root, 'fail')).id)
