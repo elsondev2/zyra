@@ -1,5 +1,5 @@
 import { pointerPathIntersectsBounds } from './pointer-path-geometry'
-import { backgroundBrowserOperation, isWindowsControlOperation } from './background-browser-policy'
+import { backgroundBrowserOperation, isRootOnlyWindowsOperation, isWindowsControlOperation } from './background-browser-policy'
 import { resolveWindowsControlBounds } from './windows-control-geometry'
 import { randomUUID } from 'crypto'
 import { matchesWindowsApplication } from './windows-application-match'
@@ -1197,6 +1197,9 @@ export class AgentControlBroker extends EventEmitter {
         }
         const operation = operationValue as AgentControlBridgeOperation
         const target = this.toolOperationTarget(principal, operation)
+        if (principal.type !== 'root' && isRootOnlyWindowsOperation(operation, target)) {
+            throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only the root agent may acquire Windows applications or targets.')
+        }
         const lifetime = this.userWindowsTurn(principal)
         if (options.backgrounded) backgroundBrowserOperation(principal, operation, target, Boolean(lifetime))
         if (!isWindowsControlOperation(operation, target)) return this.executeToolOperation(principal, operation, signal, options)
@@ -1207,7 +1210,11 @@ export class AgentControlBroker extends EventEmitter {
             return await this.windowsForeground.enqueue('windows-foreground', async () => {
                 if (lifetime && lifetime !== this.userWindowsTurn(principal)) throw new AgentControlError('CONTROL_CANCELLED', 'The requesting user turn ended.')
                 const result = await this.executeToolOperation(principal, operation, boundedSignal, options)
-                if (boundedSignal.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'The requesting user turn ended.')
+                if (boundedSignal.aborted) {
+                    const grant = result.grant as ControlGrant | undefined
+                    if (grant) this.revokeGrant(grant.grantId)
+                    throw new AgentControlError('CONTROL_CANCELLED', 'The native request was cancelled.')
+                }
                 return result
             }, boundedSignal)
         } finally { this.windowsRequests.delete(controller) }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
 import { AgentControlError } from '../src/main/agent-control/control-errors'
+import { CONTROL_BOUNDS } from '../src/shared/agent-control/policy'
 
 const root = { type: 'root' as const, threadId: 'thread:user', turnId: 'turn:user' }
 const other = { type: 'root' as const, threadId: 'thread:other', turnId: 'turn:other' }
@@ -22,7 +23,8 @@ class PaintDriver extends FakeControlDriver {
     try {
         broker.authorizeUserWindowsTurn(root)
         for (const principal of [other, { ...root, turnId: 'turn:later' }, child]) {
-            await assert.rejects(() => broker.handleToolOperation(principal, app, undefined, options), { code: 'CONTROL_FOREGROUND_REQUIRED' })
+            await assert.rejects(() => broker.handleToolOperation(principal, app, undefined, options),
+                { code: principal.type === 'agent' ? 'CONTROL_CAPABILITY_DENIED' : 'CONTROL_FOREGROUND_REQUIRED' })
         }
         assert.throws(() => broker.authorizeUserWindowsTurn(child as any), { code: 'CONTROL_PRINCIPAL_MISMATCH' })
         await assert.rejects(() => broker.handleToolOperation(root, { operation: 'open_tab', reveal: true }, undefined, options), { code: 'CONTROL_FOREGROUND_REQUIRED' })
@@ -38,6 +40,54 @@ class PaintDriver extends FakeControlDriver {
         assert.deepEqual(result.grant.capabilities.sort(), [...app.capabilities].sort())
         broker.revokePrincipal(root)
         await assert.rejects(() => broker.handleToolOperation(root, app, undefined, options), { code: 'CONTROL_FOREGROUND_REQUIRED' })
+    } finally { await broker.dispose() }
+}
+
+// Root-only child requests must not consume another user's native queue slots.
+{
+    const gate = deferred()
+    class OccupiedDriver extends PaintDriver { override async listWindows() { await gate.promise; return super.listWindows() } }
+    const broker = new AgentControlBroker({ drivers: [new OccupiedDriver()] })
+    const pending: Promise<unknown>[] = []
+    try {
+        broker.authorizeUserWindowsTurn(root)
+        broker.authorizeUserWindowsTurn(other)
+        const selected = await broker.selectWindow('fixture:window')
+        pending.push(broker.handleToolOperation(root, { operation: 'list_windows', query: 'Paint' }, undefined, options))
+        await tick()
+        const invalid = [
+            { operation: 'list_windows', query: 'Paint' }, { operation: 'open_app', application: 'Paint' }, app,
+            { operation: 'request_grant', windowToken: 'fixture:window', capabilities: ['observe.structure'] },
+            { operation: 'request_grant', targetId: selected.targetId, capabilities: ['observe.structure'] }
+        ]
+        const crowd = Array.from({ length: CONTROL_BOUNDS.maxPendingActionsPerTarget }, (_, index) => broker.handleToolOperation(child, invalid[index % invalid.length], undefined,
+            { ...options, backgrounded: false }).catch(error => error))
+        pending.push(...crowd)
+        let legitimateError: any
+        const legitimate = broker.handleToolOperation(other, { operation: 'list_windows', query: 'Paint' }, undefined, options).catch(error => { legitimateError = error })
+        pending.push(legitimate)
+        await tick()
+        assert.notEqual(legitimateError?.code, 'CONTROL_QUEUE_FULL', 'invalid child acquisitions cannot exhaust the shared native lane')
+        gate.resolve()
+        await legitimate
+        for (const error of await Promise.all(crowd)) assert.equal(error.code, 'CONTROL_CAPABILITY_DENIED')
+    } finally { gate.resolve(); await broker.dispose(); await Promise.allSettled(pending) }
+}
+
+// Aborting after a completed acquisition result still revokes its returned grant.
+{
+    const broker = new AgentControlBroker({ drivers: [new PaintDriver()] })
+    const caller = new AbortController()
+    const execute = (broker as any).executeToolOperation.bind(broker)
+    ;(broker as any).executeToolOperation = async (...args: any[]) => {
+        const result = await execute(...args)
+        if (args[1].operation === 'use_app') caller.abort()
+        return result
+    }
+    try {
+        broker.authorizeUserWindowsTurn(root)
+        await assert.rejects(broker.handleToolOperation(root, app, caller.signal, options), { code: 'CONTROL_CANCELLED' })
+        assert.equal(broker.state().grants.filter(grant => grant.state === 'active').length, 0, 'cancelled acquisition result cannot leave active Windows authority')
     } finally { await broker.dispose() }
 }
 

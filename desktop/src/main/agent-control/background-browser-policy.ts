@@ -2,10 +2,13 @@ import type { ControlPrincipal, ControlTarget } from '../../shared/agent-control
 import type { AgentControlBridgeOperation } from '../../shared/agent-control/protocol'
 import { AgentControlError } from './control-errors'
 
-export function isWindowsControlOperation(operation: AgentControlBridgeOperation, target?: ControlTarget): boolean {
+export function isRootOnlyWindowsOperation(operation: AgentControlBridgeOperation, target?: ControlTarget): boolean {
     return operation.operation === 'use_app' || operation.operation === 'open_app' || operation.operation === 'list_windows'
-        || (operation.operation === 'request_grant' && Boolean(operation.windowToken))
-        || target?.kind === 'windows-window'
+        || (operation.operation === 'request_grant' && (Boolean(operation.windowToken) || target?.kind === 'windows-window'))
+}
+
+export function isWindowsControlOperation(operation: AgentControlBridgeOperation, target?: ControlTarget): boolean {
+    return isRootOnlyWindowsOperation(operation, target) || target?.kind === 'windows-window'
 }
 
 export function backgroundBrowserOperation(
