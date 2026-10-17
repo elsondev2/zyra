@@ -76,6 +76,27 @@ export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEve
                 replaceAssistantPlaygroundLabs(db, snapshot.playground.labs)
                 upsertAssistantMeta(db, 'playgroundRootPath', snapshot.playground.rootPath || '')
                 break
+            case 'session.merged': {
+                if (!session || !thread) break
+                const duplicateSessionId = String(event.payload['duplicateSessionId'] || '')
+                const duplicateThreadId = String(event.payload['duplicateThreadId'] || '')
+                // Move even unloaded history before cascading away the redundant cache.
+                // Never call the canonical delete/archive API for an identity repair.
+                for (const table of ['assistant_turns', 'assistant_messages', 'assistant_activities', 'assistant_proposed_plans', 'assistant_pending_approvals', 'assistant_pending_user_inputs']) {
+                    db.run(`UPDATE ${table} SET thread_id = ? WHERE thread_id = ?`, [thread.thread.id, duplicateThreadId])
+                }
+                db.run('UPDATE assistant_threads SET parent_thread_id = ? WHERE parent_thread_id = ?', [thread.thread.id, duplicateThreadId])
+                for (const table of ['assistant_fleet_snapshots', 'assistant_agent_runs', 'assistant_workflow_runs', 'assistant_workflow_phases', 'assistant_workflow_calls', 'assistant_agent_relationships', 'assistant_agent_artifacts']) {
+                    db.run(`UPDATE OR IGNORE ${table} SET root_thread_id = ? WHERE root_thread_id = ?`, [thread.thread.id, duplicateThreadId])
+                    db.run(`DELETE FROM ${table} WHERE root_thread_id = ?`, [duplicateThreadId])
+                }
+                db.run('DELETE FROM assistant_sessions WHERE id = ?', [duplicateSessionId])
+                db.run('DELETE FROM assistant_meta WHERE key = ?', [`canonicalSettlement:${duplicateSessionId}`])
+                syncAssistantSessionPersistence(db, session)
+                upsertAssistantThreadSummary(db, session.id, thread.thread)
+                if (thread.thread.latestTurn) upsertAssistantTurn(db, thread.thread.id, thread.thread.model, thread.thread.latestTurn)
+                break
+            }
             case 'session.deleted':
                 db.run('DELETE FROM assistant_sessions WHERE id = ?', [event.payload['sessionId'] as SqlValue])
                 db.run('DELETE FROM assistant_meta WHERE key = ?', [`canonicalSettlement:${event.payload['sessionId']}`])
