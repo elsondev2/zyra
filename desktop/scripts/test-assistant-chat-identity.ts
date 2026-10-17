@@ -69,11 +69,41 @@ try {
     const importedThread = conflicting.sessions.find((session: any) => session.id === duplicate.id).threads[0]
     originalThread.messages = [{ ...importedThread.messages[0], text: 'Partial answer', streaming: true }]
     importedThread.latestTurn = { ...originalThread.latestTurn, state: 'interrupted', completedAt: '2026-08-01T12:03:00.000Z' }
+    const request = { id: 'pending-input', requestId: 'runtime-input', questions: [], status: 'pending', answers: null, turnId: 'completed-turn', createdAt: at, resolvedAt: null }
+    originalThread.pendingUserInputs = [request]
+    originalThread.pendingApprovals = [{ ...request, id: 'pending-approval', requestId: 'runtime-approval', requestType: 'command', decision: null }]
+    originalThread.hasPendingApprovals = originalThread.hasPendingUserInputs = true
+    originalThread.state = 'waiting'
+    importedThread.pendingUserInputs = [{ ...request, id: 'resolved-input-alias', status: 'resolved', answers: { choice: 'yes' }, resolvedAt: later }]
+    importedThread.pendingApprovals = [{ ...originalThread.pendingApprovals[0], status: 'resolved', decision: 'accept', resolvedAt: later }]
+    const fleet = (rootThreadId: string, sequence: number, updatedAt: string) => ({ version: 1, fleetId: 'fixture-fleet', rootSessionId: original.id,
+        rootThreadId, lastAppliedSequence: sequence, updatedAt, agents: {}, workflows: {}, relationships: [], artifacts: [], eventWindow: [], usage: {},
+        truncated: { agents: false, workflows: false, relationships: false, artifacts: false, events: false } })
+    conflicting.fleetByThreadId = { [thread.id]: fleet(thread.id, 3, later), [duplicateThread.id]: fleet(duplicateThread.id, 4, at) }
+    conflicting.fleetByThreadId[duplicateThread.id].artifacts = [{ artifactId: 'retained-artifact', agentRunId: null, workflowRunId: null, kind: 'report', path: null, createdAt: at }]
     const merged = mergeAssistantChatRecords(conflicting, original.id, thread.id, duplicate.id, duplicateThread.id)
     const mergedThread = merged.sessions.find((session: any) => session.id === original.id)!.threads[0]
     assert.equal(mergedThread.messages[0].text, 'The completed final response.', 'a finished answer wins over a partial with the same message ID')
     assert.equal(mergedThread.messages[0].streaming, false)
     assert.equal(mergedThread.latestTurn?.state, 'completed', 'a stale later interruption cannot demote the same completed turn')
+    assert.equal(mergedThread.pendingUserInputs.length, 1, 'runtime request identity collapses differing local aliases')
+    assert.equal(mergedThread.pendingUserInputs[0].status, 'resolved', 'resolved input beats stale preferred pending state')
+    assert.equal(mergedThread.pendingApprovals[0].status, 'resolved', 'resolved approval beats stale preferred pending state')
+    assert.equal(mergedThread.hasPendingUserInputs, false)
+    assert.equal(mergedThread.hasPendingApprovals, false)
+    assert.notEqual(mergedThread.state, 'waiting', 'resolved requests cannot leave a completed chat blocked')
+    assert.equal(merged.fleetByThreadId[thread.id].lastAppliedSequence, 4, 'newer fleet sequence wins after normalizing local aliases')
+    assert.equal(merged.fleetByThreadId[thread.id].rootThreadId, thread.id)
+    const reversed = structuredClone(conflicting)
+    reversed.fleetByThreadId[thread.id].lastAppliedSequence = 5
+    assert.equal(mergeAssistantChatRecords(reversed, original.id, thread.id, duplicate.id, duplicateThread.id).fleetByThreadId[thread.id].lastAppliedSequence, 5, 'stale duplicate fleet cannot replace survivor state')
+    for (const [session, localThread, input, approval] of [[original, thread, request, originalThread.pendingApprovals[0]], [duplicate, duplicateThread, importedThread.pendingUserInputs[0], importedThread.pendingApprovals[0]]] as any[]) {
+        internal.appendEvent('thread.user-input.updated', later, { threadId: localThread.id, userInput: input }, session.id, localThread.id)
+        internal.appendEvent('thread.approval.updated', later, { threadId: localThread.id, approval }, session.id, localThread.id)
+    }
+    internal.appendEvent('thread.user-input.updated', later, { threadId: thread.id, userInput: { ...request, id: 'still-pending', requestId: 'unrelated-live-request' } }, original.id, thread.id)
+    internal.persistence.projectFleet(thread.id, conflicting.fleetByThreadId[thread.id])
+    internal.persistence.projectFleet(duplicateThread.id, conflicting.fleetByThreadId[duplicateThread.id])
     await internal.persistence.flush()
     // Match startup's unloaded summaries: the duplicate's response exists only in SQLite.
     internal.state.snapshot = (await internal.persistence.load()).snapshot
@@ -92,6 +122,15 @@ try {
     assert.equal(cold.sessions.length, 1, 'repair persists across restart')
     const hydrated = await internal.persistence.hydrateSelectedSession(cold, original.id)
     assert.ok(hydrated.sessions[0].threads[0].messages.some((message: any) => message.id === 'saved-final' && message.text === 'The completed final response.'), 'move unloaded final-response rows before deleting the duplicate cache')
+    const hydratedThread = hydrated.sessions[0].threads[0]
+    assert.equal(hydratedThread.pendingUserInputs.length, 2, 'resolved alias and unrelated cold pending request both persist')
+    assert.equal(hydratedThread.pendingUserInputs.find((input: any) => input.requestId === request.requestId).status, 'resolved')
+    assert.equal(survivor.hasPendingUserInputs, true, 'cold repair must retain unrelated pending attention')
+    assert.equal(hydratedThread.pendingApprovals[0].status, 'resolved')
+    assert.equal((await internal.persistence.readFleet(thread.id)).lastAppliedSequence, 4, 'newer fleet persists across cold repair')
+    assert.equal((await internal.persistence.readFleet(thread.id)).rootThreadId, thread.id)
+    assert.equal((await internal.persistence.readFleet(thread.id)).artifacts[0].artifactId, 'retained-artifact', 'newer fleet artifacts survive reprojection')
+    assert.equal(await internal.persistence.readFleet(duplicateThread.id), null, 'only the redundant fleet projection is removed')
     const mergedEvent = internal.state.events.findLast((event: any) => event.type === 'session.merged')
     assert.ok(shouldRehydrateAssistantHistoryAfterCanonicalEvent(mergedEvent, thread.id), 'repair invalidates even an already open survivor history cache')
     assert.ok(getAssistantEventHistoryThreadIds(beforeRepair, [mergedEvent]).has(duplicateThread.id), 'renderer can materialize retained duplicate evidence during the merge')

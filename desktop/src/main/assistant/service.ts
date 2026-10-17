@@ -3074,7 +3074,7 @@ export class AssistantService {
             if (!chat.canonicalChatId) continue
             const agentOrigin = projectCanonicalAgentOrigin(chat)
             const matches = findCanonicalChatRecords(this.state.snapshot.sessions, chat)
-            let existing = matches[0]
+            let existing: (typeof matches)[number] | undefined = matches[0]
             if (existing && !existing.thread.providerThreadId) {
                 this.appendEvent('thread.updated', nowIso(), {
                     threadId: existing.thread.id, patch: { providerThreadId: chat.canonicalChatId }
@@ -3085,13 +3085,28 @@ export class AssistantService {
                 for (const duplicate of duplicates) {
                     this.assistantTextDeltaBuffer.flush({ threadId: duplicate.thread.id })
                     this.assistantActivityDeltaBuffer.flush({ threadId: duplicate.thread.id })
+                    const [originalRequests, duplicateRequests] = await Promise.all([
+                        this.persistence.readThreadRequests(existing.thread.id),
+                        this.persistence.readThreadRequests(duplicate.thread.id)
+                    ])
+                    const current = findThreadRecord(this.state.snapshot, existing.thread.id)
+                    const imported = findThreadRecord(this.state.snapshot, duplicate.thread.id)
+                    if (!current || !imported || current.thread.providerThreadId !== chat.canonicalChatId
+                        || imported.thread.providerThreadId !== chat.canonicalChatId || !isImportedChat(imported)) continue
                     this.appendEvent('session.merged', nowIso(), {
+                        requests: {
+                            pendingApprovals: [...originalRequests.pendingApprovals, ...duplicateRequests.pendingApprovals],
+                            pendingUserInputs: [...originalRequests.pendingUserInputs, ...duplicateRequests.pendingUserInputs]
+                        },
                         sessionId: existing.session.id, threadId: existing.thread.id,
                         duplicateSessionId: duplicate.session.id, duplicateThreadId: duplicate.thread.id
                     }, existing.session.id, existing.thread.id)
                     for (const view of this.threadViews.values()) {
                         if (view.threadId === duplicate.thread.id) view.threadId = existing.thread.id
                     }
+                    const fleet = this.state.snapshot.fleetByThreadId[existing.thread.id]
+                    if (fleet) this.fleetProjection.apply(existing.thread.id, fleet)
+                    this.fleetProjection.remove(duplicate.thread.id)
                     this.markCanonicalHistoryDirty(chat.canonicalChatId)
                 }
                 existing = findThreadRecord(this.state.snapshot, existing.thread.id) || undefined

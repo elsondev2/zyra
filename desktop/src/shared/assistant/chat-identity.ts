@@ -1,7 +1,10 @@
 import type { AssistantSession, AssistantSnapshot, AssistantThread } from './contracts'
+import { shouldApplyAssistantFleetSnapshot } from './fleet-projection'
+import { mergeAssistantRequests } from './request-identity'
 
 export type CanonicalChatIdentity = { canonicalChatId: string; aliases?: string[] }
 export type AssistantChatRecord = { session: AssistantSession; thread: AssistantThread }
+export type AssistantChatRequestEvidence = Pick<AssistantThread, 'pendingApprovals' | 'pendingUserInputs'>
 
 /** Catalog aliases are registered before Desktop receives thread.started. */
 export function findCanonicalChatRecords(sessions: AssistantSession[], chat: CanonicalChatIdentity): AssistantChatRecord[] {
@@ -42,7 +45,7 @@ function pickLatestThread(original: AssistantThread, imported: AssistantThread):
 }
 
 /** Keep the original scope/configuration; only combine conversation evidence. */
-export function mergeAssistantChatRecords(snapshot: AssistantSnapshot, sessionId: string, threadId: string, duplicateSessionId: string, duplicateThreadId: string): AssistantSnapshot {
+export function mergeAssistantChatRecords(snapshot: AssistantSnapshot, sessionId: string, threadId: string, duplicateSessionId: string, duplicateThreadId: string, requests?: AssistantChatRequestEvidence): AssistantSnapshot {
     const original = snapshot.sessions.find(session => session.id === sessionId)
     const duplicate = snapshot.sessions.find(session => session.id === duplicateSessionId)
     const thread = original?.threads.find(thread => thread.id === threadId)
@@ -51,28 +54,40 @@ export function mergeAssistantChatRecords(snapshot: AssistantSnapshot, sessionId
         || !thread.providerThreadId || thread.providerThreadId !== other.providerThreadId
         || !isImportedChat({ session: duplicate, thread: other })) return snapshot
     const latest = pickLatestThread(thread, other)
+    const pendingApprovals = mergeAssistantRequests([...thread.pendingApprovals, ...other.pendingApprovals], requests?.pendingApprovals || [])
+    const pendingUserInputs = mergeAssistantRequests([...thread.pendingUserInputs, ...other.pendingUserInputs], requests?.pendingUserInputs || [])
+    const hasPendingApprovals = pendingApprovals.some(request => request.status === 'pending')
+    const hasPendingUserInputs = pendingUserInputs.some(request => request.status === 'pending')
     const merged: AssistantThread = {
         ...thread,
         messages: mergeRows(thread.messages, other.messages),
         activities: mergeRows(thread.activities, other.activities),
         proposedPlans: mergeRows(thread.proposedPlans, other.proposedPlans),
-        pendingApprovals: mergeRows(thread.pendingApprovals, other.pendingApprovals),
-        pendingUserInputs: mergeRows(thread.pendingUserInputs, other.pendingUserInputs),
+        pendingApprovals,
+        pendingUserInputs,
         latestTurn: latest.latestTurn,
         canonicalPresence: (other.canonicalPresence?.latestSequence || 0) > (thread.canonicalPresence?.latestSequence || 0)
             ? other.canonicalPresence : thread.canonicalPresence,
-        state: latest.state,
+        state: latest.state === 'waiting' && !hasPendingApprovals && !hasPendingUserInputs
+            ? latest.latestTurn?.state === 'running' ? 'running' : 'ready'
+            : latest.state,
         lastError: latest.lastError,
         updatedAt: thread.updatedAt > other.updatedAt ? thread.updatedAt : other.updatedAt,
         messageCount: Math.max(thread.messageCount, other.messageCount),
         activityCount: Math.max(thread.activityCount, other.activityCount),
         proposedPlanCount: Math.max(thread.proposedPlanCount, other.proposedPlanCount),
-        hasPendingApprovals: thread.hasPendingApprovals || other.hasPendingApprovals,
-        hasPendingUserInputs: thread.hasPendingUserInputs || other.hasPendingUserInputs,
+        hasPendingApprovals,
+        hasPendingUserInputs,
         lastMessageAt: (thread.lastMessageAt || '') > (other.lastMessageAt || '') ? thread.lastMessageAt : other.lastMessageAt
     }
     const fleetByThreadId = { ...snapshot.fleetByThreadId }
-    if (!fleetByThreadId[threadId] && fleetByThreadId[duplicateThreadId]) fleetByThreadId[threadId] = fleetByThreadId[duplicateThreadId]
+    const importedFleet = fleetByThreadId[duplicateThreadId]
+    if (importedFleet) {
+        const incoming = { ...importedFleet,
+            rootSessionId: importedFleet.rootSessionId === duplicateSessionId ? sessionId : importedFleet.rootSessionId,
+            rootThreadId: importedFleet.rootThreadId === duplicateThreadId ? threadId : importedFleet.rootThreadId }
+        if (shouldApplyAssistantFleetSnapshot(fleetByThreadId[threadId], incoming)) fleetByThreadId[threadId] = incoming
+    }
     delete fleetByThreadId[duplicateThreadId]
     return {
         ...snapshot,
