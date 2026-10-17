@@ -2,11 +2,19 @@ import type { ControlPrincipal, ControlTarget } from '../../shared/agent-control
 import type { AgentControlBridgeOperation } from '../../shared/agent-control/protocol'
 import { AgentControlError } from './control-errors'
 
+export function isWindowsControlOperation(operation: AgentControlBridgeOperation, target?: ControlTarget): boolean {
+    return operation.operation === 'use_app' || operation.operation === 'open_app' || operation.operation === 'list_windows'
+        || (operation.operation === 'request_grant' && Boolean(operation.windowToken))
+        || target?.kind === 'windows-window'
+}
+
 export function backgroundBrowserOperation(
     principal: ControlPrincipal,
     operation: AgentControlBridgeOperation,
-    target?: ControlTarget
+    target?: ControlTarget,
+    userRequestedWindows = false
 ): AgentControlBridgeOperation {
+    if (userRequestedWindows && principal.type === 'root' && isWindowsControlOperation(operation, target)) return operation
     if (operation.operation === 'list_targets' && (!operation.targetKind || operation.targetKind === 'zyra-browser')) {
         return { ...operation, targetKind: 'zyra-browser' }
     }

@@ -28,6 +28,7 @@ const electronNoop = (): undefined => undefined
 mock.module('electron-log', () => ({ default: { info: electronNoop, warn: electronNoop, error: electronNoop, debug: electronNoop } }))
 mock.module('../src/main/agent-control', () => ({ getAgentControlBroker: () => ({
     materializeUserAuthorizedBrowserGrant: electronNoop,
+    authorizeUserWindowsTurn: electronNoop,
     revokePrincipal: electronNoop,
     grants: { list: () => [], listPending: () => [] }
 }) }))

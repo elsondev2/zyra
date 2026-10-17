@@ -246,6 +246,10 @@ function nowIso(): string {
 }
 
 function markTurnCompleted(context: ZyraSessionContext, turnId: string): void {
+    getAgentControlBroker().revokePrincipal(
+        { type: 'root', threadId: context.localThreadId, turnId },
+        'Root control ended with its turn.'
+    )
     context.completedTurnIds.add(turnId)
     while (context.completedTurnIds.size > 256) {
         const oldest = context.completedTurnIds.values().next().value
@@ -2068,6 +2072,9 @@ export class ZyraRuntime extends EventEmitter {
         context.runtimeMode = options?.runtimeMode || context.runtimeMode
         context.interactionMode = 'default'
         context.profile = normalizeZyraProfile(options?.profile || context.profile)
+        // This entrypoint submits a user turn. Observed/replayed server turns do
+        // not acquire this provenance, and tools cannot provide it themselves.
+        getAgentControlBroker().authorizeUserWindowsTurn({ type: 'root', threadId: context.localThreadId, turnId })
         try { getAgentControlBroker().materializeUserAuthorizedBrowserGrant(threadId, turnId) }
         catch { /* A stale optional TUI Browser intent must never block the canonical turn. */ }
 
@@ -2428,6 +2435,10 @@ export class ZyraRuntime extends EventEmitter {
     }
 
     private releaseSessionContext(context: ZyraSessionContext): void {
+        if (context.activeTurnId) getAgentControlBroker().revokePrincipal(
+            { type: 'root', threadId: context.localThreadId, turnId: context.activeTurnId },
+            'The requesting runtime detached.'
+        )
         context.assistantPhaseByItemId?.clear()
         void context.mcpPool?.close()
         void context.mcpPoolPromise?.then((pool) => pool.close()).catch(() => undefined)

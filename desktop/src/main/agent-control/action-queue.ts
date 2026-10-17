@@ -6,6 +6,7 @@ type QueueEntry = {
     resolve: (value: unknown) => void
     reject: (error: unknown) => void
     signal?: AbortSignal
+    cleanup?: () => void
 }
 
 type TargetQueue = { running: boolean; entries: QueueEntry[] }
@@ -15,6 +16,7 @@ export class ActionQueue {
     private generation = 0
 
     enqueue<T>(targetId: string, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+        if (signal?.aborted) return Promise.reject(new AgentControlError('CONTROL_CANCELLED', 'Control action was cancelled.'))
         const queue = this.queues.get(targetId) || { running: false, entries: [] }
         this.queues.set(targetId, queue)
         if (queue.entries.length >= CONTROL_BOUNDS.maxPendingActionsPerTarget) {
@@ -22,7 +24,7 @@ export class ActionQueue {
         }
         const generation = this.generation
         return new Promise<T>((resolve, reject) => {
-            queue.entries.push({
+            const entry: QueueEntry = {
                 run: async () => {
                     if (generation !== this.generation || signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Control action was cancelled.')
                     return run()
@@ -30,7 +32,18 @@ export class ActionQueue {
                 resolve: resolve as (value: unknown) => void,
                 reject,
                 signal
-            })
+            }
+            const onAbort = () => {
+                const index = queue.entries.indexOf(entry)
+                if (index < 0) return
+                queue.entries.splice(index, 1)
+                entry.cleanup?.()
+                reject(new AgentControlError('CONTROL_CANCELLED', 'Control action was cancelled.'))
+                if (!queue.running && queue.entries.length === 0) this.queues.delete(targetId)
+            }
+            entry.cleanup = () => signal?.removeEventListener('abort', onAbort)
+            queue.entries.push(entry)
+            signal?.addEventListener('abort', onAbort, { once: true })
             void this.drain(targetId, queue)
         })
     }
@@ -39,6 +52,7 @@ export class ActionQueue {
         this.generation += 1
         for (const queue of this.queues.values()) {
             for (const entry of queue.entries.splice(0)) {
+                entry.cleanup?.()
                 entry.reject(new AgentControlError('CONTROL_CANCELLED', reason))
             }
         }
@@ -50,6 +64,7 @@ export class ActionQueue {
         try {
             while (queue.entries.length > 0) {
                 const entry = queue.entries.shift()!
+                entry.cleanup?.()
                 if (entry.signal?.aborted) {
                     entry.reject(new AgentControlError('CONTROL_CANCELLED', 'Control action was cancelled.'))
                     continue

@@ -1,5 +1,5 @@
 import { pointerPathIntersectsBounds } from './pointer-path-geometry'
-import { backgroundBrowserOperation } from './background-browser-policy'
+import { backgroundBrowserOperation, isWindowsControlOperation } from './background-browser-policy'
 import { resolveWindowsControlBounds } from './windows-control-geometry'
 import { randomUUID } from 'crypto'
 import { matchesWindowsApplication } from './windows-application-match'
@@ -50,6 +50,8 @@ import { TargetRegistry } from './target-registry'
 import type { AgentControlDriver } from './drivers/driver'
 import type { AssistantRuntimeMode } from '../../shared/assistant/contracts/runtime'
 
+type ToolOperationOptions = { permissionMode?: 'approval-required' | 'auto-review' | 'edits-only' | 'full-access'; deferInitialScreenshot?: boolean; reuseWindowsGrantForActions?: number; backgrounded?: boolean }
+
 export type BrowserSurfaceController = {
     openTab(principal: ControlPrincipal, reveal: boolean, sessionMode: 'normal' | 'incognito', signal?: AbortSignal): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
     revealTabs(
@@ -91,6 +93,9 @@ export class AgentControlBroker extends EventEmitter {
     readonly grants = new GrantStore()
     readonly observations = new ObservationStore()
     readonly actions = new ActionQueue()
+    private readonly windowsForeground = new ActionQueue()
+    private readonly windowsRequests = new Map<AbortController, ControlPrincipal>()
+    private readonly userWindowsTurns = new Map<string, AbortController>()
     readonly audit: AuditStore
     private sequence = 0
     private disposed = false
@@ -956,9 +961,30 @@ export class AgentControlBroker extends EventEmitter {
         this.changed()
     }
 
+    // Called only by trusted Desktop submission, never by a tool operation or replay.
+    authorizeUserWindowsTurn(principal: Extract<ControlPrincipal, { type: 'root' }>): void {
+        this.assertAlive()
+        const validated = assertControlPrincipal(principal)
+        if (validated.type !== 'root') throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'Only a submitted root user turn can request a Windows handoff.')
+        const key = JSON.stringify([validated.threadId, validated.turnId])
+        this.userWindowsTurns.get(key)?.abort()
+        this.userWindowsTurns.set(key, new AbortController())
+    }
+
+    private userWindowsTurn(principal: ControlPrincipal): AbortController | undefined {
+        return principal.type === 'root' ? this.userWindowsTurns.get(JSON.stringify([principal.threadId, principal.turnId])) : undefined
+    }
+
     revokeForegroundPrincipal(principal: ControlPrincipal): void {
+        for (const [controller, owner] of this.windowsRequests) {
+            const child = principal.type === 'root' && owner.type === 'agent' && owner.parentThreadId === principal.threadId
+            if (child || (sameControlPrincipal(owner, principal) && !this.userWindowsTurn(principal))) controller.abort()
+        }
         const isForeground = (targetId: string) => {
-            try { return this.targets.get(targetId).target.kind !== 'zyra-browser' } catch { return true }
+            try {
+                const kind = this.targets.get(targetId).target.kind
+                return kind !== 'zyra-browser' && !(kind === 'windows-window' && this.userWindowsTurn(principal))
+            } catch { return true }
         }
         for (const grant of this.grants.listForPrincipal(principal)) {
             if (grant.state === 'active' && isForeground(grant.targetId)) this.revokeGrant(grant.grantId)
@@ -972,6 +998,9 @@ export class AgentControlBroker extends EventEmitter {
     }
 
     revokePrincipal(principal: ControlPrincipal, reason = 'Principal control cancelled.'): void {
+        for (const [controller, owner] of this.windowsRequests) if (sameControlPrincipal(owner, principal)) controller.abort()
+        this.userWindowsTurn(principal)?.abort()
+        if (principal.type === 'root') this.userWindowsTurns.delete(JSON.stringify([principal.threadId, principal.turnId]))
         const revoked = this.grants.revokeByPrincipal(principal)
         const pending = this.grants.removePendingByPrincipal(principal)
         for (const targetId of new Set(revoked.map((grant) => grant.targetId))) {
@@ -999,6 +1028,10 @@ export class AgentControlBroker extends EventEmitter {
     }
 
     async emergencyStop(reason = 'Emergency stop requested by user.'): Promise<void> {
+        for (const lifetime of this.userWindowsTurns.values()) lifetime.abort()
+        this.userWindowsTurns.clear()
+        for (const controller of this.windowsRequests.keys()) controller.abort()
+        this.windowsForeground.cancelAll(reason)
         this.actions.cancelAll(reason)
         this.browserSurface?.cancelPending(reason)
         this.grants.revokeAll()
@@ -1072,6 +1105,7 @@ export class AgentControlBroker extends EventEmitter {
             throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'A registered application name between 1 and 128 characters is required.')
         }
         const existingWindows = (await this.listWindows(application)).filter(candidate => matchesWindowsApplication(candidate, application))
+        if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Opening the Windows application was cancelled.')
         if (existingWindows.length > 0) {
             this.audit.append({
                 eventType: 'target', principal,
@@ -1080,6 +1114,7 @@ export class AgentControlBroker extends EventEmitter {
             })
             return { applicationName: application, windows: existingWindows, launched: false }
         }
+        if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Opening the Windows application was cancelled.')
         const opened = await driver.openApp(application, signal)
         const queries = [...new Set([opened.applicationName, application])]
         let windows: ControlWindowCandidate[] = []
@@ -1152,7 +1187,7 @@ export class AgentControlBroker extends EventEmitter {
         principalValue: unknown,
         operationValue: unknown,
         signal?: AbortSignal,
-        options: { permissionMode?: 'approval-required' | 'auto-review' | 'edits-only' | 'full-access'; deferInitialScreenshot?: boolean; reuseWindowsGrantForActions?: number; backgrounded?: boolean } = {}
+        options: ToolOperationOptions = {}
     ): Promise<Record<string, unknown>> {
         this.assertAlive()
         assertBridgeMessageSize(operationValue)
@@ -1160,13 +1195,38 @@ export class AgentControlBroker extends EventEmitter {
         if (!operationValue || typeof operationValue !== 'object' || Array.isArray(operationValue)) {
             throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Control operation is invalid.')
         }
-        let operation = operationValue as AgentControlBridgeOperation
-        if (options.backgrounded) {
-            let targetId = 'targetId' in operation ? operation.targetId : undefined
-            if (!targetId && 'grantId' in operation) targetId = this.grants.requireActive(operation.grantId, principal).targetId
-            if (!targetId && 'planId' in operation && operation.planId) targetId = this.requirePausedPlan(operation.planId, principal).request.targetId
-            operation = backgroundBrowserOperation(principal, operation, targetId ? this.targets.get(targetId).target : undefined)
-        }
+        const operation = operationValue as AgentControlBridgeOperation
+        const target = this.toolOperationTarget(principal, operation)
+        const lifetime = this.userWindowsTurn(principal)
+        if (options.backgrounded) backgroundBrowserOperation(principal, operation, target, Boolean(lifetime))
+        if (!isWindowsControlOperation(operation, target)) return this.executeToolOperation(principal, operation, signal, options)
+        const controller = new AbortController()
+        this.windowsRequests.set(controller, principal)
+        const boundedSignal = AbortSignal.any([controller.signal, ...(lifetime ? [lifetime.signal] : []), ...(signal ? [signal] : [])])
+        try {
+            return await this.windowsForeground.enqueue('windows-foreground', async () => {
+                if (lifetime && lifetime !== this.userWindowsTurn(principal)) throw new AgentControlError('CONTROL_CANCELLED', 'The requesting user turn ended.')
+                const result = await this.executeToolOperation(principal, operation, boundedSignal, options)
+                if (boundedSignal.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'The requesting user turn ended.')
+                return result
+            }, boundedSignal)
+        } finally { this.windowsRequests.delete(controller) }
+    }
+
+    private toolOperationTarget(principal: ControlPrincipal, operation: AgentControlBridgeOperation): ControlTarget | undefined {
+        if (operation.operation === 'plan_status') return undefined
+        let targetId = 'targetId' in operation ? operation.targetId : undefined
+        if (!targetId && 'grantId' in operation) targetId = this.grants.requireActive(operation.grantId, principal).targetId
+        if (!targetId && 'planId' in operation && operation.planId) targetId = this.requirePausedPlan(operation.planId, principal).request.targetId
+        return targetId ? this.targets.get(targetId).target : undefined
+    }
+
+    private async executeToolOperation(principal: ControlPrincipal, input: AgentControlBridgeOperation, signal: AbortSignal | undefined, options: ToolOperationOptions): Promise<Record<string, unknown>> {
+        this.assertAlive()
+        if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Control action was cancelled.')
+        const operation = options.backgrounded
+            ? backgroundBrowserOperation(principal, input, this.toolOperationTarget(principal, input), Boolean(this.userWindowsTurn(principal)))
+            : input
         switch (operation.operation) {
             case 'open_tab': {
                 if (operation.reveal !== undefined && typeof operation.reveal !== 'boolean') {
@@ -1329,7 +1389,7 @@ export class AgentControlBroker extends EventEmitter {
                                 : `The requested app has ${candidates.length} matching windows. Select one exact window before requesting access.`
                         )
                     }
-                    result = await this.handleToolOperation(principal, {
+                    result = await this.executeToolOperation(principal, {
                         operation: 'request_grant',
                         windowToken: candidates[0].windowToken,
                         capabilities,
@@ -1410,6 +1470,10 @@ export class AgentControlBroker extends EventEmitter {
                 } else {
                     requestedTarget = this.targets.get(assertControlIdentifier(operation.targetId, 'targetId')).target
                 }
+                if (signal?.aborted) {
+                    this.releaseTargetIfIdle(requestedTarget.targetId)
+                    throw new AgentControlError('CONTROL_CANCELLED', 'Control acquisition was cancelled.')
+                }
                 if (principal.type === 'agent' && requestedTarget.kind !== 'zyra-browser') {
                     throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents may request only an integrated Zyra Browser tab. Chrome and Windows require root delegation.')
                 }
@@ -1420,12 +1484,23 @@ export class AgentControlBroker extends EventEmitter {
                     || (options.permissionMode === 'auto-review' && requestedTarget.kind === 'zyra-browser')
                 )
                 const completeGrant = async (request: ReturnType<AgentControlBroker['requestGrant']> | undefined, grant: ControlGrant) => {
+                    if (signal?.aborted) {
+                        this.revokeGrant(grant.grantId)
+                        throw new AgentControlError('CONTROL_CANCELLED', 'Control acquisition was cancelled.')
+                    }
                     const includeScreenshot = requestedTarget.kind === 'windows-window'
                         && grant.capabilities.includes('observe.screenshot') && !options.deferInitialScreenshot
                     const includeStructure = grant.capabilities.includes('observe.structure')
                     const observation = (includeStructure || includeScreenshot)
-                        ? await this.observe(principal, grant.grantId, requestedTarget.targetId, includeScreenshot, signal, includeStructure ? 'structure' : 'visual')
+                        ? await this.observe(principal, grant.grantId, requestedTarget.targetId, includeScreenshot, signal, includeStructure ? 'structure' : 'visual').catch(error => {
+                            this.revokeGrant(grant.grantId)
+                            throw error
+                        })
                         : undefined
+                    if (signal?.aborted) {
+                        this.revokeGrant(grant.grantId)
+                        throw new AgentControlError('CONTROL_CANCELLED', 'Control acquisition was cancelled.')
+                    }
                     const screenshot = observation?.screenshotRef
                         ? this.targets.get(requestedTarget.targetId).driver.readScreenshot?.(observation.screenshotRef)
                         : undefined

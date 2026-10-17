@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import { mock } from 'bun:test'
 import { createAssistantSessionRecord } from '../src/main/assistant/service-records'
 import { createAssistantThread } from '../src/main/assistant/service-state'
-import { backgroundBrowserOperation } from '../src/main/agent-control/background-browser-policy'
 import { mergeAssistantChatRecords } from '../src/shared/assistant/chat-identity'
 import { remapAssistantFleetRoot } from '../src/shared/assistant/fleet-projection'
 import { getAssistantEventHistoryThreadIds, shouldRehydrateAssistantHistoryAfterCanonicalEvent } from '../src/renderer/src/lib/assistant/assistant-history-state'
@@ -188,27 +187,23 @@ try {
     assert.ok(internal.state.snapshot.sessions.some((session: any) => session.id === pending.id && session.projectPath === null))
     const originatingThread = internal.state.snapshot.sessions.find((session: any) => session.id === pending.id).threads[0]
     internal.runtime.setNavigationBackgrounded(originatingThread.id, true)
-    let opened = 0
+    const backgroundClassifications: boolean[] = []
     const promptDeps = { ...internal.actionDeps,
         getFirstUserMessageText: async () => 'prior user message',
         runtime: {
             ensurePromptAvailable: async () => {}, hasSession: () => true,
             setNavigationBackgrounded: internal.runtime.setNavigationBackgrounded.bind(internal.runtime),
             sendPrompt: async (_threadId: string, _text: string, options: any) => {
-                if (internal.runtime.navigationBackgroundedThreadIds.has(originatingThread.id)) {
-                    backgroundBrowserOperation({ type: 'root', threadId: originatingThread.id, turnId: options.turnId }, { operation: 'open_app', application: 'Paint' })
-                }
-                opened++
+                backgroundClassifications.push(internal.runtime.navigationBackgroundedThreadIds.has(originatingThread.id))
                 return { turnId: options.turnId, providerThreadId: originatingThread.providerThreadId }
             }
         }
     }
     await sendAssistantPromptAction(promptDeps as any, 'Open the requested drawing application', { sessionId: pending.id })
-    assert.equal(opened, 1, 'selected direct-user turn reaches the desktop policy without a select-and-retry ritual')
+    assert.deepEqual(backgroundClassifications, [false], 'selected submission clears stale navigation classification')
     internal.appendEvent('session.selected', later, { sessionId: original.id }, original.id)
-    await assert.rejects(() => sendAssistantPromptAction(promptDeps as any, 'Background request must not steal focus', { sessionId: pending.id }),
-        { code: 'CONTROL_FOREGROUND_REQUIRED' })
-    assert.equal(opened, 1, 'truly unselected work still cannot change Windows focus')
+    await sendAssistantPromptAction(promptDeps as any, 'Continue the explicit user task while another chat is selected', { sessionId: pending.id })
+    assert.deepEqual(backgroundClassifications, [false, true], 'unselected submission stays navigation-backgrounded; user-turn handoff is tested through the real runtime/broker separately')
     console.log('Canonical chat identity, selected foreground ownership and completed final continuity: ok')
 } finally {
     await service.dispose()
