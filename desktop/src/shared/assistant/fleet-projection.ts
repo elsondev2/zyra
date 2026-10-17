@@ -1,5 +1,14 @@
 import type { FleetSnapshot } from './contracts'
 
+type FleetRoot = Pick<FleetSnapshot, 'rootSessionId' | 'rootThreadId'>
+
+/** Rewrite known local aliases without replacing canonical runtime identities. */
+export function remapAssistantFleetRoot(snapshot: FleetSnapshot, from: Partial<FleetRoot>, to: FleetRoot): FleetSnapshot {
+    return { ...snapshot,
+        rootSessionId: snapshot.rootSessionId === from.rootSessionId ? to.rootSessionId : snapshot.rootSessionId,
+        rootThreadId: snapshot.rootThreadId === from.rootThreadId ? to.rootThreadId : snapshot.rootThreadId }
+}
+
 function fleetRecordCount(snapshot: FleetSnapshot): number {
     return Object.keys(snapshot.agents).length + Object.keys(snapshot.workflows).length
 }

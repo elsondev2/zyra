@@ -1,5 +1,6 @@
 import { findSupersededRuntimeCompactionIds } from './compaction-reconciliation'
 import { findCanonicalChatRecords, isImportedChat } from '../../shared/assistant/chat-identity'
+import { remapAssistantFleetRoot } from '../../shared/assistant/fleet-projection'
 import { VisualizationLibrary, resolveVisualizationLibraryContext } from './visualization-library'
 import type { GetVisualizationInput, ListVisualizationsInput } from '../../shared/visualization-resources'
 import { usageProjectionFallback } from '../../shared/assistant/usage-ownership'
@@ -3935,6 +3936,13 @@ export class AssistantService {
                 // The removed projection is not allowed to rewrite the original
                 // chat's configuration or working directory after repair.
                 if (event.type === 'session.config.updated' || event.type === 'thread.started') return
+                if (event.type === 'fleet.snapshot.updated') {
+                    const removedSessionId = event.threadId.startsWith('assistant-thread:shared:')
+                        ? event.threadId.replace('assistant-thread:shared:', 'assistant-session:shared:') : undefined
+                    event = { ...event, payload: { ...event.payload, snapshot: remapAssistantFleetRoot(event.payload.snapshot,
+                        { rootThreadId: event.threadId, rootSessionId: removedSessionId },
+                        { rootThreadId: record.thread.id, rootSessionId: record.session.id }) } }
+                }
                 event = { ...event, threadId: record.thread.id }
             }
         }

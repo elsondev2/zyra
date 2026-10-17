@@ -1,7 +1,7 @@
 import { encodeApprovalScope } from './approval-persistence'
 import { reconcileAssistantPersistedRequestIdentity } from './persistence-request-identity'
 import { readFleetSnapshot, writeFleetSnapshot } from './fleet-persistence'
-import { shouldApplyAssistantFleetSnapshot } from '../../shared/assistant/fleet-projection'
+import { remapAssistantFleetRoot, shouldApplyAssistantFleetSnapshot } from '../../shared/assistant/fleet-projection'
 import type { Database as SqlDatabase, SqlValue } from 'sql.js/dist/sql-asm.js'
 import type {
     AssistantActivity,
@@ -87,9 +87,8 @@ export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEve
                 let fleet: FleetSnapshot | null = null
                 for (const candidate of [readFleetSnapshot(db, thread.thread.id), snapshot.fleetByThreadId[thread.thread.id], readFleetSnapshot(db, duplicateThreadId)]) {
                     if (!candidate) continue
-                    const incoming = { ...candidate,
-                        rootSessionId: candidate.rootSessionId === duplicateSessionId ? session.id : candidate.rootSessionId,
-                        rootThreadId: candidate.rootThreadId === duplicateThreadId ? thread.thread.id : candidate.rootThreadId }
+                    const incoming = remapAssistantFleetRoot(candidate,
+                        { rootSessionId: duplicateSessionId, rootThreadId: duplicateThreadId }, { rootSessionId: session.id, rootThreadId: thread.thread.id })
                     if (shouldApplyAssistantFleetSnapshot(fleet, incoming)) fleet = incoming
                 }
                 // Move even unloaded history before cascading away the redundant cache.

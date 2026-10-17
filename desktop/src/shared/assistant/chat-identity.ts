@@ -1,5 +1,5 @@
 import type { AssistantSession, AssistantSnapshot, AssistantThread } from './contracts'
-import { shouldApplyAssistantFleetSnapshot } from './fleet-projection'
+import { remapAssistantFleetRoot, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
 import { mergeAssistantRequests } from './request-identity'
 
 export type CanonicalChatIdentity = { canonicalChatId: string; aliases?: string[] }
@@ -83,9 +83,8 @@ export function mergeAssistantChatRecords(snapshot: AssistantSnapshot, sessionId
     const fleetByThreadId = { ...snapshot.fleetByThreadId }
     const importedFleet = fleetByThreadId[duplicateThreadId]
     if (importedFleet) {
-        const incoming = { ...importedFleet,
-            rootSessionId: importedFleet.rootSessionId === duplicateSessionId ? sessionId : importedFleet.rootSessionId,
-            rootThreadId: importedFleet.rootThreadId === duplicateThreadId ? threadId : importedFleet.rootThreadId }
+        const incoming = remapAssistantFleetRoot(importedFleet,
+            { rootSessionId: duplicateSessionId, rootThreadId: duplicateThreadId }, { rootSessionId: sessionId, rootThreadId: threadId })
         if (shouldApplyAssistantFleetSnapshot(fleetByThreadId[threadId], incoming)) fleetByThreadId[threadId] = incoming
     }
     delete fleetByThreadId[duplicateThreadId]

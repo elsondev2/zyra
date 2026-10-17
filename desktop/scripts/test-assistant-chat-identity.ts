@@ -6,6 +6,7 @@ import { mock } from 'bun:test'
 import { createAssistantSessionRecord } from '../src/main/assistant/service-records'
 import { createAssistantThread } from '../src/main/assistant/service-state'
 import { mergeAssistantChatRecords } from '../src/shared/assistant/chat-identity'
+import { remapAssistantFleetRoot } from '../src/shared/assistant/fleet-projection'
 import { getAssistantEventHistoryThreadIds, shouldRehydrateAssistantHistoryAfterCanonicalEvent } from '../src/renderer/src/lib/assistant/assistant-history-state'
 
 const root = mkdtempSync(join(tmpdir(), 'zyra-chat-identity-'))
@@ -79,6 +80,10 @@ try {
     const fleet = (rootThreadId: string, sequence: number, updatedAt: string) => ({ version: 1, fleetId: 'fixture-fleet', rootSessionId: original.id,
         rootThreadId, lastAppliedSequence: sequence, updatedAt, agents: {}, workflows: {}, relationships: [], artifacts: [], eventWindow: [], usage: {},
         truncated: { agents: false, workflows: false, relationships: false, artifacts: false, events: false } })
+    const canonicalFleet = fleet(canonicalChatId, 1, at)
+    assert.equal(remapAssistantFleetRoot(canonicalFleet,
+        { rootThreadId: duplicateThread.id, rootSessionId: duplicate.id }, { rootThreadId: thread.id, rootSessionId: original.id }).rootThreadId,
+    canonicalChatId, 'local alias repair must not replace canonical runtime root identity')
     conflicting.fleetByThreadId = { [thread.id]: fleet(thread.id, 3, later), [duplicateThread.id]: fleet(duplicateThread.id, 4, at) }
     conflicting.fleetByThreadId[duplicateThread.id].artifacts = [{ artifactId: 'retained-artifact', agentRunId: null, workflowRunId: null, kind: 'report', path: null, createdAt: at }]
     const merged = mergeAssistantChatRecords(conflicting, original.id, thread.id, duplicate.id, duplicateThread.id)
@@ -134,6 +139,22 @@ try {
     const mergedEvent = internal.state.events.findLast((event: any) => event.type === 'session.merged')
     assert.ok(shouldRehydrateAssistantHistoryAfterCanonicalEvent(mergedEvent, thread.id), 'repair invalidates even an already open survivor history cache')
     assert.ok(getAssistantEventHistoryThreadIds(beforeRepair, [mergedEvent]).has(duplicateThread.id), 'renderer can materialize retained duplicate evidence during the merge')
+    // The fleet payload can still name the removed local alias even after the
+    // event's outer thread ID is routed to the survivor.
+    internal.state.snapshot.fleetByThreadId[thread.id] = await internal.persistence.readFleet(thread.id)
+    internal.fleetProjection.apply(thread.id, internal.state.snapshot.fleetByThreadId[thread.id])
+    internal.handleRuntimeEvent({ eventId: 'late-stale-fleet', type: 'fleet.snapshot.updated', createdAt: later,
+        threadId: duplicateThread.id, providerThreadId: canonicalChatId,
+        payload: { eventType: 'agent.activity', event: {}, snapshot: { ...fleet(duplicateThread.id, 3, later), rootSessionId: duplicate.id } } })
+    assert.equal(internal.state.snapshot.fleetByThreadId[thread.id].lastAppliedSequence, 4, 'late lower-sequence alias fleet cannot erase newer survivor state')
+    internal.handleRuntimeEvent({ eventId: 'late-new-fleet', type: 'fleet.snapshot.updated', createdAt: later,
+        threadId: duplicateThread.id, providerThreadId: canonicalChatId,
+        payload: { eventType: 'agent.completed', event: {}, snapshot: { ...fleet(duplicateThread.id, 5, later), rootSessionId: duplicate.id } } })
+    assert.equal(internal.state.snapshot.fleetByThreadId[thread.id].lastAppliedSequence, 5, 'fresh late fleet evidence still reaches the survivor')
+    assert.equal(internal.state.snapshot.fleetByThreadId[thread.id].rootThreadId, thread.id)
+    assert.equal(internal.state.snapshot.fleetByThreadId[thread.id].rootSessionId, original.id)
+    await internal.persistence.flush()
+    assert.equal((await internal.persistence.readFleet(thread.id)).lastAppliedSequence, 5, 'normalized fresh fleet survives persistence')
     internal.handleRuntimeEvent({ eventId: 'late-alias-config', type: 'session.config.updated', createdAt: later,
         threadId: duplicateThread.id, providerThreadId: canonicalChatId,
         payload: { model: 'different-model', runtimeMode: 'full-access', thinking: 'high', webSearch: true, webFetch: true } })
