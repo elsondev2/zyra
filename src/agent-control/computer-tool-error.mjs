@@ -6,7 +6,9 @@ export function computerToolError(error) {
   const message = String(error?.message ?? error ?? 'Computer operation failed.').slice(0, 1024);
   const focusRecovery = code === 'CONTROL_TARGET_BLOCKED' && /obscured|foreground|focused window/i.test(message);
   const details = { code, retryable: Boolean(error?.retryable) || focusRecovery, ...(freshRevision ? { freshRevision } : {}) };
-  const recovery = code === 'CONTROL_STALE_OBSERVATION'
+  const recovery = code === 'CONTROL_FOREGROUND_REQUIRED'
+    ? 'No input was sent. Desktop focus policy blocked the operation. Do not retry app actions until foreground ownership changes.'
+    : code === 'CONTROL_STALE_OBSERVATION'
     ? 'Observe the same granted target and use its current revision before deciding the next action.'
     : code === 'CONTROL_TIMEOUT' || code === 'CONTROL_DRIVER_UNAVAILABLE'
       ? 'Input may have partially completed. Rediscover the requested app and inspect its current state; do not replay the previous action blindly.'

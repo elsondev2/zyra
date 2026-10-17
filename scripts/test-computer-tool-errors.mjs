@@ -29,6 +29,12 @@ const succeeded = await executeWithZyraRuntime({ request: async () => ({ observa
 assert.equal(succeeded.find(event => event.type === 'tool_execution_end').isError, false);
 console.log('Installed Pi computer-tool failure status, recovery metadata, unavailable bridge and success semantics passed.');
 
+const foreground = computerToolError(Object.assign(new Error('Desktop focus is reserved for the active chat.'), { code: 'CONTROL_FOREGROUND_REQUIRED' }));
+assert.equal(foreground.code, 'CONTROL_FOREGROUND_REQUIRED');
+assert.equal(foreground.retryable, false, 'a policy block must not cause blind app retries');
+assert.match(foreground.message, /No input was sent/);
+assert.doesNotMatch(foreground.message, /partially completed|Rediscover|missing driver/);
+
 const covered = computerToolError(Object.assign(new Error('Pointer coordinates are obscured or no longer belong to the selected window.'), { code: 'CONTROL_TARGET_BLOCKED' }));
 assert.equal(covered.retryable, true);
 assert.match(covered.message, /window.focus/);

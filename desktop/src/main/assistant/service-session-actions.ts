@@ -563,9 +563,10 @@ export async function sendAssistantPromptAction(
         ? new Promise<string | null>((resolve) => { titleProvider.resolve = resolve })
         : null
     const title = isDefaultSessionTitle(session.title) ? deriveSessionTitleFromPrompt(input) : session.title
-    if (getActiveThread(getSelectedSession(deps.getSnapshot()))?.id !== thread.id) {
-        deps.runtime.setNavigationBackgrounded?.(thread.id, true)
-    }
+    // Reconcile both directions. A selected user turn must not inherit a stale
+    // background flag from a prior navigation or repaired catalog alias.
+    deps.runtime.setNavigationBackgrounded?.(thread.id,
+        getActiveThread(getSelectedSession(deps.getSnapshot()))?.id !== thread.id)
     if (title !== session.title) {
         deps.appendEvent('session.updated', occurredAt, {
             sessionId: session.id,

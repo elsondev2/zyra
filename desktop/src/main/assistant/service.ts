@@ -3108,6 +3108,9 @@ export class AssistantService {
                     const fleet = this.state.snapshot.fleetByThreadId[existing.thread.id]
                     if (fleet) this.fleetProjection.apply(existing.thread.id, fleet)
                     this.fleetProjection.remove(duplicate.thread.id)
+                    if (getActiveThread(getSelectedSession(this.state.snapshot))?.id === existing.thread.id) {
+                        this.runtime.setNavigationBackgrounded(existing.thread.id, false)
+                    }
                     this.markCanonicalHistoryDirty(chat.canonicalChatId)
                 }
                 existing = findThreadRecord(this.state.snapshot, existing.thread.id) || undefined
@@ -3254,7 +3257,9 @@ export class AssistantService {
             session.settled = chat.settled
             session.settlementManual = chat.settlementManual
             session.updatedAt = updatedAt
-            this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
+            // Discovery is not a user navigation action. Selecting an imported
+            // alias here can silently background the visible chat's control turn.
+            this.appendEvent('session.created', createdAt, { session, select: false }, sessionId, threadId)
         }
         await this.ensureLegacyProjectScopes()
     }

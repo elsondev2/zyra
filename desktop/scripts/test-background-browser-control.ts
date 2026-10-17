@@ -51,9 +51,9 @@ try {
     const list = await broker.handleToolOperation(principal, { operation: 'list_targets' }, undefined, { backgrounded: true }) as any
     assert(list.targets.every((entry: any) => entry.kind === 'zyra-browser'))
     for (const operation of [{ operation: 'open_tab', reveal: true }, { operation: 'open_app', application: 'Notepad' }, { operation: 'list_targets', targetKind: 'chrome-tab' }, { operation: 'reveal_tab', targetId }]) {
-        await assert.rejects(() => broker.handleToolOperation(principal, operation, undefined, { backgrounded: true }), { code: 'CONTROL_DRIVER_UNAVAILABLE' })
+        await assert.rejects(() => broker.handleToolOperation(principal, operation, undefined, { backgrounded: true }), { code: 'CONTROL_FOREGROUND_REQUIRED' })
     }
-    await assert.rejects(() => broker.handleToolOperation({ ...principal, threadId: 'thread:another' }, { operation: 'observe', targetId, grantId: grant.grantId }, undefined, { backgrounded: true }), { code: 'CONTROL_DRIVER_UNAVAILABLE' })
+    await assert.rejects(() => broker.handleToolOperation({ ...principal, threadId: 'thread:another' }, { operation: 'observe', targetId, grantId: grant.grantId }, undefined, { backgrounded: true }), { code: 'CONTROL_FOREGROUND_REQUIRED' })
 
     let sent = 0
     const hidden: any[] = []

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { mock } from 'bun:test'
 import { createAssistantSessionRecord } from '../src/main/assistant/service-records'
 import { createAssistantThread } from '../src/main/assistant/service-state'
+import { backgroundBrowserOperation } from '../src/main/agent-control/background-browser-policy'
 import { mergeAssistantChatRecords } from '../src/shared/assistant/chat-identity'
 import { remapAssistantFleetRoot } from '../src/shared/assistant/fleet-projection'
 import { getAssistantEventHistoryThreadIds, shouldRehydrateAssistantHistoryAfterCanonicalEvent } from '../src/renderer/src/lib/assistant/assistant-history-state'
@@ -27,6 +28,7 @@ const { ZyraRuntime } = await import('../src/main/assistant/zyra-runtime')
 ZyraRuntime.prototype.listCanonicalChats = async () => chats
 ZyraRuntime.prototype.prewarm = async () => []
 const { AssistantService } = await import('../src/main/assistant/service')
+const { sendAssistantPromptAction } = await import('../src/main/assistant/service-session-actions')
 const service = new AssistantService()
 const internal = service as any
 try {
@@ -113,7 +115,9 @@ try {
     // Match startup's unloaded summaries: the duplicate's response exists only in SQLite.
     internal.state.snapshot = (await internal.persistence.load()).snapshot
     assert.equal(internal.state.snapshot.sessions.length, 2)
+    internal.runtime.setNavigationBackgrounded(thread.id, true)
     await internal.importCanonicalChats()
+    assert.equal(internal.runtime.navigationBackgroundedThreadIds.has(thread.id), false, 'selected alias repair restores the original runtime foreground classification')
     snapshot = internal.state.snapshot
     assert.equal(snapshot.sessions.length, 1, 'already persisted duplicate imports must be merged, not just hidden')
     assert.equal(snapshot.sessions[0].id, original.id, 'retain the original local identity')
@@ -175,13 +179,37 @@ try {
     chats.push({ ...chats[0], canonicalChatId: 'late-binding-chat', aliases: undefined })
     await internal.importCanonicalChats()
     assert.equal(internal.state.snapshot.sessions.length, 3, 'alias-less discovery demonstrates the pre-attachment duplicate')
+    assert.equal(internal.state.snapshot.selectedSessionId, pending.id, 'background catalog discovery cannot silently select the imported alias over the user chat')
     internal.runtime.emit('runtime', { eventId: 'late-bind', type: 'thread.started', createdAt: later,
         threadId: pendingThread.id, providerThreadId: 'late-binding-chat',
         payload: { providerThreadId: 'late-binding-chat', cwd: root, state: 'ready' } })
     await internal.queueCanonicalChatImport()
     assert.equal(internal.state.snapshot.sessions.length, 2, 'late attachment reconciles the alias-less imported copy')
     assert.ok(internal.state.snapshot.sessions.some((session: any) => session.id === pending.id && session.projectPath === null))
-    console.log('Canonical chat alias race, saved duplicate repair and completed final continuity: ok')
+    const originatingThread = internal.state.snapshot.sessions.find((session: any) => session.id === pending.id).threads[0]
+    internal.runtime.setNavigationBackgrounded(originatingThread.id, true)
+    let opened = 0
+    const promptDeps = { ...internal.actionDeps,
+        getFirstUserMessageText: async () => 'prior user message',
+        runtime: {
+            ensurePromptAvailable: async () => {}, hasSession: () => true,
+            setNavigationBackgrounded: internal.runtime.setNavigationBackgrounded.bind(internal.runtime),
+            sendPrompt: async (_threadId: string, _text: string, options: any) => {
+                if (internal.runtime.navigationBackgroundedThreadIds.has(originatingThread.id)) {
+                    backgroundBrowserOperation({ type: 'root', threadId: originatingThread.id, turnId: options.turnId }, { operation: 'open_app', application: 'Paint' })
+                }
+                opened++
+                return { turnId: options.turnId, providerThreadId: originatingThread.providerThreadId }
+            }
+        }
+    }
+    await sendAssistantPromptAction(promptDeps as any, 'Open the requested drawing application', { sessionId: pending.id })
+    assert.equal(opened, 1, 'selected direct-user turn reaches the desktop policy without a select-and-retry ritual')
+    internal.appendEvent('session.selected', later, { sessionId: original.id }, original.id)
+    await assert.rejects(() => sendAssistantPromptAction(promptDeps as any, 'Background request must not steal focus', { sessionId: pending.id }),
+        { code: 'CONTROL_FOREGROUND_REQUIRED' })
+    assert.equal(opened, 1, 'truly unselected work still cannot change Windows focus')
+    console.log('Canonical chat identity, selected foreground ownership and completed final continuity: ok')
 } finally {
     await service.dispose()
     rmSync(root, { recursive: true, force: true })

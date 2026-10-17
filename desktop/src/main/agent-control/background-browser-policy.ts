@@ -15,5 +15,5 @@ export function backgroundBrowserOperation(
     const allowed = new Set(['observe', 'act', 'act_sequence', 'perform', 'request_grant', 'release', 'delegate_lease', 'close_tab', 'refresh_tab', 'resume_plan', 'cancel_plan'])
     const threadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
     if (allowed.has(operation.operation) && target?.kind === 'zyra-browser' && target.ownerThreadId === threadId) return operation
-    throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'Background chats can control their own in-app Browser tabs. Select the chat to use controls that change the visible workspace or Windows focus.')
+    throw new AgentControlError('CONTROL_FOREGROUND_REQUIRED', 'Desktop focus is reserved for the active chat. This background turn can still control its own in-app Browser tabs.')
 }

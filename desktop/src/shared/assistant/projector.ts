@@ -273,7 +273,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             const session = normalizeAssistantSessionRoute(event.payload['session'] as AssistantSession)
             if (previousSessions.some((existing) => existing.id === session.id)) break
             next.sessions = [...previousSessions, session]
-            next.selectedSessionId = session.id
+            if (event.payload['select'] !== false || !next.selectedSessionId) next.selectedSessionId = session.id
             shouldSortSessions = true
             break
         }
