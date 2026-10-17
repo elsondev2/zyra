@@ -25,8 +25,8 @@ export class WindowsDesktopDriver implements AgentControlDriver {
 
     retainAcquisition(): () => void { return this.connection.retainAcquisition() }
 
-    async listWindows(): Promise<ControlWindowCandidate[]> {
-        const result = await this.request('list_windows', {}) as { windows?: ControlWindowCandidate[] }
+    async listWindows(signal?: AbortSignal): Promise<ControlWindowCandidate[]> {
+        const result = await this.request('list_windows', {}, signal) as { windows?: ControlWindowCandidate[] }
         return Array.isArray(result.windows) ? result.windows.slice(0, 256).map((entry) => ({
             windowToken: String(entry.windowToken || '').slice(0, 512),
             title: String(entry.title || '').slice(0, 512),
@@ -45,11 +45,11 @@ export class WindowsDesktopDriver implements AgentControlDriver {
         return { applicationName }
     }
 
-    async selectWindow(windowToken: string) {
+    async selectWindow(windowToken: string, signal?: AbortSignal) {
         const selected = await selectExactWindowsCandidate<SidecarTarget>({
             windowToken,
-            select: () => this.request('select_window', { windowToken }) as Promise<SidecarTarget>,
-            listCurrent: () => this.listWindows()
+            select: () => this.request('select_window', { windowToken }, signal) as Promise<SidecarTarget>,
+            listCurrent: () => this.listWindows(signal)
         })
         return {
             trustedIdentity: selected,
@@ -69,7 +69,7 @@ export class WindowsDesktopDriver implements AgentControlDriver {
         const trusted = target.trustedIdentity as SidecarTarget
         const result = await observeExactWindowsTarget({
             windowToken: trusted.windowToken,
-            listCurrent: () => this.listWindows(),
+            listCurrent: () => this.listWindows(options.signal),
             wait: milliseconds => delay(milliseconds, options.signal),
             observe: () => this.request('observe', {
             windowToken: trusted.windowToken,

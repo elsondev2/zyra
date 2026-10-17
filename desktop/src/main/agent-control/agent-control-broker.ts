@@ -1072,13 +1072,13 @@ export class AgentControlBroker extends EventEmitter {
         this.changed()
     }
 
-    async listWindows(queryValue?: string): Promise<ControlWindowCandidate[]> {
+    async listWindows(queryValue?: string, signal?: AbortSignal): Promise<ControlWindowCandidate[]> {
         const driver = this.options.drivers?.find((entry) => entry.kind === 'windows-window')
         if (!driver?.listWindows) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'Windows computer use is unavailable.')
         const query = String(queryValue || '').trim().toLocaleLowerCase('en-US')
         if (query.length > 128) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Windows application search is too long.')
         const selectedTargets = this.targets.list('windows-window')
-        return (await driver.listWindows()).filter((candidate) => (
+        return (await driver.listWindows(signal)).filter((candidate) => (
             !query
             || matchesWindowsApplication(candidate, query)
             || candidate.applicationName.toLocaleLowerCase('en-US').includes(query)
@@ -1104,7 +1104,7 @@ export class AgentControlBroker extends EventEmitter {
         if (!application || application.length > 128 || /[\u0000-\u001f\u007f]/u.test(application)) {
             throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'A registered application name between 1 and 128 characters is required.')
         }
-        const existingWindows = (await this.listWindows(application)).filter(candidate => matchesWindowsApplication(candidate, application))
+        const existingWindows = (await this.listWindows(application, signal)).filter(candidate => matchesWindowsApplication(candidate, application))
         if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Opening the Windows application was cancelled.')
         if (existingWindows.length > 0) {
             this.audit.append({
@@ -1124,7 +1124,7 @@ export class AgentControlBroker extends EventEmitter {
             if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Opening the Windows application was cancelled.')
             let current: ControlWindowCandidate[] = []
             for (const query of queries) {
-                current = await this.listWindows(query)
+                current = await this.listWindows(query, signal)
                 if (current.length > 0) break
             }
             const exactMatches = current.filter(candidate => queries.some(query => matchesWindowsApplication(candidate, query)))
@@ -1144,10 +1144,10 @@ export class AgentControlBroker extends EventEmitter {
         return { applicationName: opened.applicationName, windows, launched: true }
     }
 
-    async selectWindow(windowToken: string): Promise<ControlTarget> {
+    async selectWindow(windowToken: string, signal?: AbortSignal): Promise<ControlTarget> {
         const driver = this.options.drivers?.find((entry) => entry.kind === 'windows-window')
         if (!driver?.selectWindow) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'Windows computer use is unavailable.')
-        const selected = await driver.selectWindow(assertControlIdentifier(windowToken, 'windowToken'))
+        const selected = await driver.selectWindow(assertControlIdentifier(windowToken, 'windowToken'), signal)
         const existing = this.targets.list('windows-window').find((entry) => (
             entry.target.kind === 'windows-window'
             && entry.target.sidecarSessionId === selected.target.sidecarSessionId
@@ -1365,7 +1365,7 @@ export class AgentControlBroker extends EventEmitter {
                 if (!String(operation.query || '').trim()) {
                     throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Windows tool search requires the application requested by the user.')
                 }
-                return { windows: await this.listWindows(operation.query) }
+                return { windows: await this.listWindows(operation.query, signal) }
             case 'open_app':
                 if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot open Windows applications.')
                 return await this.openWindowsApp(principal, operation.application, signal)
@@ -1473,7 +1473,7 @@ export class AgentControlBroker extends EventEmitter {
                     if (principal.type !== 'root') {
                         throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot select Windows targets.')
                     }
-                    requestedTarget = await this.selectWindow(assertControlIdentifier(operation.windowToken, 'windowToken'))
+                    requestedTarget = await this.selectWindow(assertControlIdentifier(operation.windowToken, 'windowToken'), signal)
                 } else {
                     requestedTarget = this.targets.get(assertControlIdentifier(operation.targetId, 'targetId')).target
                 }

@@ -102,7 +102,7 @@
         "test:assistant-agent-presence": "node scripts/test-assistant-sidebar-continuity.mjs --agent-colors",
         "test:assistant-row-hover-actions": "node scripts/test-assistant-sidebar-continuity.mjs --row-hover-actions",
         "test:assistant-chat-identity": "bun scripts/test-assistant-chat-identity.ts",
-        "test:assistant-desktop-handoff": "bun scripts/test-agent-control-action-queue.ts && bun scripts/test-user-requested-desktop-handoff.ts && bun scripts/test-user-requested-windows-policy.ts",
+        "test:assistant-desktop-handoff": "bun scripts/test-agent-control-action-queue.ts && bun scripts/test-windows-discovery-cancellation.ts && bun scripts/test-user-requested-desktop-handoff.ts && bun scripts/test-user-requested-windows-policy.ts",
         "test:assistant-desktop-focus": "bun scripts/test-assistant-chat-identity.ts && bun scripts/test-background-browser-control.ts && bun run test:assistant-desktop-handoff && node ../scripts/test-computer-tool-errors.mjs",
         "test:assistant-settlement": "bun scripts/test-assistant-settlement-selection.ts && bun scripts/test-assistant-sidebar-settlement.ts && bun scripts/test-settlement-migration.ts && bun scripts/test-assistant-canonical-settlement.ts && node scripts/test-assistant-sidebar-continuity.mjs --settlement-navigation",
         "test:assistant-priority-pins": "node scripts/test-sidebar-hover-edge.mjs --priority-pins",

@@ -46,9 +46,9 @@ export interface AgentControlDriver {
     health?(): { state: 'ready' | 'degraded' | 'disconnected' | 'unavailable'; lastDisconnectReason?: string }
     isTargetCurrent?(target: RegisteredControlTarget): boolean
     refreshTargets?(signal?: AbortSignal): Promise<void>
-    listWindows?(): Promise<ControlWindowCandidate[]>
+    listWindows?(signal?: AbortSignal): Promise<ControlWindowCandidate[]>
     openApp?(application: string, signal?: AbortSignal): Promise<{ applicationName: string }>
-    selectWindow?(windowToken: string): Promise<{ trustedIdentity: unknown; target: Omit<Extract<ControlTarget, { kind: 'windows-window' }>, 'targetId'> }>
+    selectWindow?(windowToken: string, signal?: AbortSignal): Promise<{ trustedIdentity: unknown; target: Omit<Extract<ControlTarget, { kind: 'windows-window' }>, 'targetId'> }>
     /** Avoid queuing cosmetic polling behind native input/observation. */
     isTargetBusy?(target: RegisteredControlTarget): boolean
     getWindowBounds?(target: RegisteredControlTarget): Promise<{ x: number; y: number; width: number; height: number }>
