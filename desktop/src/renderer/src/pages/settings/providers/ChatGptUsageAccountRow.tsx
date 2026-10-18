@@ -11,12 +11,13 @@ import { ChatGptUsageDonut } from './ChatGptUsageDonut'
 import type { useChatGptAccountPool } from './useChatGptAccountPool'
 import { ChatGptAccountIdentity } from './ChatGptAccountIdentity'
 
-export function ChatGptUsageAccountRow({ account, windows, pool, mode, resetCredits, onReconnect, reconnecting = false, onModeChange }: {
+export function ChatGptUsageAccountRow({ account, windows, pool, mode, resetCredits, showResetCredits = true, onReconnect, reconnecting = false, onModeChange }: {
     account: ChatGptAccountProfile
     windows: { key: string; label: string; window: ChatGptAccountUsageWindow | null }[]
     pool: ReturnType<typeof useChatGptAccountPool>
     mode: 'used' | 'remaining'
     resetCredits?: ReactNode
+    showResetCredits?: boolean
     onReconnect?: (accountId: string) => void
     reconnecting?: boolean
     onModeChange?: (mode: 'used' | 'remaining') => void
@@ -28,7 +29,7 @@ export function ChatGptUsageAccountRow({ account, windows, pool, mode, resetCred
     return <div data-chatgpt-usage-account={account.id} className={`chatgpt-usage-account ${windows.length === 2 ? 'chatgpt-usage-account-dual' : ''} border-b border-[var(--settings-row-divider)] px-4 py-3 last:border-b-0`}>
         <div className="chatgpt-usage-identity min-w-0">
             <h4 className="min-w-0 text-[12px] font-medium text-[var(--settings-text)]"><ChatGptAccountIdentity account={account} disabled={pool.busy} onRename={alias => pool.update({ action: 'alias', accountId: account.id, alias })} /></h4>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5"><SettingsStatusPill label={accountPlan(account)} />{account.state !== 'ready' ? <SettingsStatusPill label={accountStates[account.state]} tone={account.state === 'limited' || account.state === 'needs-sign-in' ? 'warning' : 'muted'} /> : null}{!selected ? <SettingsStatusPill label="Excluded" /> : null}<span data-chatgpt-reset-owner={account.id} className="text-[10px] text-[var(--settings-text-muted)]">{account.primary && resetCredits ? resetCredits : <AccountResetCreditsSection compact accountId={account.id} accountLabel={label} remainingCount={account.usage?.availableResetCount ?? null} overview={null} loading={false} onOverviewChange={() => { void pool.refresh(true) }} />}</span></div>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5"><SettingsStatusPill label={accountPlan(account)} />{account.state !== 'ready' ? <SettingsStatusPill label={accountStates[account.state]} tone={account.state === 'limited' || account.state === 'needs-sign-in' ? 'warning' : 'muted'} /> : null}{!selected ? <SettingsStatusPill label="Excluded" /> : null}{showResetCredits ? <span data-chatgpt-reset-owner={account.id} className="text-[10px] text-[var(--settings-text-muted)]">{account.primary && resetCredits ? resetCredits : <AccountResetCreditsSection compact accountId={account.id} accountLabel={label} remainingCount={account.usage?.availableResetCount ?? null} overview={null} loading={false} onOverviewChange={() => { void pool.refresh(true) }} />}</span> : null}</div>
         </div>
         {windows.map(({ key, label: period, window }) => {
             const used = window ? currentUsedPercent(window) : null

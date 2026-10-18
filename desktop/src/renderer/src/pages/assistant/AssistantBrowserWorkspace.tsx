@@ -2001,7 +2001,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                             <span className="max-w-[58%] shrink-0 truncate text-[11px] font-medium text-[var(--color-text)]">{suggestion.label}</span>
                                             {suggestion.kind === 'history' ? (
                                                 <>
-                                                    <span aria-hidden="true" className="shrink-0 text-[9px] text-[color-mix(in_srgb,var(--color-text)_36%,transparent)]">â€”</span>
+                                                    <span aria-hidden="true" className="shrink-0 text-[9px] text-[color-mix(in_srgb,var(--color-text)_36%,transparent)]">&mdash;</span>
                                                     <span className="min-w-0 flex-1 truncate text-[9px] text-[color-mix(in_srgb,var(--color-text)_52%,transparent)]">{suggestion.detail}</span>
                                                 </>
                                             ) : null}
@@ -2058,7 +2058,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             'relative',
                             profileMenuOpen && 'bg-[var(--surface-hover)] text-emerald-300/80'
                         )}
-                        title={popupWindows.length > 0 ? `Browser menu Â· ${popupWindows.length} open window${popupWindows.length === 1 ? '' : 's'}` : 'Browser menu'}
+                        title={popupWindows.length > 0 ? `Browser menu · ${popupWindows.length} open window${popupWindows.length === 1 ? '' : 's'}` : 'Browser menu'}
                         aria-label="Browser menu"
                         aria-expanded={profileMenuOpen}
                     >
@@ -2150,7 +2150,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                             <PanelsTopLeft size={12} className="shrink-0 text-[var(--accent-primary)]" />
                                             <span className="min-w-0 flex-1">
                                                 <span className="block truncate text-[10px] font-medium text-[var(--color-text)]">{popupWindow.title}</span>
-                                                <span className="block truncate text-[8px] text-[color-mix(in_srgb,var(--color-text)_48%,transparent)]">{popupWindow.minimized ? 'Minimized Â· ' : ''}{popupWindow.origin}</span>
+                                                <span className="block truncate text-[8px] text-[color-mix(in_srgb,var(--color-text)_48%,transparent)]">{popupWindow.minimized ? 'Minimized · ' : ''}{popupWindow.origin}</span>
                                             </span>
                                         </button>
                                     ))}

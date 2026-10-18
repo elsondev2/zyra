@@ -21,12 +21,12 @@ const check=(v,m)=>{if(!v)throw Error(m)}
 const tick=()=>act(async()=>{await new Promise(r=>setTimeout(r,30))})
 const wait=async(fn,m)=>{for(let i=0;i<80&&!fn();i++)await tick();check(fn(),m)}
 const usage={usedPercent:44,resetAt:'2026-12-01T00:00:00Z',windowSeconds:604800}
-let dual=false,reads=0,cancelCalls=0,pending,holdPool=false,releasePool,holdOverview=false,releaseOverview,failPool=false,primaryCount=3,otherCount=7,omitUsage=false,holdUsage=false,releaseUsage
+let dual=false,multi=false,reads=0,cancelCalls=0,pending,holdPool=false,releasePool,holdOverview=false,releaseOverview,failPool=false,primaryCount=3,otherCount=7,omitUsage=false,holdUsage=false,releaseUsage
 const calls=[],resetReads=[],redemptions=[]
 let holdResets=false,releaseResets,resetFailure=false,badScope=false
 const overviewFor=id=>({rateLimitsByLimitId:{},resetCredits:id==='expired'?[{id:'expired-credit',title:'Expired fixture reset',available:true,status:'available',expiresAt:'2030-01-01T00:00:00Z'}]:[],availableResetCount:id==='expired'?7:0,fetchedAt:'2026-10-01T00:00:00Z'})
 const accounts=()=>[
- {id:'primary',alias:'Primary fixture',primary:true,enabled:true,plan:'plus',state:'ready',usage:omitUsage?null:{secondary:usage,availableResetCount:primaryCount}},
+ {id:'primary',alias:'Primary fixture',primary:true,enabled:true,plan:'plus',state:'ready',usage:omitUsage?null:{secondary:usage,availableResetCount:primaryCount,...(multi?{primary:{...usage,windowSeconds:3600}}:{})}},
  {id:'expired',alias:'Expired fixture',primary:false,enabled:true,plan:'plus',state:'needs-sign-in',usage:omitUsage?null:{secondary:usage,availableResetCount:otherCount,...(dual?{primary:{...usage,windowSeconds:18000}}:{})}}
 ]
 const status={chatgpt:{configured:true,verified:true},apiKey:{configured:false,verified:false},defaultMethod:'chatgpt'}
@@ -185,6 +185,14 @@ try{
  check(document.querySelector('[role=meter]').getAttribute('aria-valuenow')==='0','fully used quota displays zero remaining')
  usage.usedPercent=null;await render('usage-unknown')
  check(!document.querySelector('[data-chatgpt-usage-donut]')&&[...document.querySelectorAll('[data-chatgpt-usage-window]')].every(window=>window.textContent.includes('Unavailable')),'missing usage stays unavailable instead of becoming a zero or full donut')
+ multi=true;dual=true;await render('three-groups')
+ check(document.querySelectorAll('[data-chatgpt-usage-group]').length===3,'fixture exercises three distinct quota periods')
+ for(const id of ['primary','expired'])check(document.querySelectorAll('[data-chatgpt-reset-owner="'+id+'"]').length===1,'each account owns exactly one reset count and dialog across all period groups')
+ const readsBeforeMulti=resetReads.length,redemptionsBeforeMulti=redemptions.length
+ await act(async()=>document.querySelector('[data-chatgpt-reset-owner="expired"] button').click())
+ await wait(()=>document.querySelector('[role=dialog]')?.textContent.includes('Expired fixture reset'),'the single multi-group reset control opens its exact account')
+ check(resetReads.length===readsBeforeMulti+1&&resetReads.at(-1)==='expired'&&redemptions.length===redemptionsBeforeMulti,'multi-group modal reads once without consuming a reset')
+ await act(async()=>document.querySelector('[role=dialog] [aria-label="Close dialog"]').click())
  await act(async()=>root.unmount())
  console.log('LIMITS_RECONNECT_PASS')
 }catch(e){console.error('LIMITS_RECONNECT_FAIL',e.stack||String(e))}

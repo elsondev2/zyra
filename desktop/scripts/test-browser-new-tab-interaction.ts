@@ -37,6 +37,7 @@ assert.match(browserWorkspaceSource, /const showNewTabInActiveTab[\s\S]*showNewT
 assert.match(browserWorkspaceSource, /onGuestFocus=\{\(tabId\) => \{[\s\S]*?activeTabId !== tabId[\s\S]*?querySelector<HTMLInputElement>\('input'\)\?\.blur\(\)[\s\S]*?setAddressFocused\(false\)/, 'a click in the native page clears address focus only for the selected tab')
 assert.match(browserWorkspaceSource, /<RotateCw size=\{13\} \/>[\s\S]*aria-label="Show New Tab in the current Browser tab"[\s\S]*<House size=\{13\} \/>/, 'the toolbar uses the single-arrow reload icon followed immediately by Home')
 
+assert.doesNotMatch(browserWorkspaceSource, /â€|Â·/, 'history separators and popup labels cannot contain mojibake')
 assert.doesNotMatch(browserWorkspaceSource, /\bsetHistorySearch\b/, 'history clearing cannot call a removed state setter')
 assert.equal((browserWorkspaceSource.match(/clearOmniboxSuggestions\(\)/g) || []).length, 3, 'both history-clear surfaces and local-profile clearing invalidate retained suggestions')
 console.log('Browser New Tab interaction contract: ok')

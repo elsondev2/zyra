@@ -562,7 +562,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         if (!showTraitsDropdown) return
         const container = submenuContainerRef.current
         if (!container) return
-        const boundary = traitsDropdownRef.current?.closest('.assistant-conversation-pane')
+        const boundary = traitsDropdownRef.current?.closest<HTMLElement>('.assistant-conversation-pane')
 
         const updateSubmenuPlacement = () => {
             const containerRect = getOverlayOwnerRect(container)
