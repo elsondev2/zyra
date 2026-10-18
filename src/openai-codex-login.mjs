@@ -217,6 +217,12 @@ function listenForOAuthCallback(expectedState, options) {
     finish(resolveResult, { code });
   });
 
+  const sockets = new Set();
+  server.on('connection', socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+
   return (async () => {
     let listeningPort;
     try {
@@ -239,6 +245,10 @@ function listenForOAuthCallback(expectedState, options) {
         finish(rejectResult, authError("OpenAI sign-in was cancelled.", "ZYRA_OAUTH_CANCELLED"));
         if (!server.listening) return resolve();
         server.close(() => resolve());
+        // Browsers can preconnect without sending a request. Graceful HTTP close
+        // alone waits on those sockets indefinitely. Flush any return-page bytes
+        // before closing every connection owned by this one-shot listener.
+        for (const socket of sockets) socket.destroySoon();
       }),
     };
   })();

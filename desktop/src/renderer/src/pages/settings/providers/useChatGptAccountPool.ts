@@ -3,14 +3,18 @@ import type { ChatGptAccountsUpdate, ChatGptPoolSnapshot } from '@shared/onboard
 import { publishChatGptAccounts, subscribeChatGptAccounts } from '@/lib/chatgpt-account-events'
 
 export function useChatGptAccountPool({ usageActive = true }: { usageActive?: boolean } = {}) {
+    const supported = typeof window !== 'undefined' && Boolean(window.devscope?.onboarding?.getChatGptAccounts)
     const [snapshot, setSnapshot] = useState<ChatGptPoolSnapshot | null>(null)
     const [busy, setBusy] = useState(false)
+    const [initialLoading, setInitialLoading] = useState(supported)
+    const [refreshing, setRefreshing] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const generation = useRef(0)
     const mutation = useRef(false)
     const refresh = useCallback(async (refreshUsage = false) => {
         if (mutation.current || !window.devscope?.onboarding?.getChatGptAccounts) return
         const request = ++generation.current
+        setRefreshing(true)
         try {
             const result = await window.devscope.onboarding.getChatGptAccounts({ refreshUsage })
             if (request !== generation.current) return
@@ -18,11 +22,13 @@ export function useChatGptAccountPool({ usageActive = true }: { usageActive?: bo
             setSnapshot(result.pool)
             setError(null)
         } catch (failure) { if (request === generation.current) setError(failure instanceof Error ? failure.message : 'Could not check accounts.') }
+        finally { if (request === generation.current) setRefreshing(false) }
     }, [])
     const update = useCallback(async (input: ChatGptAccountsUpdate) => {
         if (mutation.current) return false
         mutation.current = true
         ++generation.current
+        setRefreshing(false)
         setBusy(true)
         try {
             const result = await window.devscope.onboarding.updateChatGptAccounts(input)
@@ -34,11 +40,12 @@ export function useChatGptAccountPool({ usageActive = true }: { usageActive?: bo
         } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save account preferences.'); return false }
         finally { mutation.current = false; setBusy(false) }
     }, [])
-    useEffect(() => subscribeChatGptAccounts(pool => { ++generation.current; setSnapshot(pool) }), [])
+    useEffect(() => subscribeChatGptAccounts(pool => { ++generation.current; setSnapshot(pool); setRefreshing(false) }), [])
     useEffect(() => {
-        void refresh().then(() => { if (usageActive) return refresh(true) })
+        let active = true
+        void refresh().then(() => { if (active && usageActive) return refresh(true) }).finally(() => { if (active) setInitialLoading(false) })
         const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(usageActive) }, 60_000)
-        return () => { ++generation.current; window.clearInterval(timer) }
+        return () => { active = false; ++generation.current; window.clearInterval(timer) }
     }, [refresh, usageActive])
-    return { snapshot, busy, error, refresh, update }
+    return { snapshot, busy, supported, initialLoading, refreshing, error, refresh, update }
 }

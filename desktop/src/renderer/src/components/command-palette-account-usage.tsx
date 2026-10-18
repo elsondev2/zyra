@@ -1,7 +1,7 @@
 import { Activity } from 'lucide-react'
 import type { ChatGptPoolSnapshot } from '@shared/onboarding/contracts'
 import { accountLabel, accountPlan, accountStates } from '@/pages/settings/providers/chatgpt-account-presentation'
-import { currentUsedPercent, groupChatGptUsage, isUsageAccountAllowed } from '@/pages/settings/providers/chatgpt-usage-groups'
+import { currentUsedPercent, groupChatGptUsage, summarizeUsageGroup } from '@/pages/settings/providers/chatgpt-usage-groups'
 import type { CommandPaletteResult } from './command-palette-types'
 import { ChatGptAccountIdentity } from '@/pages/settings/providers/ChatGptAccountIdentity'
 import { renameChatGptAccount } from '@/lib/chatgpt-account-events'
@@ -35,9 +35,9 @@ export function buildAccountUsageResults(pool: ChatGptPoolSnapshot, openLimits: 
     if (!rows.length) return []
     return [{ id: 'usage-average', title: 'Average usage', detail: 'Enabled accounts', icon: <Activity size={14} />, group: 'ChatGPT accounts', action: openLimits,
         trailing: <span className="flex gap-3 text-right tabular-nums sm:gap-5">{groups.map(group => {
-            const entries = group.entries.filter(entry => isUsageAccountAllowed(entry.account, pool.policy) && entry.window && Number.isFinite(entry.window.usedPercent))
-            const remaining = entries.length ? 100 - entries.reduce((sum, entry) => sum + currentUsedPercent(entry.window!), 0) / entries.length : null
-            return <span key={group.key} className="min-w-[64px]" title={`Average across ${entries.length} eligible accounts`}><span className="block text-[10px] leading-4 text-sparkle-text-muted/60">{group.label}</span><span className="flex items-center justify-end gap-1.5 text-xs text-sparkle-text-secondary"><UsagePie remaining={remaining} />{remaining === null ? 'Unavailable' : `${Math.round(remaining)}% left`}</span></span>
+            const { averageUsed, count } = summarizeUsageGroup(group, pool.policy)
+            const remaining = averageUsed === null ? null : 100 - averageUsed
+            return <span key={group.key} className="min-w-[64px]" title={`Average across ${count} eligible accounts`}><span className="block text-[10px] leading-4 text-sparkle-text-muted/60">{group.label}</span><span className="flex items-center justify-end gap-1.5 text-xs text-sparkle-text-secondary"><UsagePie remaining={remaining} />{remaining === null ? 'Unavailable' : `${Math.round(remaining)}% left`}</span></span>
         })}</span>
     }, ...rows]
 }

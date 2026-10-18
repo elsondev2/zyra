@@ -75,7 +75,7 @@ export function createAssistantAdapter() {
             agentAction: (input: FleetOperationInput) => ipcRenderer.invoke(ASSISTANT_IPC.agentAction, input),
             workflowAction: (input: FleetOperationInput) => ipcRenderer.invoke(ASSISTANT_IPC.workflowAction, input),
             getStatus: () => ipcRenderer.invoke(ASSISTANT_IPC.getStatus),
-            getAccountOverview: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.getAccountOverview, forceRefresh),
+            getAccountOverview: (forceRefresh = false, accountId?: string) => ipcRenderer.invoke(ASSISTANT_IPC.getAccountOverview, forceRefresh, accountId),
             redeemAccountReset: (input: AssistantRedeemAccountResetInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.redeemAccountReset, input),
             getUsageSummary: (input?: import('../../shared/assistant/usage-summary').UsageSummaryInput) => ipcRenderer.invoke(ASSISTANT_IPC.getUsageSummary, input),

@@ -128,7 +128,7 @@ export type ChatGptAccountProfile = {
     state: 'ready' | 'limited' | 'paused' | 'needs-sign-in'; resetAt: string | null
     lastUsedAt: string | null; requestCount: number
     tokenExpiresAt: string | null
-    usage: { primary: ChatGptAccountUsageWindow | null; secondary: ChatGptAccountUsageWindow | null; updatedAt: string } | null
+    usage: { primary: ChatGptAccountUsageWindow | null; secondary: ChatGptAccountUsageWindow | null; availableResetCount?: number | null; updatedAt: string } | null
 }
 export type ChatGptPoolSnapshot = { accounts: ChatGptAccountProfile[]; policy: ChatGptRoutingPolicy; checkedAt: string }
 export type ChatGptAccountsUpdate =

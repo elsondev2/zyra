@@ -232,6 +232,15 @@ const newDelegation = projectCanonicalTimeline([{ type: 'custom_message', id: 't
     details: { messageId: 'task', senderThreadId: 'parent', recipientThreadId: 'child', senderLabel: 'Xara', text: 'Inspect the sidebar.', origin: 'delegation' } }], 'child', 'child', canonicalCreatedAt, 0)
 assert.equal(newDelegation.messages.length, 0)
 assert.equal(newDelegation.activities[0]?.payload?.senderLabel, 'Xara')
+for (const sender of [
+    { senderThreadId: 'agent-run:worker', senderConversationKind: 'subagent' },
+    { senderThreadId: 'agent-run:worker' },
+]) {
+    const internal = projectCanonicalTimeline([{ type: 'custom_message', id: 'internal', customType: 'zyra_thread_message', timestamp: canonicalCreatedAt,
+        details: { ...sender, messageId: 'internal', recipientThreadId: 'root', senderLabel: 'Helper', text: 'Internal status.' } }], 'root', 'root', canonicalCreatedAt, 0)
+    assert.equal(internal.messages.length, 0, 'Canonical supporting context cannot become user chat')
+    assert.equal(internal.activities.length, 0, 'Reopening history cannot restore supporting updates as peer bubbles')
+}
 const reconciledCanonicalActivity = reconcileCanonicalFileChangeActivity({
     id: 'zyra-tool-review-edit-call',
     kind: 'file-change',

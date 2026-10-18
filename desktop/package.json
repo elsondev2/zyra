@@ -96,7 +96,7 @@
         "test:browser-surface-recovery": "bun scripts/test-browser-surface-delivery.ts && bun scripts/test-browser-surface-routing.ts && bun scripts/test-browser-surface-lifecycle.ts && node scripts/test-issue-recovery-renderer.mjs",
         "test:windows-sidecar": "bun scripts/test-windows-sidecar-lifecycle.ts && bun scripts/test-windows-acquisition-lifecycle.ts && bun test ./scripts/test-windows-target-cancellation.ts",
         "test:assistant-fleet": "bun scripts/test-assistant-fleet-contract.tsx",
-        "test:assistant-thread-collaboration": "bun scripts/test-thread-message-runtime.ts && bun scripts/test-thread-message-presentation.tsx && bun scripts/test-assistant-peer-work-endings.ts && node scripts/test-assistant-sidebar-continuity.mjs --thread-messages",
+        "test:assistant-thread-collaboration": "bun scripts/test-subagent-message-presentation.ts && bun scripts/test-thread-message-runtime.ts && bun scripts/test-thread-message-presentation.tsx && bun scripts/test-assistant-peer-work-endings.ts && node scripts/test-assistant-sidebar-continuity.mjs --thread-messages",
         "test:assistant-inspector-workspaces": "bun scripts/test-assistant-inspector-workspace-state.ts",
         "test:assistant-sidebar-targets": "bun scripts/test-assistant-sidebar-targets.ts && bun scripts/test-assistant-resource-deduplication.ts && node scripts/test-assistant-sidebar-rendering.mjs",
         "test:assistant-agent-presence": "node scripts/test-assistant-sidebar-continuity.mjs --agent-colors",
@@ -125,7 +125,7 @@
         "test:browser-new-tab-layout": "node scripts/test-browser-new-tab-layout-renderer.mjs",
         "test:browser-page-capture": "bun scripts/test-browser-page-capture.ts",
         "test:browser-web-store-install": "bun scripts/test-browser-web-store-install.ts && node scripts/test-browser-web-store-page.mjs",
-        "test:assistant-inspector-browser": "bun run test:browser-page-capture && bun scripts/test-browser-workspace-persistence.ts && node scripts/test-browser-new-tab-theme.mjs && node scripts/test-browser-slot-geometry.mjs && node scripts/test-native-overlay.mjs && node scripts/test-native-overlay-renderer.mjs && node scripts/test-native-overlay-callers.mjs && node scripts/test-browser-webview-presentation.mjs && node scripts/test-browser-recording-overlay-document.mjs && node scripts/test-browser-recording-overlay.mjs && bun scripts/test-browser-live-transfer-contract.ts && node scripts/test-assistant-native-view-reparent.mjs && bun scripts/test-assistant-inspector-tab-browser-new-tab.tsx && bun scripts/test-browser-window-open-and-shortcuts.ts && bun scripts/test-browser-local-file-access.ts && bun scripts/test-running-local-servers.ts && bun scripts/test-browser-history-store.ts && bun scripts/test-browser-new-tab-service.ts && bun scripts/test-browser-adblock-policy.ts && node scripts/test-browser-threat-protection.mjs && node scripts/test-browser-background-catalog.mjs && node scripts/test-browser-background-panel.mjs && bun scripts/test-protected-media-contract.ts && bun scripts/test-external-browser-history.ts && node --experimental-strip-types scripts/test-external-browser-history-reader.mjs",
+        "test:assistant-inspector-browser": "bun run test:browser-page-capture && bun scripts/test-browser-workspace-persistence.ts && node scripts/test-browser-new-tab-theme.mjs && node scripts/test-browser-slot-geometry.mjs && node scripts/test-native-overlay.mjs && node scripts/test-native-overlay-renderer.mjs && node scripts/test-native-overlay-callers.mjs && node scripts/test-browser-webview-presentation.mjs && node scripts/test-browser-recording-overlay-document.mjs && node scripts/test-browser-recording-overlay.mjs && bun scripts/test-browser-live-transfer-contract.ts && node scripts/test-assistant-native-view-reparent.mjs && bun scripts/test-assistant-inspector-tab-browser-new-tab.tsx && bun scripts/test-browser-window-open-and-shortcuts.ts && bun scripts/test-browser-local-file-access.ts && bun scripts/test-running-local-servers.ts && bun scripts/test-browser-history-store.ts && bun scripts/test-browser-new-tab-service.ts && bun scripts/test-browser-adblock-policy.ts && node scripts/test-browser-threat-protection.mjs && node scripts/test-browser-background-catalog.mjs && node scripts/test-browser-background-panel.mjs && bun scripts/test-protected-media-contract.ts && bun scripts/test-external-browser-history.ts && node --experimental-strip-types scripts/test-external-browser-history-reader.mjs && bun scripts/test-browser-composer-popover.tsx",
         "benchmark:browser-threat-protection": "node --expose-gc scripts/benchmark-browser-threat-protection.mjs && bun scripts/benchmark-browser-threat-startup.ts",
         "test:agent-control-drag-sequence": "bun scripts/test-agent-control-drag-sequence.ts && bun scripts/test-windows-grant-reuse.ts",
         "test:agent-control-full-access": "bun scripts/test-agent-control-full-access.ts",
@@ -273,7 +273,12 @@
         "test:native-overlay-renderer": "node scripts/test-native-overlay-renderer.mjs",
         "test:native-overlay-callers": "node scripts/test-native-overlay-callers.mjs",
         "test:assistant-sidebar-stability": "bun scripts/test-assistant-startup-connection.ts && bun scripts/test-assistant-paged-history.ts && node scripts/test-assistant-sidebar-continuity.mjs --settled-window",
-        "test:tool-disclosure": "node ../scripts/test-zyra-chat-index.mjs && bun scripts/test-assistant-user-input-history.ts && bun scripts/test-assistant-action-batch-intent.ts && bun scripts/test-action-batch.tsx && node scripts/test-action-batch-scroll.mjs && node scripts/test-assistant-sidebar-continuity.mjs --tool-disclosure"
+        "test:tool-disclosure": "node ../scripts/test-zyra-chat-index.mjs && bun scripts/test-assistant-user-input-history.ts && bun scripts/test-assistant-action-batch-intent.ts && bun scripts/test-action-batch.tsx && node scripts/test-action-batch-scroll.mjs && node scripts/test-assistant-sidebar-continuity.mjs --tool-disclosure",
+        "test:browser-suggestions": "node scripts/test-browser-suggestions-renderer.mjs && node scripts/test-browser-new-tab-layout-renderer.mjs && bun scripts/test-browser-new-tab-interaction.ts && bun scripts/test-browser-history-store.ts",
+        "test:chatgpt-limits-reconnect": "node ../scripts/test-chatgpt-account-pool.mjs && node ../scripts/test-openai-codex-login.mjs && bun scripts/test-chatgpt-signin-lifecycle.ts && bun scripts/test-account-worker-transport.ts && node scripts/test-chatgpt-limits-reconnect.mjs",
+        "test:auth-callback-page": "node ../scripts/test-auth-callback-page.mjs && node scripts/test-auth-callback-renderer.mjs",
+        "test:browser-composer-popover": "bun scripts/test-browser-composer-popover.tsx",
+        "test:assistant-subagent-messages": "bun scripts/test-subagent-message-presentation.ts && bun scripts/test-thread-message-runtime.ts && bun scripts/test-thread-message-presentation.tsx && bun scripts/test-assistant-canonical-review.ts && node scripts/test-assistant-sidebar-continuity.mjs --thread-messages"
     },
     "dependencies": {
         "@chenglou/pretext": "^0.0.5",
@@ -347,7 +352,7 @@
     "build": {
         "appId": "app.zyra.desktop",
         "productName": "Zyra",
-        "copyright": "Copyright © 2026 justelson",
+        "copyright": "Copyright \u00c2\u00a9 2026 justelson",
         "beforePack": "scripts/release/windows-file-icons-before-pack.cjs",
         "afterPack": "scripts/release/widevine-vmp-after-pack.cjs",
         "afterSign": "scripts/release/widevine-vmp-after-sign.cjs",

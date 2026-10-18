@@ -371,7 +371,9 @@ async function checkThreadMessages() {
     const receipt = projectThreadMessage(details, now)!
     ;(assistantStore as any).getState = () => ({ snapshot: { sessions: [session('parent'), session('child')], fleetByThreadId: { parent: { agents: { child: { providerSessionId: 'child' } } } } } })
     ;(assistantStore as any).refresh = async () => { throw new Error('Loaded thread links should not need a refresh') }
-    flushSync(() => root.render(<div style={{ width: 700 }}><AssistantTimelineThreadMessage activity={receipt} /><AssistantTimelineThreadMessage activity={{ ...receipt, id: 'b' }} /></div>))
+    const cachedSupporting = { ...receipt, id: 'legacy-supporting', detail: 'Private supporting progress must stay internal.', payload: { ...details, origin: undefined, senderThreadId: 'agent-run:worker-uuid' } }
+    flushSync(() => root.render(<div style={{ width: 700 }}><AssistantTimelineThreadMessage activity={receipt} /><AssistantTimelineThreadMessage activity={{ ...receipt, id: 'b' }} /><AssistantTimelineThreadMessage activity={cachedSupporting} /></div>))
+    check(!document.body.textContent?.includes(cachedSupporting.detail), 'An old cached supporting-agent update does not render as a peer bubble')
     check(document.body.textContent?.includes('Message from Xara in another thread'), 'Delegation has durable sender attribution above its user-style bubble')
     check(document.querySelectorAll('[data-assistant-thread-message-bubble]').length === 2, 'Each incoming message is its own bubble')
     Array.from(document.querySelectorAll('button')).find(button => button.textContent?.includes('Message from Xara'))!.click(); await sleep()

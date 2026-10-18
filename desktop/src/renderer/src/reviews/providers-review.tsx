@@ -14,7 +14,7 @@ function Review() {
             <span className="text-[var(--settings-text-muted)]">UI review · Test accounts</span>
             <div className="flex items-center gap-4"><Link to="/settings/providers">Connections</Link><Link to="/settings/providers/limits">Limits</Link><Link to="/review/thread">Thread details</Link>
                 <select aria-label="Preview scenario" className="bg-[var(--settings-control)] px-2 py-1 text-xs" value={new URLSearchParams(location.search).get('scenario') || 'weekly'} onChange={e => { const url = new URL(location.href); url.searchParams.set('scenario', e.target.value); location.href = url.href }}>
-                    <option value="weekly">Weekly only</option><option value="dual">Two usage windows</option><option value="empty">No accounts</option><option value="signin">Sign-in needed</option><option value="error">Usage error</option><option value="running">Running process</option>
+                    <option value="loading">Slow loading</option><option value="weekly">Weekly only</option><option value="dual">Two usage windows</option><option value="empty">No accounts</option><option value="signin">Sign-in needed</option><option value="error">Usage error</option><option value="running">Running process</option>
                 </select>
             </div>
         </div>

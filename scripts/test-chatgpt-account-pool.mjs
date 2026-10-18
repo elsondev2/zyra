@@ -6,9 +6,15 @@ import { ZyraCredentialStore, createZyraCredentialAuthStorage } from '../src/zyr
 import { ChatGptAccountPool, chatGptIdentity, updateChatGptAccount, saveChatGptAccount } from '../src/chatgpt-account-pool.mjs';
 import { DEFAULT_CHATGPT_ROUTING, saveChatGptRouting } from '../src/chatgpt-routing-policy.mjs';
 import { getChatGptAccounts, updateChatGptAccounts } from '../src/chatgpt-pool-service.mjs';
+import { buildChatGptAccountStatus, resolveChatGptAccountAuth, fetchCodexResetCredits, redeemCodexResetCredit, normalizeCodexResetCredits, normalizeCodexUsageStats } from '../src/chatgpt-account.mjs';
 import { createChatGptRequestCredentials, installChatGptAccountRouting, readChatGptResponseLimits } from '../src/chatgpt-account-runtime.mjs';
 import { AssistantMessageEventStream } from '../src/runtime/providers/src/utils/event-stream.js';
 
+assert.equal(normalizeCodexResetCredits({}).availableCount, undefined, 'missing reset data is not zero');
+assert.equal(normalizeCodexResetCredits({ available_count: null }).availableCount, undefined, 'null is not a reported zero');
+assert.equal(normalizeCodexResetCredits({ available_count: 0 }).availableCount, 0);
+assert.equal(normalizeCodexResetCredits({ credits: [] }).availableCount, 0, 'a known empty list is a real zero');
+assert.equal(normalizeCodexUsageStats({ rate_limit_reset_credits: { available_count: null } }).availableResetCount, undefined);
 const root = await mkdtemp(join(tmpdir(), 'zyra-account-pool-'));
 let now = Date.now();
 const jwt = (id, generation = 1) => `synthetic.${Buffer.from(JSON.stringify({ sub: id, generation, 'https://api.openai.com/auth': { chatgpt_account_id: id, chatgpt_plan_type: 'plus' }, 'https://api.openai.com/profile': { email: `${id}@example.test` } })).toString('base64url')}.fixture`;
@@ -33,6 +39,65 @@ try {
   await updateChatGptAccount(store, idA, { primary: true });
   assert.equal(store.read('openai-codex').access, beforePromotion.access, 'Promoting back retains original credentials.');
 
+  // Modal reads and approved consumption select pool credentials without promotion.
+  const primaryBeforeModal = structuredClone(store.read('openai-codex'));
+  const modalRequests = [];
+  const modalOptions = { ...options, fetchImpl: async (url, init) => {
+    modalRequests.push({ url: String(url), token: init.headers.Authorization, accountId: init.headers['ChatGPT-Account-Id'], method: init.method || 'GET' });
+    if (String(url).endsWith('/consume')) {
+      assert.equal(JSON.parse(init.body).credit_id, 'fixture-reset-b');
+      return new Response(JSON.stringify({ windows_reset: 1 }));
+    }
+    if (String(url).endsWith('/rate-limit-reset-credits')) return new Response(JSON.stringify({ credits: [{ id: 'fixture-reset-b', status: 'available' }] }));
+    return new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: init.headers['ChatGPT-Account-Id'] === 'b' ? 75 : 25 } } }));
+  } };
+  const selectedOptions = { ...modalOptions, accountId: idB };
+  const selectedStatus = await buildChatGptAccountStatus('openai-codex', selectedOptions);
+  assert.equal(selectedStatus.accountId, 'b');
+  assert.equal(selectedStatus.poolAccountId, idB, 'targeted status attests the selected pool identity');
+  assert.equal(selectedStatus.email, 'b@example.test');
+  assert.equal(selectedStatus.usage.primary.usedPercent, 75, 'selected status fetches selected usage, not primary usage');
+  assert.equal((await resolveChatGptAccountAuth(selectedOptions)).accessToken, jwt('b'));
+  const selectedResetInventory = await fetchCodexResetCredits(selectedOptions);
+  assert.equal(selectedResetInventory.credits[0].id, 'fixture-reset-b');
+  assert.equal(selectedResetInventory.poolAccountId, idB, 'reset inventory independently attests the selected pool identity');
+  assert.equal((await redeemCodexResetCredit('fixture-reset-b', selectedOptions)).windowsReset, 1);
+  assert.deepEqual(modalRequests.map(request => ({ ...request, url: request.url.replace('https://chatgpt.com/backend-api', '') })), [
+    { url: '/wham/usage', token: `Bearer ${jwt('b')}`, accountId: 'b', method: 'GET' },
+    { url: '/wham/rate-limit-reset-credits', token: `Bearer ${jwt('b')}`, accountId: 'b', method: 'GET' },
+    { url: '/wham/rate-limit-reset-credits/consume', token: `Bearer ${jwt('b')}`, accountId: 'b', method: 'POST' },
+  ]);
+  assert.deepEqual(store.read('openai-codex'), primaryBeforeModal, 'selected reads/redemption never mutate or promote primary');
+  const primaryStatus = await buildChatGptAccountStatus('openai-codex', modalOptions);
+  assert.equal(primaryStatus.accountId, 'a');
+  assert.equal(primaryStatus.usage.primary.usedPercent, 25);
+  assert.equal(modalRequests.at(-1).token, `Bearer ${jwt('a')}`);
+  assert.equal(modalRequests.at(-1).accountId, 'a');
+  modalRequests.length = 0;
+  for (const accountId of ['unknown-account', '', '  ', ` ${idB}`, 'bad\naccount', null, 42]) {
+    const invalidOptions = { ...modalOptions, accountId, accountCredential: credential('a') };
+    await assert.rejects(buildChatGptAccountStatus('openai-codex', invalidOptions), /account.*(invalid|available)/i);
+    await assert.rejects(resolveChatGptAccountAuth(invalidOptions), /account.*(invalid|available)/i);
+    await assert.rejects(fetchCodexResetCredits(invalidOptions), /account.*(invalid|available)/i);
+    await assert.rejects(redeemCodexResetCredit('fixture-reset-b', invalidOptions), /account.*(invalid|available)/i);
+  }
+  assert.deepEqual(modalRequests, [], 'invalid or disconnected ids never fall back, even with a supplied credential');
+  assert.deepEqual(store.read('openai-codex'), primaryBeforeModal);
+
+  // A subscription upgrade changes metadata, not the reconnect identity.
+  for (const plan of ['prolite', 'pro', 'future-plan']) {
+    const upgraded = { ...credential('a'), access: `synthetic.${Buffer.from(JSON.stringify({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'a', chatgpt_plan_type: plan },
+      'https://api.openai.com/profile': { email: 'a@example.test' }
+    })).toString('base64url')}.fixture` };
+    await pool.markFailure(idA, '*', { status: 401 });
+    await auth.loginOAuth('openai-codex', upgraded, { accountId: idA });
+    const accounts = await pool.list();
+    assert.equal(accounts.length, 2, 'upgrading a plan must not duplicate or remove accounts');
+    assert.equal(accounts.find(account => account.id === idA).state, 'ready');
+    assert.equal(accounts.find(account => account.id === idA).plan, plan, 'reconnect adopts the new plan without an allowlist');
+    assert.equal(accounts.find(account => account.id === idA).primary, true);
+  }
   await auth.loginOAuth('openai-codex', credential('a', 2));
   assert.equal((await pool.list()).length, 2, 'Same-account login updates rather than duplicates.');
   await assert.rejects(auth.loginOAuth('openai-codex', credential('b'), { accountId: idA }), /same ChatGPT account/);
@@ -76,13 +141,29 @@ try {
   assert.equal((await pool.list()).find(a => a.id === idA).state, 'ready', 'An old request cannot invalidate reconnected credentials.');
   const sanitized = JSON.stringify(await getChatGptAccounts(options));
   for (const secret of ['fixture-refresh', 'synthetic-api-key', 'synthetic.']) assert.ok(!sanitized.includes(secret));
-  const calls = [];
-  const refreshed = await getChatGptAccounts({ ...options, refreshUsage: true, fetchImpl: async (_url, init) => {
-    calls.push(init.headers['ChatGPT-Account-Id']);
-    return new Response(JSON.stringify({ plan_type: 'plus', rate_limit: { primary_window: { used_percent: 50, reset_at: (now + 30000) / 1000 } } }));
+  const calls = [], resetCalls = [];
+  const refreshed = await getChatGptAccounts({ ...options, refreshUsage: true, fetchImpl: async (url, init) => {
+    const id = init.headers['ChatGPT-Account-Id'];
+    if (String(url).endsWith('/rate-limit-reset-credits')) {
+      resetCalls.push(id);
+      return new Response(JSON.stringify({ available_count: 7 }));
+    }
+    calls.push(id);
+    return new Response(JSON.stringify({ plan_type: 'plus', rate_limit: { primary_window: { used_percent: 50, reset_at: (now + 30000) / 1000 } },
+      ...(id === 'a' ? { rate_limit_reset_credits: { available_count: 3 } } : {}) }));
   } });
   assert.deepEqual(calls.sort(), ['a', 'b']);
   assert.ok(refreshed.accounts.every(a => a.usage.primary.usedPercent === 50));
+  assert.equal(refreshed.accounts.find(a => a.id === idA).usage.availableResetCount, 3, 'usage refresh must retain each account reset count');
+  assert.equal(refreshed.accounts.find(a => a.id === idB).usage.availableResetCount, 7, 'missing usage counts use that account reset endpoint, not the primary account');
+  assert.deepEqual(resetCalls, ['b'], 'do not repeat reset requests when usage already reports the count');
+  await pool.recordUsage(idA, { partial: true, primary: { usedPercent: 50 } });
+  assert.equal((await pool.list()).find(a => a.id === idA).usage.availableResetCount, 3, 'streamed limit headers must not erase reset credits');
+  const unavailableResets = await getChatGptAccounts({ ...options, refreshUsage: true, fetchImpl: async url => {
+    if (String(url).endsWith('/rate-limit-reset-credits')) throw new Error('Synthetic reset endpoint unavailable');
+    return new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 50 } } }));
+  } });
+  assert.ok(unavailableResets.accounts.every(a => a.usage.availableResetCount === null), 'an unavailable reset count is unknown, not a fabricated zero');
   await pool.recordUsage(idB, { primary: { usedPercent: 5 }, observedAt: now - 1000 });
   assert.equal((await pool.list()).find(a => a.id === idB).usage.primary.usedPercent, 50, 'An older quota check cannot overwrite newer usage.');
   await assert.rejects(updateChatGptAccounts({ action: 'remove', accountId: idB }, options), /Confirm/);

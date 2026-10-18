@@ -224,10 +224,12 @@ export interface AssistantBootstrapPayload {
 }
 
 export interface AssistantAccountOverviewPayload {
+    resetAccountId?: string
     overview: AssistantAccountOverview
 }
 
 export interface AssistantRedeemAccountResetInput {
+    accountId?: string
     creditId: string
     confirmed: true
 }

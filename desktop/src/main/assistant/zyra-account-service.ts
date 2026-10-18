@@ -20,9 +20,9 @@ const MAX_RESET_CREDIT_ID_LENGTH = 512
 type JsonRecord = Record<string, unknown>
 
 type ChatGptAccountModule = {
-    buildChatGptAccountStatus(provider?: string): Promise<unknown>
-    fetchCodexResetCredits(): Promise<unknown>
-    redeemCodexResetCredit(creditId: string, options?: { stateDirectory?: string }): Promise<unknown>
+    buildChatGptAccountStatus(provider?: string, options?: { accountId?: string }): Promise<unknown>
+    fetchCodexResetCredits(options?: { accountId?: string }): Promise<unknown>
+    redeemCodexResetCredit(creditId: string, options?: { stateDirectory?: string; accountId?: string }): Promise<unknown>
     isCodexResetCreditAvailable?(credit: unknown): boolean
 }
 
@@ -43,7 +43,7 @@ type NormalizedUsageWindow = {
 
 let redemptionModulePromise: Promise<ChatGptAccountModule> | null = null
 
-async function redeemResetOnMain(creditId: string): Promise<unknown> {
+async function redeemResetOnMain(creditId: string, options?: { accountId?: string }): Promise<unknown> {
     // Preserve ownership of the existing external mutation. A worker exit after
     // the POST must not introduce a new ambiguous-redemption failure path.
     if (!redemptionModulePromise) {
@@ -55,7 +55,7 @@ async function redeemResetOnMain(creditId: string): Promise<unknown> {
     }
     const stateDirectory = desktopTerminalEnvironment().ZYRA_STATE_DIR
     if (!stateDirectory) throw new Error('Desktop account credential namespace is not configured.')
-    return (await redemptionModulePromise).redeemCodexResetCredit(creditId, { stateDirectory })
+    return (await redemptionModulePromise).redeemCodexResetCredit(creditId, { stateDirectory, accountId: options?.accountId })
 }
 
 async function loadChatGptAccountModule(): Promise<ChatGptAccountModule> {
@@ -75,7 +75,10 @@ export class ZyraAccountService {
 
     constructor(private readonly loadAccountModule: ChatGptAccountModuleLoader = loadChatGptAccountModule) {}
 
-    async getOverview(forceRefresh = false): Promise<AssistantAccountOverview> {
+    async getOverview(forceRefresh = false, accountId?: string): Promise<AssistantAccountOverview> {
+        validateAccountId(accountId)
+        // Targeted modal reads must never join the primary account's in-flight read.
+        if (accountId !== undefined) return this.loadOverview(true, accountId)
         if (this.overviewPromise) {
             if (!forceRefresh) return this.overviewPromise
             const pending = this.overviewPromise
@@ -106,6 +109,8 @@ export class ZyraAccountService {
             throw new Error('Confirm the banked reset before using it.')
         }
         const creditId = normalizeResetCreditId(input.creditId)
+        validateAccountId(input.accountId)
+        const accountOptions = input.accountId === undefined ? undefined : { accountId: input.accountId }
         if (this.redemptionInFlight) {
             throw new Error('Another banked reset is already being used.')
         }
@@ -113,7 +118,8 @@ export class ZyraAccountService {
         this.redemptionInFlight = true
         try {
             const accountModule = await this.loadAccountModule()
-            const freshResetPayload = asRecord(await accountModule.fetchCodexResetCredits())
+            const freshResetPayload = asRecord(await accountModule.fetchCodexResetCredits(accountOptions))
+            requireResetInventoryAccount(freshResetPayload, input.accountId)
             const freshCreditValues = freshResetPayload?.['credits']
             const freshCredits = Array.isArray(freshCreditValues) ? freshCreditValues : []
             const freshCredit = freshCredits.find((value) => asString(asRecord(value)?.['id']) === creditId)
@@ -121,7 +127,7 @@ export class ZyraAccountService {
                 throw new Error('That banked reset is no longer available. Nothing was used.')
             }
 
-            const rawRedemption = asRecord(await accountModule.redeemCodexResetCredit(creditId))
+            const rawRedemption = asRecord(await accountModule.redeemCodexResetCredit(creditId, accountOptions))
             const freshCreditSnapshot = normalizeResetCredit(freshCredit, accountModule.isCodexResetCreditAvailable)
             const redemptionCredit = normalizeResetCredit(rawRedemption?.['credit'], accountModule.isCodexResetCreditAvailable)
                 || (freshCreditSnapshot ? { ...freshCreditSnapshot, status: 'redeemed', available: false } : null)
@@ -133,11 +139,11 @@ export class ZyraAccountService {
             }
 
             // Do not let an account refresh failure turn a successfully spent reset into a false failure.
-            this.overviewPromise = null
+            if (input.accountId === undefined) this.overviewPromise = null
             try {
                 return {
                     redemption,
-                    overview: await this.getOverview(),
+                    overview: await this.getOverview(false, input.accountId),
                     refreshError: null
                 }
             } catch (error) {
@@ -152,19 +158,24 @@ export class ZyraAccountService {
         }
     }
 
-    private async loadOverview(includeResetCredits = true): Promise<AssistantAccountOverview> {
+    private async loadOverview(includeResetCredits = true, accountId?: string): Promise<AssistantAccountOverview> {
         const accountModule = await this.loadAccountModule()
-        const accountStatus = await accountModule.buildChatGptAccountStatus(CHATGPT_ACCOUNT_PROVIDER)
+        const accountOptions = accountId === undefined ? undefined : { accountId }
+        const accountStatus = await accountModule.buildChatGptAccountStatus(CHATGPT_ACCOUNT_PROVIDER, accountOptions)
+        if (accountId !== undefined && asRecord(accountStatus)?.['poolAccountId'] !== accountId) {
+            throw new Error('The selected ChatGPT account could not be verified. Refresh account data and try again.')
+        }
         const configured = asRecord(asRecord(accountStatus)?.['status'])?.['configured'] === true
         let resetCredits: unknown = null
         let resetCreditsError: string | null = null
 
         if (configured && includeResetCredits) {
             try {
-                resetCredits = await accountModule.fetchCodexResetCredits()
+                resetCredits = await accountModule.fetchCodexResetCredits(accountOptions)
             } catch (error) {
                 resetCreditsError = errorMessage(error, 'Banked resets could not be loaded.')
             }
+            if (resetCreditsError === null) requireResetInventoryAccount(resetCredits, accountId)
         }
 
         return buildAssistantAccountOverviewFromZyra({
@@ -375,6 +386,19 @@ function isResetCreditAvailable(
     if ((asString(record?.['status']) || '').toLowerCase() !== 'available') return false
     const expiresAt = normalizeIsoTimestamp(record?.['expiresAt'] ?? record?.['expires_at'])
     return !expiresAt || new Date(expiresAt).getTime() > now
+}
+
+function requireResetInventoryAccount(payload: unknown, accountId?: string): void {
+    if (accountId !== undefined && asRecord(payload)?.['poolAccountId'] !== accountId) {
+        throw new Error('The selected ChatGPT account reset inventory could not be verified. Refresh account data and try again.')
+    }
+}
+
+function validateAccountId(value: unknown): void {
+    if (value === undefined) return
+    if (typeof value !== 'string' || !value || value !== value.trim() || value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) {
+        throw new Error('The selected ChatGPT account is invalid.')
+    }
 }
 
 function normalizeResetCreditId(value: unknown): string {

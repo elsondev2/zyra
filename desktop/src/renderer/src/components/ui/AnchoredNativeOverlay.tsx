@@ -2,16 +2,21 @@ import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type Re
 import { NativeOverlayPortal, registerOverlayAnchor } from './native-overlay-portal'
 import type { NativeOverlayBounds } from '@shared/contracts/native-overlay'
 import { getOverlayOwnerRect } from './native-overlay-events'
+import { supportsNativeOverlay } from './native-overlay-host'
 
 /** Keeps an inline overlay's original containing block when it moves to the native layer. */
-export function AnchoredNativeOverlay({ children, anchorRef, inputRegionRef, enabled = true, passive = false, scoped = false, autoFocus = true, onReady }: {
+export function AnchoredNativeOverlay({ children, anchorRef, inputRegionRef, enabled = true, passive = false, scoped = false, browserZIndex, autoFocus = true, onReady, onBoundsChange }: {
     children: ReactNode
     enabled?: boolean
     passive?: boolean
     /** Restrict native input interception to the anchor instead of the whole app. */
     scoped?: boolean
+    /** Stack the fixed containing block above its owner in ordinary browser clients. */
+    browserZIndex?: number
     autoFocus?: boolean
     onReady?: (container: HTMLElement) => void
+    /** Notify dependent popup geometry after anchor bounds commit to the DOM. */
+    onBoundsChange?: () => void
     anchorRef?: RefObject<HTMLElement | null>
     /** Crop native input to this popup's rendered box while leaving the app clickable. */
     inputRegionRef?: RefObject<HTMLElement | null>
@@ -70,10 +75,13 @@ export function AnchoredNativeOverlay({ children, anchorRef, inputRegionRef, ena
             ownerWindow.removeEventListener('resize', invalidate)
         }
     }, [anchorRef, enabled])
+    useLayoutEffect(() => {
+        if (enabled && bounds) onBoundsChange?.()
+    }, [bounds, enabled, onBoundsChange])
     if (!enabled) return <>{children}</>
     return <>
         <span ref={marker} hidden aria-hidden="true" />
-        {bounds && <NativeOverlayPortal bounds={inputRegionRef ? inputBounds ?? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : scoped ? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : null} passive={passive} autoFocus={autoFocus} onReady={onReady}><div ref={portalRef} style={{ position: 'fixed', pointerEvents: 'none', ...bounds }}><div style={{ display: 'contents', pointerEvents: 'auto' }}>{children}</div>{inputRegionRef && <MeasuredInputRegion regionRef={inputRegionRef} anchorBounds={bounds} onBounds={updateInputBounds} />}</div></NativeOverlayPortal>}
+        {bounds && <NativeOverlayPortal bounds={inputRegionRef ? inputBounds ?? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : scoped ? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : null} passive={passive} autoFocus={autoFocus} onReady={onReady}><div ref={portalRef} style={{ position: 'fixed', pointerEvents: 'none', ...bounds, zIndex: supportsNativeOverlay() ? undefined : browserZIndex }}><div style={{ display: 'contents', pointerEvents: 'auto' }}>{children}</div>{inputRegionRef && <MeasuredInputRegion regionRef={inputRegionRef} anchorBounds={bounds} onBounds={updateInputBounds} />}</div></NativeOverlayPortal>}
     </>
 }
 

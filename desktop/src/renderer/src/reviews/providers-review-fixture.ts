@@ -11,7 +11,7 @@ let pool: ChatGptPoolSnapshot = {
         id: `review-${index}`, alias: index ? 'Silver Otter 456' : 'Quiet Comet 123', email, plan: index ? 'prolite' : 'plus', primary: index === 0,
         enabled: true, state: scenario === 'signin' && index === 1 ? 'needs-sign-in' : 'ready',
         resetAt: null, lastUsedAt: null, requestCount: 0, tokenExpiresAt: null,
-        usage: { primary: primary(index ? 35 : 15), secondary: dual && !(scenario === 'dual-missing' && index === 1) ? { usedPercent: index ? 10 : 45, resetAt, windowSeconds: 604800 } : null, updatedAt: new Date().toISOString() }
+        usage: { availableResetCount: index ? 4 : 1, primary: primary(index ? 35 : 15), secondary: dual && !(scenario === 'dual-missing' && index === 1) ? { usedPercent: index ? 10 : 45, resetAt, windowSeconds: 604800 } : null, updatedAt: new Date().toISOString() }
     })),
     policy: { strategy: 'balanced', accountMode: 'all', accountIds: [], preferredAccountId: null },
     checkedAt: new Date().toISOString()
@@ -27,6 +27,14 @@ let overview: AssistantAccountOverview = {
     availableResetCount: 1, resetCredits: [{ id: 'review-reset', title: 'Codex reset', status: 'available', available: true, resetType: 'codex', grantedAt: null, expiresAt: resetAt, description: null }],
     resetCreditsError: null, fetchedAt: new Date().toISOString()
 }
+function resetOverview(accountId?: string): AssistantAccountOverview {
+    if (!accountId) return structuredClone(overview)
+    const account = pool.accounts.find(account => account.id === accountId)
+    if (!account) throw new Error('Test account is no longer connected.')
+    const count = account.usage?.availableResetCount ?? 0
+    return { ...structuredClone(overview), accountId, account: { type: 'chatgpt', email: account.email, planType: 'plus' },
+        availableResetCount: count, resetCredits: Array.from({ length: count }, (_, index) => ({ ...overview.resetCredits[0], id: `${accountId}-reset-${index}`, title: 'Codex reset', available: true, status: 'available' })) }
+}
 let jobs = scenario === 'running' ? [{ jobId: 'preview-server', toolCallId: 'review', command: 'npm run dev', status: 'running', background: true, startedAt: new Date().toISOString() }] : []
 const unavailable = async () => ({ success: false, error: 'This action is unavailable in the test preview.' })
 export function installProvidersReviewFixture() {
@@ -35,7 +43,10 @@ export function installProvidersReviewFixture() {
         preferences: { get: async () => ({ success: true, snapshot: preferenceSnapshot() }), update: async ({ patch }: { patch: object }) => { settings = { ...settings, ...patch }; revision++; return { success: true, snapshot: preferenceSnapshot() } }, onChanged: () => () => {} },
         secrets: { migrateLegacyHostedAiKeys: async () => ({ success: true, status: { groqConfigured: false, geminiConfigured: false, legacyMigrationComplete: true } }) },
         onboarding: {
-            getChatGptAccounts: async () => scenario === 'error' ? ({ success: false, error: 'Test: account usage unavailable. Refresh to retry.' }) : ({ success: true, pool: structuredClone(pool) }),
+            getChatGptAccounts: async () => {
+                if (scenario === 'loading') await new Promise(resolve => setTimeout(resolve, 2500))
+                return scenario === 'error' ? ({ success: false, error: 'Test: account usage unavailable. Refresh to retry.' }) : ({ success: true, pool: structuredClone(pool) })
+            },
             updateChatGptAccounts: async (input: any) => {
                 if (input.action === 'policy') pool.policy = input.policy
                 if (input.action === 'alias') pool.accounts = pool.accounts.map(account => account.id === input.accountId ? { ...account, alias: input.alias } : account)
@@ -54,9 +65,13 @@ export function installProvidersReviewFixture() {
             disconnectModelProvider: unavailable
         },
         assistant: {
-            getAccountOverview: async () => ({ success: true, overview: structuredClone(overview) }),
+            getAccountOverview: async (_force?: boolean, accountId?: string) => ({ success: true, resetAccountId: accountId, overview: resetOverview(accountId) }),
             listModels: async () => ({ success: true, models: [{ id: 'openai-codex/review-model', name: 'Review model', provider: 'openai-codex', reasoning: true, input: ['text'], contextWindow: 256000, maxTokens: 32000 }] }),
-            redeemAccountReset: async () => { overview.availableResetCount = 0; overview.resetCredits[0] = { ...overview.resetCredits[0], available: false, status: 'redeemed' }; return { success: true, overview: structuredClone(overview), redemption: { windowsReset: 1 }, refreshError: null } },
+            redeemAccountReset: async ({ accountId }: { accountId?: string }) => {
+                const account = pool.accounts.find(account => account.id === accountId)
+                if (account?.usage) account.usage.availableResetCount = Math.max(0, (account.usage.availableResetCount ?? 0) - 1)
+                return { success: true, overview: resetOverview(accountId), redemption: { windowsReset: 1 }, refreshError: null }
+            },
             listBackgroundProcesses: async () => ({ success: true, jobs: structuredClone(jobs), runtimeAvailable: true }),
             stopBackgroundProcesses: async () => { jobs = []; return { success: true, jobs: [], runtimeAvailable: true } },
             onEvent: () => () => {}

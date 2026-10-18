@@ -1,6 +1,7 @@
 import { addUsage, normalizeUsage } from "../contracts.mjs";
 import { usageFromAssistantMessage } from "../usage-accounting.mjs";
 import { deliverThreadMessage } from '../../threads/delivery.mjs';
+import { isSupportingAgentMessage } from '../../threads/message-origin.mjs';
 
 export class ChildSessionHost {
   constructor(options = {}) {
@@ -52,6 +53,10 @@ export class ChildSessionHost {
     const deliver = this.sendChain.then(async () => {
       const session = this.requireSession();
       if (threadMessage) {
+        if (isSupportingAgentMessage(threadMessage)) {
+          await deliverThreadMessage(session, threadMessage);
+          return this.resultSnapshot('context-only');
+        }
         const streaming = session.isStreaming;
         if (!streaming) this.reserveTurn();
         await deliverThreadMessage(session, threadMessage);

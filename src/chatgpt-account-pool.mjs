@@ -211,6 +211,9 @@ export class ChatGptAccountPool {
       values[entry.key] = { ...entry.credential, pool: { ...entry.credential.pool, id, usage: {
         primary: sanitize(usage.primary) || (usage.partial ? entry.credential.pool?.usage?.primary : null) || null,
         secondary: sanitize(usage.secondary) || (usage.partial ? entry.credential.pool?.usage?.secondary : null) || null,
+        availableResetCount: Number.isFinite(usage.availableResetCount) && usage.availableResetCount >= 0
+          ? Math.floor(usage.availableResetCount)
+          : usage.partial ? entry.credential.pool?.usage?.availableResetCount ?? null : null,
         updatedAt: new Date(observedAt).toISOString(),
       } } };
       return values;

@@ -1,5 +1,6 @@
 import { useComposerDrawerMotion } from './useComposerDrawerMotion'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { getOverlayOwnerRect } from '@/components/ui/native-overlay-events'
 import { addOverlayEventListener, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type RefObject, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
@@ -564,16 +565,16 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         const boundary = traitsDropdownRef.current?.closest('.assistant-conversation-pane')
 
         const updateSubmenuPlacement = () => {
-            const containerRect = container.getBoundingClientRect()
-            const boundaryRect = boundary?.getBoundingClientRect() ?? {
+            const containerRect = getOverlayOwnerRect(container)
+            const boundaryRect = boundary ? getOverlayOwnerRect(boundary) : {
                 left: 0,
                 right: window.innerWidth
             }
             const resolveLeft = (submenuWidth: number) => {
                 const gutter = 8
                 const preferredLeft = 234
-                const minLeft = boundaryRect.left - containerRect.left + gutter
-                const maxLeft = boundaryRect.right - containerRect.left - submenuWidth - gutter
+                const minLeft = Math.max(0, boundaryRect.left) - containerRect.left + gutter
+                const maxLeft = Math.min(window.innerWidth, boundaryRect.right) - containerRect.left - submenuWidth - gutter
                 return Math.round(maxLeft < minLeft ? minLeft : Math.max(minLeft, Math.min(preferredLeft, maxLeft)))
             }
             const next = {
@@ -601,7 +602,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     return (
         <div className={cn('flex min-w-0 flex-1 flex-nowrap items-center justify-start text-[14px]', forceSingleRow ? 'gap-1' : 'gap-1.5 max-[520px]:gap-1', isCompactFooter ? 'overflow-visible' : 'overflow-visible')}>
             <div className="relative min-w-0 flex-[1_1_0%] max-w-full" ref={traitsDropdownRef}>
-                <AnchoredNativeOverlay enabled={showTraitsDropdown} onReady={handleTraitsMenuReady}><div
+                <AnchoredNativeOverlay enabled={showTraitsDropdown} browserZIndex={170} onReady={handleTraitsMenuReady} onBoundsChange={handleTraitsMenuReady}><div
                     className={cn(
                         traitsMenuOpensDown ? 'absolute left-0 top-[36px] z-[170]' : 'absolute bottom-[36px] left-0 z-[170]',
                         'transition-opacity duration-[120ms] ease-out',
@@ -870,7 +871,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
             </div>
             <div ref={accessMenuRef} className="relative shrink-0">
                 {showAccessMenu ? (
-                    <AnchoredNativeOverlay enabled={true}><div
+                    <AnchoredNativeOverlay enabled={true} browserZIndex={180}><div
                         role="menu"
                         aria-label="Permission mode"
                         className={cn(

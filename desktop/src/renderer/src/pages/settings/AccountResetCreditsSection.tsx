@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowLeft, RefreshCw, RotateCcw } from 'lucide-react'
 import type {
     AssistantAccountOverview,
@@ -16,6 +16,9 @@ import {
 
 type AccountResetCreditsSectionProps = {
     compact?: boolean
+    remainingCount?: number | null
+    accountId?: string
+    accountLabel?: string
     overview: AssistantAccountOverview | null
     loading: boolean
     onOverviewChange: (overview: AssistantAccountOverview) => void
@@ -23,10 +26,24 @@ type AccountResetCreditsSectionProps = {
 
 export function AccountResetCreditsSection({
     compact = false,
-    overview,
-    loading,
+    remainingCount,
+    accountId,
+    accountLabel,
+    overview: inheritedOverview,
+    loading: inheritedLoading,
     onOverviewChange
 }: AccountResetCreditsSectionProps) {
+    const [scopedOverview, setScopedOverview] = useState<AssistantAccountOverview | null>(null)
+    const [scopedLoading, setScopedLoading] = useState(false)
+    const [scopedError, setScopedError] = useState<string | null>(null)
+    const requestId = useRef(0)
+    useEffect(() => () => { requestId.current += 1 }, [accountId])
+    const overview = accountId ? scopedOverview : inheritedOverview
+    const loading = accountId ? scopedLoading : inheritedLoading
+    const applyOverview = (next: AssistantAccountOverview) => {
+        if (accountId) setScopedOverview(next)
+        onOverviewChange(next)
+    }
     const [resetsOpen, setResetsOpen] = useState(false)
     const [selectedCreditId, setSelectedCreditId] = useState<string | null>(null)
     const [redeeming, setRedeeming] = useState(false)
@@ -36,6 +53,8 @@ export function AccountResetCreditsSection({
     const credits = overview?.resetCredits || []
     const availableCount = overview?.availableResetCount
         ?? credits.filter((credit) => credit.available).length
+    const compactCount = remainingCount === undefined ? overview?.availableResetCount ?? null : remainingCount
+    const compactLabel = `${compactCount ?? '—'} reset${compactCount === 1 ? '' : 's'} left`
     const selectedCredit = selectedCreditId
         ? credits.find((credit) => credit.id === selectedCreditId) || null
         : null
@@ -44,16 +63,40 @@ export function AccountResetCreditsSection({
         [overview]
     )
 
+    const loadScopedOverview = async () => {
+        if (!accountId) return
+        const request = ++requestId.current
+        setScopedLoading(true)
+        setScopedError(null)
+        try {
+            const result = await window.devscope.assistant.getAccountOverview(true, accountId)
+            if (request !== requestId.current) return
+            if (!result.success) throw new Error(result.error || 'Could not load reset credits.')
+            if (result.resetAccountId !== accountId) throw new Error('Reload Zyra to open resets for this account.')
+            if (result.overview.resetCreditsError) throw new Error(result.overview.resetCreditsError)
+            setScopedOverview(result.overview)
+        } catch (error) {
+            if (request === requestId.current) setScopedError(error instanceof Error ? error.message : 'Could not load reset credits.')
+        } finally {
+            if (request === requestId.current) setScopedLoading(false)
+        }
+    }
     const openResetManager = () => {
         setSelectedCreditId(null)
         setActionError(null)
         setActionWarning(null)
         setActionSuccess(null)
         setResetsOpen(true)
+        if (accountId) {
+            setScopedOverview(null)
+            void loadScopedOverview()
+        }
     }
 
     const closeResetManager = () => {
         if (redeeming) return
+        requestId.current += 1
+        setScopedLoading(false)
         setResetsOpen(false)
         setSelectedCreditId(null)
         setActionError(null)
@@ -85,14 +128,15 @@ export function AccountResetCreditsSection({
         try {
             const result = await window.devscope.assistant.redeemAccountReset({
                 creditId,
+                ...(accountId ? { accountId } : {}),
                 confirmed: true
             })
             if (!result.success) throw new Error(result.error || 'The banked reset could not be used.')
 
             if (result.overview) {
-                onOverviewChange(result.overview)
+                applyOverview(result.overview)
             } else if (overview) {
-                onOverviewChange({
+                applyOverview({
                     ...overview,
                     availableResetCount: Math.max(0, availableCount - 1),
                     resetCredits: credits.map((credit) => credit.id === creditId
@@ -123,9 +167,9 @@ export function AccountResetCreditsSection({
     return (
         <>
             {compact ? <button type="button" className="chatgpt-reset-credit" disabled={loading && !overview} onClick={openResetManager}
-                aria-label={loading && !overview ? 'Checking reset credits' : overview?.resetCreditsError ? 'Check reset credits' : `${availableCount} reset credit${availableCount === 1 ? '' : 's'}`}
-                title={overview?.resetCreditsError || `${availableCount} reset credit${availableCount === 1 ? '' : 's'} available`}>
-                <RotateCcw size={11} aria-hidden="true" /><span>{loading && !overview ? '…' : overview?.resetCreditsError ? '!' : availableCount}</span>
+                aria-label={compactLabel}
+                title={compactCount === null ? overview?.resetCreditsError || 'Reset count unavailable. Refresh to check.' : compactLabel}>
+                {compactLabel}
             </button> : <SettingsSection title="Banked resets">
                 <SettingsRow
                     title="Reset credits"
@@ -148,6 +192,7 @@ export function AccountResetCreditsSection({
             <SettingsDialog
                 open={resetsOpen}
                 title={selectedCredit ? 'Approve banked reset' : 'Banked resets'}
+                description={accountLabel}
                 className="[&>header]:border-b-0"
                 onClose={closeResetManager}
                 contentClassName="!space-y-0"
@@ -168,13 +213,14 @@ export function AccountResetCreditsSection({
                     </>
                 ) : undefined}
             >
+                {scopedError ? <SettingsNotice tone="error">{scopedError}<SettingsButton variant="ghost" onClick={() => void loadScopedOverview()}>Retry</SettingsButton></SettingsNotice> : null}
                 {selectedCredit ? (
                     <ResetApproval
                         credit={selectedCredit}
                         currentUsage={currentUsage}
                         actionError={actionError}
                     />
-                ) : (
+                ) : scopedError ? null : (
                     <ResetCreditList
                         credits={credits}
                         loading={loading && !overview}
@@ -244,7 +290,7 @@ function ResetCreditList({
                         </div>
                     ))}
                 </div>
-            ) : (
+            ) : resetCreditsError ? null : (
                 <div className="flex min-h-24 flex-col items-center justify-center px-5 text-center">
                     <RotateCcw size={15} className="mb-1.5 text-[var(--settings-text-muted)]" />
                     <p className="text-[12px] font-medium text-[var(--settings-text)]">No reset credits</p>

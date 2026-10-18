@@ -1,4 +1,5 @@
 import { stripSidebarBrowserContext } from '@shared/assistant/browser-context'
+import { isSupportingAgentMessage } from '@shared/assistant/thread-message'
 import { visibleSkillContextMessages } from '@shared/assistant/skill-context-presentation'
 import { buildRenderableFileChangePatch } from '@shared/assistant/contracts/file-change'
 import { parseAgentSurfaceDescriptor } from '@shared/assistant/contracts'
@@ -78,7 +79,7 @@ export type ParsedUserAttachment = {
 }
 
 export function shouldRenderActivity(activity: AssistantActivity): boolean {
-    if (activity.kind === 'thread-message') return true
+    if (activity.kind === 'thread-message') return !isSupportingAgentMessage(activity.payload)
     if (activity.payload?.approvalPending === true) return false
     if (isInternalAssistantActivity(activity)) return false
     if (activity.kind === 'user-input.resolved') return false

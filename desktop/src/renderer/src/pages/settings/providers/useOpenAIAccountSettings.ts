@@ -245,7 +245,10 @@ export function useOpenAIAccountSettings({ usageActive = false, connectionsActiv
             setOverview(null)
             setOverviewLoading(true)
             setConnections(null)
-            await Promise.all([loadConnectionState(true), ...(usageActive ? [loadOverview(true)] : [])])
+            // OAuth is complete. Connection/usage reads have their own loading and
+            // error states and must not keep authentication pending.
+            void loadConnectionState(true)
+            if (usageActive) void loadOverview(true)
             setChatGptDeviceCode(null)
             setChatGptDeviceCodeOpen(false)
             setChatGptAuthenticationSuccessOpen(true)

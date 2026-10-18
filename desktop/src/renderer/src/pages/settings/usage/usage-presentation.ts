@@ -7,8 +7,9 @@ import {
     type UsageTotals
 } from '../../../../../shared/assistant/usage-summary'
 
-export type UsageMetric = 'cost' | 'tokens' | 'limits'
+export type UsageMetric = 'cost' | 'tokens'
 export type UsageBreakdownMode = 'model' | 'day' | 'harness' | 'provider'
+export type UsageBreakdownSelection = Exclude<UsageBreakdownMode, 'day'>
 export type UsageTableRow = {
     id: string
     label: string
@@ -20,28 +21,27 @@ export type UsageTableRow = {
     share: number
 }
 
-type NumericUsageMetric = Exclude<UsageMetric, 'limits'>
 const totalFields = Object.keys(emptyUsageTotals()) as Array<keyof UsageTotals>
 const nonNegative = (value: number): number => Number.isFinite(value) && value >= 0 ? value : 0
 const compareIds = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0
 
-export function hasUsageValue(totals: UsageTotals, metric: NumericUsageMetric): boolean {
+export function hasUsageValue(totals: UsageTotals, metric: UsageMetric): boolean {
     return totals.turns === 0 || nonNegative(metric === 'cost' ? totals.pricedTurns : totals.meteredTurns) > 0
 }
 
-export function usageMetricValue(totals: UsageTotals, metric: NumericUsageMetric): number {
+export function usageMetricValue(totals: UsageTotals, metric: UsageMetric): number {
     return nonNegative(metric === 'cost' ? totals.costUsd : totals.tokens)
 }
 
 /** Preserve missing and partial measurements in every display, including secondary metrics. */
-export function formatUsageMeasurement(totals: UsageTotals, metric: NumericUsageMetric): string {
+export function formatUsageMeasurement(totals: UsageTotals, metric: UsageMetric): string {
     if (!hasUsageValue(totals, metric)) return metric === 'cost' ? 'Unpriced' : 'Unmetered'
     const value = metric === 'cost' ? formatUsageUsd(totals.costUsd) : formatUsageTokens(totals.tokens)
     const measured = metric === 'cost' ? totals.pricedTurns : totals.meteredTurns
     return value + (measured < totals.turns ? ' *' : '')
 }
 
-export function groupUsageRows(summary: UsageSummary, mode: UsageBreakdownMode, metric: NumericUsageMetric): UsageTableRow[] {
+export function groupUsageRows(summary: UsageSummary, mode: UsageBreakdownMode, metric: UsageMetric): UsageTableRow[] {
     const groups = new Map<string, UsageTableRow>()
     const add = (identity: Omit<UsageTableRow, 'totals' | 'share'>, totals: UsageTotals) => {
         const row = groups.get(identity.id) || { ...identity, totals: emptyUsageTotals(), share: 0 }

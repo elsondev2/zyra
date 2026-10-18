@@ -53,7 +53,7 @@ async function execute(message, signal) {
     case "resolveChatGptAccountAuth":
       return resolveChatGptAccountAuth();
     case "fetchCodexResetCredits":
-      return fetchCodexResetCredits();
+      return fetchCodexResetCredits(message.options);
     case "getZyraAuthStatus":
       return getZyraAuthStatus(message.provider);
     case "loginZyraAuth":

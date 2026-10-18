@@ -16,14 +16,14 @@ import { ThreadMailbox } from '../src/agent-server/thread-mailbox.mjs';
 import { createThreadTool } from '../src/threads/tool.mjs';
 import { createFleetTools } from '../src/agents/tools.mjs';
 import { resolveThreadStartSettings, threadStartOptions } from '../src/threads/start-settings.mjs';
-import { threadMessageReceipt } from '../src/threads/delivery.mjs';
+import { threadMessageReceipt, deliverThreadMessage } from '../src/threads/delivery.mjs';
 import { ThreadBridgeClient } from '../src/threads/bridge-client.mjs';
 
 const directory = await mkdtemp(path.join(os.tmpdir(), 'zyra-thread-collaboration-'));
 const project = path.join(directory, 'project');
 await mkdir(project);
 const client = { clientId: 'fixture-desktop', surface: 'desktop', attachedSessionIds: new Set() };
-let fleet, server, owner;
+let fleet, server, owner, rootRecipient;
 const oldFetch = globalThis.fetch;
 globalThis.fetch = () => { throw new Error('No network permitted in this fixture.'); };
 try {
@@ -92,6 +92,7 @@ try {
   ensureSessionDurable(rootManager);
   const factory = new ChildSessionFactory({ project, agentDir: directory, transcriptDirectory: path.join(project, '.zyra', 'agent-runs', rootManager.getSessionId(), 'child-sessions'), modelRuntime,
     settings: { compaction: { enabled: false }, retry: { enabled: false } } });
+  rootRecipient = await factory.create({ cwd: project, sessionFile: rootManager.getSessionFile(), model, tools: [], permissionMode: 'read-only' });
   const threadClient = { forAgent: agentRunId => ({ request: input => server.threads.request(owner, { agentRunId, input }) }) };
   fleet = new AgentFleetController({ project, rootSessionId: rootManager.getSessionId(), rootThreadId: rootManager.getSessionId(),
     rootSession: { model, modelRuntime, modelRegistry: new ModelRegistry(modelRuntime) }, sessionFactory: factory, threadBridgeClient: threadClient });
@@ -101,6 +102,8 @@ try {
     isAlive() { return !this.disposed; }
     async request(type, payload) {
       if (type === 'connect') return { threadId: rootManager.getSessionId(), providerThreadId: rootManager.getSessionId(), sessionFile: rootManager.getSessionFile(), cwd: project, model: `${model.provider}/${model.id}`, messages: [], fleet: fleet.snapshot() };
+      if (type === 'thread_message.receive') return deliverThreadMessage(rootRecipient.session, payload.message);
+      if (type === 'prompt') return rootRecipient.session.prompt(payload.prompt);
       if (type === 'agents.spawn') return fleet.spawn(payload);
       if (type === 'agents.models') return fleet.delegationModelOptions(payload);
       if (type === 'agents.inspectSession') return fleet.inspectSession(payload.agentRunId);
@@ -112,6 +115,7 @@ try {
     dispose() { this.disposed = true; this.removeAllListeners(); }
   }
   const worker = new Worker();
+  rootRecipient.session.subscribe(event => worker.emit('event', event));
   server = new ZyraAgentServer({ root: path.resolve('.'), stateDirectory: path.join(directory, 'state'), channel: 'thread-fixture', createWorker: () => { workersCreated++; return worker; } });
   server.send = () => true;
   const attached = await server.attachSession(client, { project, session: rootManager.getSessionFile(), model: `${model.provider}/${model.id}`, memoryEnabled: false, noSession: true });
@@ -173,6 +177,38 @@ try {
   assert.equal(rootManager.getEntries().filter(entry => entry.type === 'message').length, 0, 'Private agent contexts never become root chat transcripts');
   console.log('PASS real SDK tools start independent agents once and send bidirectional durable peer messages');
 
+  const supporting = await fleet.spawn({ goal: 'Budgeted workflow task', model: 'inherit', workflowRunId: 'workflow-fixture', background: true });
+  await fleet.wait(supporting.agentRunId);
+  const beforeContextCalls = calls;
+  const beforeRootTurn = structuredClone(owner.latestTurn);
+  const contextReceipt = await server.threads.request(owner, { agentRunId: supporting.agentRunId,
+    input: { action: 'send', threadId: owner.sessionKey, prompt: 'Supporting result, no new request.', dedupeKey: 'supporting-to-root' } });
+  await waitReceipts();
+  assert.equal(server.threads.mailbox.messages.get(contextReceipt.messageId).status, 'delivered');
+  assert.equal(calls, beforeContextCalls, 'Real SDK context delivery cannot wake an idle parent provider');
+  assert.deepEqual(owner.latestTurn, beforeRootTurn, 'The actual server never advertises a new running turn for supporting context');
+  const internalEntry = threadMessageReceipt(rootRecipient.session, contextReceipt.messageId);
+  assert.equal(internalEntry.display, false);
+  assert.equal(internalEntry.details.senderConversationKind, 'subagent');
+  const persistedContext = new ThreadMailbox(server.threads.mailbox.directory).messages.get(contextReceipt.messageId);
+  assert.equal(persistedContext.senderConversationKind, 'subagent', 'Restart retains trusted conversation intent');
+  const beforePeerContext = structuredClone(fleet.status(b.agentRunId));
+  const beforeChildTurns = fleet.completedHosts.get(b.agentRunId).turnsStarted;
+  await server.threads.request(owner, { agentRunId: supporting.agentRunId,
+    input: { action: 'send', threadId: b.threadId, prompt: 'Nested supporting context.', dedupeKey: 'supporting-to-child' } });
+  await waitReceipts();
+  assert.equal(calls, beforeContextCalls);
+  assert.equal(fleet.completedHosts.get(b.agentRunId).turnsStarted, beforeChildTurns);
+  assert.deepEqual(fleet.status(b.agentRunId), beforePeerContext, 'Completed recipients retain outcome, result and accounting without a fake restart');
+  const peerToRoot = await server.threads.request(owner, { agentRunId: a.agentRunId,
+    input: { action: 'send', threadId: owner.sessionKey, prompt: 'A genuine independent peer request.', dedupeKey: 'peer-to-root' } });
+  await waitReceipts();
+  assert.equal(calls, beforeContextCalls + 1, 'Independent peers still trigger the intended recipient response');
+  assert.equal(owner.latestTurn.id, peerToRoot.messageId);
+  assert.equal(owner.latestTurn.state, 'completed');
+  assert.equal(threadMessageReceipt(rootRecipient.session, peerToRoot.messageId).display, true);
+  console.log('PASS real SDK and server keep supporting root/nested updates durable and hidden without provider turns, presence churn or accounting changes; independent peers still respond');
+
   holdArmed = true;
   const busy = await server.threads.request(owner, { input: { action: 'start', prompt: 'hold-turn', label: 'Busy recipient', dedupeKey: 'start-busy' } });
   while (!releaseHeldTurn) await new Promise(resolve => setTimeout(resolve, 5));
@@ -184,6 +220,23 @@ try {
   await fleet.wait(busy.agentRunId); await waitReceipts();
   assert.equal(server.threads.mailbox.get(busyReceipt.messageId, owner.sessionKey).status, 'delivered');
   console.log(`PASS active recipients accept queued follow-ups without blocking the sender (ack observed in ${(performance.now() - began).toFixed(1)}ms including fixture drain)`);
+
+  holdArmed = true; releaseHeldTurn = null;
+  const rootTurn = owner.request(client, 'prompt', { prompt: 'hold-turn while supporting context arrives' }, { turnId: 'active-root' });
+  while (!releaseHeldTurn) await new Promise(resolve => setTimeout(resolve, 5));
+  const activeRootCalls = calls;
+  const streamingContext = await server.threads.request(owner, { agentRunId: supporting.agentRunId,
+    input: { action: 'send', threadId: owner.sessionKey, prompt: 'Internal update during active work.', dedupeKey: 'supporting-to-streaming-root' } });
+  await waitReceipts();
+  assert.equal(server.threads.mailbox.messages.get(streamingContext.messageId).status, 'delivered', 'Context receipts settle while the provider turn remains held');
+  assert.equal(owner.latestTurn.id, 'active-root');
+  assert.equal(owner.latestTurn.state, 'running');
+  assert.equal(calls, activeRootCalls);
+  releaseHeldTurn();
+  await rootTurn;
+  assert.equal(calls, activeRootCalls, 'Streaming context cannot schedule an extra provider acknowledgement after completion');
+  assert.equal(owner.latestTurn.state, 'completed');
+  console.log('PASS real streaming parent accepts supporting evidence without interruption, turn replacement or delayed acknowledgement');
 
   const mainAgentTool = createFleetTools({ controller: fleet })[0];
   holdArmed = true; releaseHeldTurn = null; reportAbortAsError = true;
@@ -218,10 +271,11 @@ try {
   assert.equal(view.connected.agentPermissionMode, bRun.permissionMode);
   assert.equal(view.connected.runtimeMode, 'approval-required');
   const ownedView = server.sessions.get(view.sessionKey);
+  const parentAssistantEnds = owner.replay(0).filter(entry => entry.event.type === 'message_end' && entry.event.message?.role === 'assistant').length;
   await ownedView.request(client, 'prompt', { prompt: 'Continue within the original scope.' }, { turnId: 'child-view-followup' });
   assert.equal(workersCreated, 1);
   assert(ownedView.replay(0).some(entry => entry.event.type === 'message_end' && entry.event.message?.role === 'assistant'));
-  assert(!owner.replay(0).some(entry => entry.event.type === 'message_end' && entry.event.message?.role === 'assistant'));
+  assert.equal(owner.replay(0).filter(entry => entry.event.type === 'message_end' && entry.event.message?.role === 'assistant').length, parentAssistantEnds, 'Viewing a child cannot leak its assistant events into its parent');
   await assert.rejects(ownedView.request(client, 'configure', { runtimeMode: 'full-access' }), /retains its fleet/);
   await assert.rejects(owner.request(client, 'agents.receiveThreadMessage', { agentRunId: a.agentRunId, message: {} }), /server-assigned/);
   server.catalog.recordAttachment({ canonicalChatId: bRun.providerSessionId, aliases: ['recipient-alias'] });
@@ -244,7 +298,7 @@ try {
   assert(!fleet.completedHosts.has(grandchild.agentRunId));
   console.log('PASS inherited scopes, bounded depth, and descendant stop ownership');
 
-  const workflowAgent = await fleet.spawn({ goal: 'Budgeted workflow task', model: 'inherit', workflowRunId: 'workflow-fixture', background: true });
+  const workflowAgent = supporting;
   await fleet.wait(workflowAgent.agentRunId);
   await assert.rejects(server.threads.request(owner, { agentRunId: workflowAgent.agentRunId, input: { action: 'start', prompt: 'Unbudgeted work', dedupeKey: 'workflow-bypass' } }), /workflow scheduler/);
   await assert.rejects(fleet.send(workflowAgent.agentRunId, 'Unbudgeted follow-up'), /workflow scheduler/);
@@ -279,6 +333,7 @@ try {
   assert.equal(fleet.cancellation.nodes.size, 1);
 } finally {
   await fleet?.dispose();
+  rootRecipient?.session.dispose();
   for (const session of new Set(server?.sessions.values() || [])) session.dispose('fixture complete');
   globalThis.fetch = oldFetch;
   await rm(directory, { recursive: true, force: true });

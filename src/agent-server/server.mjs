@@ -15,6 +15,7 @@ import { SessionWorkerPool } from './session-worker-pool.mjs';
 import { HarnessTransport } from './harness-transport.mjs';
 import { ExternalToolSessions } from './external-tools.mjs';
 import { AgentThreadCoordinator } from './thread-coordinator.mjs';
+import { isSupportingAgentMessage } from '../threads/message-origin.mjs';
 import { ChildThreadWorker } from './child-thread-worker.mjs';
 import { agentEndOutcome } from './agent-end-outcome.mjs';
 import { ServerPluginAuthority } from "./plugin-authority.mjs";
@@ -1214,7 +1215,7 @@ class ServerOwnedSession {
     this.server.pluginAuthority.assertAllowed(this.sessionKey, this.pluginSkillSources);
     const type = String(typeValue || "");
     if (['thread_message.receive', 'agents.receiveThreadMessage'].includes(type) && client.internalThreadMailbox !== true) throw new AgentServerProtocolError('Thread messages require server-assigned sender identity.', 'AGENT_SERVER_AUTH_FAILED');
-    const ownsTurn = type === 'prompt' || type === 'thread_message.receive' && !this.activeRequestContext && !this.foregroundPromptRequests;
+    const ownsTurn = type === 'prompt' || type === 'thread_message.receive' && !isSupportingAgentMessage(payload?.message) && !this.activeRequestContext && !this.foregroundPromptRequests;
     if (!BRIDGE_REQUEST_PATTERN.test(type)) throw new AgentServerProtocolError(`Bridge request type is not allowed: ${type || "missing"}.`);
     if (['prompt', 'configure'].includes(type)
       && String(payload?.model || this.connectedResult?.model || '').startsWith('opencode-harness/')) {

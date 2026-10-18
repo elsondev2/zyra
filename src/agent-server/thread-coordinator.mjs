@@ -15,7 +15,7 @@ export class AgentThreadCoordinator {
     const project = source.connectedResult.project || source.connectedResult.cwd;
     const agent = agentRunId ? source.latestFleetSnapshot?.agents?.[agentRunId] : null;
     if (agentRunId && (!agent || !['starting', 'running', 'waiting', 'completed'].includes(agent.status))) throw new Error('The sending agent is unavailable.');
-    return { project, senderThreadId: agent ? `agent-run:${agent.agentRunId}` : source.sessionKey, senderLabel: agent?.label || source.connectedResult.sessionName || 'Zyra', senderCanonicalThreadId: agent?.providerSessionId || source.sessionKey, agent };
+    return { project, senderThreadId: agent ? `agent-run:${agent.agentRunId}` : source.sessionKey, senderLabel: agent?.label || source.connectedResult.sessionName || 'Zyra', senderCanonicalThreadId: agent?.providerSessionId || source.sessionKey, senderConversationKind: agent ? getAgentConversationKind(agent) : 'thread', agent };
   }
   async request(source, message) {
     const sender = this.sender(source, message.agentRunId);

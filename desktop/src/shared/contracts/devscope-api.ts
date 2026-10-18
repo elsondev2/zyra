@@ -648,7 +648,7 @@ export interface DevScopeAssistantApi {
     agentAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
     workflowAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
     getStatus: () => Promise<AssistantRuntimeStatus>
-    getAccountOverview: (forceRefresh?: boolean) => Promise<DevScopeResult<AssistantAccountOverviewPayload>>
+    getAccountOverview: (forceRefresh?: boolean, accountId?: string) => Promise<DevScopeResult<AssistantAccountOverviewPayload>>
     redeemAccountReset: (input: AssistantRedeemAccountResetInput) => Promise<DevScopeResult<AssistantRedeemAccountResetPayload>>
     getUsageSummary: (input?: import('../assistant/usage-summary').UsageSummaryInput) => Promise<DevScopeResult<{ summary: import('../assistant/usage-summary').UsageSummary }>>
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>

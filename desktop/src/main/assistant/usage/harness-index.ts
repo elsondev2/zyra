@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs'
+import { createZstdDecompress } from 'node:zlib'
 import { mkdir, readFile, readdir, stat, writeFile, rename, open } from 'node:fs/promises'
 import { dirname, join, basename } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -26,7 +27,7 @@ async function* files(root: string): AsyncGenerator<string> {
         if (item.isSymbolicLink()) continue
         const path = join(root,item.name)
         if (item.isDirectory()) yield* files(path)
-        else if (/\.jsonl?$/.test(item.name)) yield path
+        else if (/\.(?:jsonl?|jsonl\.zst)$/.test(item.name)) yield path
     }
 }
 async function tailHash(path: string, offset: number) {
@@ -43,7 +44,7 @@ export class HarnessIndex {
     async load() {
         if (this.loaded) return
         this.loaded = true
-        try { const saved = JSON.parse(await readFile(this.cachePath,'utf8')); if (saved.version === 3) this.cache = saved.files || {} } catch { /* A cache is disposable; original logs remain authoritative. */ }
+        try { const saved = JSON.parse(await readFile(this.cachePath,'utf8')); if (saved.version === 4) this.cache = saved.files || {} } catch { /* A cache is disposable; original logs remain authoritative. */ }
     }
     records(): UsageEntry[] {
         const records: Record<string, UsageEntry> = {}
@@ -82,20 +83,27 @@ export class HarnessIndex {
         }
         await mkdir(dirname(this.cachePath),{recursive:true})
         const temporary = this.cachePath + '.tmp'
-        await writeFile(temporary,JSON.stringify({version:3,files:this.cache}),{mode:0o600})
+        await writeFile(temporary,JSON.stringify({version:4,files:this.cache}),{mode:0o600})
         await rename(temporary,this.cachePath)
     }
     private async scanFile(path: string, harness: UsageHarness) {
         const info = await stat(path), previous = this.cache[path]
         if (previous?.size === info.size && previous.mtime === info.mtimeMs) return
-        const append = !path.endsWith('.json') && previous && info.size > previous.size && previous.tail === await tailHash(path,previous.offset)
-        const cached: CachedFile = append ? previous : { size:0,mtime:0,offset:0,tail:'',state:initialParserState(basename(path)),records:{} }
+        const compressed = path.endsWith('.jsonl.zst')
+        const append = !compressed && !path.endsWith('.json') && previous && info.size > previous.size && previous.tail === await tailHash(path,previous.offset)
+        // Commit only after the complete stream succeeds. A corrupt compressed frame or
+        // failed append must not advance the last successful counters/parser state.
+        const cached: CachedFile = append ? { ...previous, state: { ...previous.state, total: previous.state.total ? { ...previous.state.total } : undefined }, records: Object.create(previous.records) } : { size:0,mtime:0,offset:0,tail:'',state:initialParserState(basename(path)),records:{} }
         if (path.endsWith('.json')) {
             putUsageRecord(cached.records,parseHarnessRecord(harness,JSON.parse(await readFile(path,'utf8')),cached.state))
             cached.offset = info.size
-        } else if (info.size > cached.offset) {
+        } else if (compressed || info.size > cached.offset) {
             let parts: Buffer[] = [], length = 0, discard = false, prefix = ''
-            for await (const chunk of createReadStream(path,{start:cached.offset,end:info.size-1,highWaterMark:256*1024})) {
+            const input = createReadStream(path, compressed ? { highWaterMark:256*1024 } : { start:cached.offset,end:info.size-1,highWaterMark:256*1024 })
+            // Compressed byte positions are not JSONL offsets. Reparse changed archives
+            // from the beginning and stream through the same bounded metadata scanner.
+            const stream = compressed ? input.compose(createZstdDecompress({ chunkSize:256*1024 })) : input
+            for await (const chunk of stream) {
                 const buffer = chunk as Buffer
                 let start = 0
                 while (start < buffer.length) {
@@ -124,7 +132,11 @@ export class HarnessIndex {
                 if (!discard && length > 32*1024*1024) throw new Error('Oversized usage record')
             }
         }
-        cached.size = info.size; cached.mtime = info.mtimeMs; cached.tail = await tailHash(path,cached.offset)
+        if (compressed) cached.offset = info.size
+        cached.size = info.size; cached.mtime = info.mtimeMs; cached.tail = compressed ? '' : await tailHash(path,cached.offset)
+        // The append overlay contains only changed counters, with prior records
+        // available for deduplication. Publish after all fallible stream/hash reads.
+        if (append) cached.records = Object.assign(previous.records, cached.records)
         this.cache[path] = cached
     }
     private async scanDatabase(path: string) {

@@ -14,7 +14,7 @@ mock.module('../src/renderer/src/pages/assistant/AssistantTimelineText', () => (
 const { AssistantConversationHeader } = await import('../src/renderer/src/pages/assistant/AssistantConversationHeader')
 const { AssistantTimelineThreadMessage } = await import('../src/renderer/src/pages/assistant/AssistantTimelineThreadMessage')
 
-const details = { messageId: 'receipt-1', senderThreadId: 'agent-run:a', senderCanonicalThreadId: 'chat-a', senderLabel: 'Xara', recipientThreadId: 'chat-b', text: 'Check the evidence from my thread.', createdAt: '2026-10-01T12:00:00.000Z' }
+const details = { messageId: 'receipt-1', senderThreadId: 'agent-run:a', senderConversationKind: 'thread', senderCanonicalThreadId: 'chat-a', senderLabel: 'Xara', recipientThreadId: 'chat-b', text: 'Check the evidence from my thread.', createdAt: '2026-10-01T12:00:00.000Z' }
 const live = projectThreadMessage(details, '2026-10-01T12:00:01.000Z')!
 const history = projectThreadMessage(details, '2026-10-01T12:00:02.000Z', 12)!
 assert.equal(live.id, history.id, 'Live events and replayed history share one receipt identity')
@@ -27,6 +27,8 @@ assert.match(markup, /Check the evidence from my thread/)
 assert.match(markup, /data-assistant-thread-message-bubble/)
 assert(markup.indexOf('data-assistant-thread-message-label') < markup.indexOf('data-assistant-thread-message-body'), 'Sender provenance sits above the bubble')
 assert(!markup.includes('Dismiss') && !markup.includes('more messages'))
+const cachedSupporting = { ...history, payload: { ...history.payload, senderConversationKind: undefined, senderThreadId: 'agent-run:worker-uuid' } }
+assert.equal(renderToStaticMarkup(<AssistantTimelineThreadMessage activity={cachedSupporting} />), '', 'The bubble component also rejects old supporting receipts during direct/cached rendering')
 const messages = [
     { id: 'user', role: 'user', text: 'Start work', turnId: 'turn', createdAt: '2026-10-01T11:59:00.000Z', updatedAt: '2026-10-01T11:59:00.000Z', streaming: false },
     { id: 'before', role: 'assistant', text: 'Checking', turnId: 'turn', createdAt: '2026-10-01T11:59:30.000Z', updatedAt: '2026-10-01T11:59:30.000Z', streaming: false },

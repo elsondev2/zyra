@@ -4,6 +4,7 @@ import type { UsageSummary } from '@shared/assistant/usage-summary'
 import { formatUsageDate, formatUsageMeasurement, formatUsageTokens, formatUsageUsd, hasUsageValue, usageMetricValue } from './usage-presentation'
 import { usageCurvePaths, usageNiceScale } from './usage-chart-geometry'
 import { UsageActivityChart } from './UsageActivityChart'
+import { UsageChoice } from './UsageChoice'
 
 const width = 960, height = 224, top = 8, bottom = 212
 export function UsageTrendChart({ daily, metric, view, onViewChange }: { daily: UsageSummary['daily']; metric: 'cost' | 'tokens'; view: UsageChartView; onViewChange: (view: UsageChartView) => void }) {
@@ -22,7 +23,7 @@ export function UsageTrendChart({ daily, metric, view, onViewChange }: { daily: 
     const label = `${effectiveView === 'cumulative' ? 'Cumulative' : effectiveView === 'weekly' ? 'Weekly' : 'Daily'} ${metric === 'cost' ? 'cost' : 'processed tokens'}`
     const pick = (index: number) => { const safe = Math.max(0, Math.min(periods.length - 1, index)); if (periods[safe]) setHovered({ date: periods[safe].date, index: safe }) }
     return <section className="usage-trend" aria-label={label}>
-        <div className="usage-section-heading"><h2>{label}</h2><select aria-label="Chart view" value={effectiveView} onChange={event => onViewChange(event.target.value as UsageChartView)} className="usage-quiet-select"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="cumulative">Cumulative</option>{metric === 'tokens' && <option value="activity">Activity</option>}</select></div>
+        <div className="usage-section-heading"><h2>{label}</h2><UsageChoice label="Chart view" value={effectiveView} onChange={onViewChange} options={[{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }, { value: 'cumulative', label: 'Cumulative' }, ...(metric === 'tokens' ? [{ value: 'activity' as const, label: 'Activity' }] : [])]} /></div>
         <div className="usage-trend-grid">
             <div className="usage-trend-scale" aria-hidden="true">{geometry.scale.ticks.map(tick => <span key={tick} style={{ top: `${(bottom - tick / geometry.scale.max * (bottom - top)) / height * 100}%` }}>{format(tick)}</span>)}</div>
             <div className="usage-trend-plot" tabIndex={0} role="group" aria-label={`${label}. Use arrow keys to inspect dates.`} onFocus={() => pick(periods.length - 1)} onBlur={() => setHovered(null)} onPointerLeave={() => setHovered(null)} onPointerMove={event => { const rect = event.currentTarget.getBoundingClientRect(); pick(Math.round((event.clientX - rect.left) / Math.max(1, rect.width) * (periods.length - 1))) }} onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (event.key === 'Escape') setHovered(null); else pick(event.key === 'Home' ? 0 : event.key === 'End' ? periods.length - 1 : (hovered?.index ?? periods.length - 1) + (event.key === 'ArrowLeft' ? -1 : 1)) } }}>

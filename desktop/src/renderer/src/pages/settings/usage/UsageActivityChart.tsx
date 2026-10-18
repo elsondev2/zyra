@@ -2,6 +2,7 @@ import './UsageActivityChart.css'
 import { useMemo, useState } from 'react'
 import type { UsageSummary } from '@shared/assistant/usage-summary'
 import { projectUsageChart, type UsageChartView } from '@shared/assistant/usage-chart'
+import { UsageChoice } from './UsageChoice'
 export const formatTokens = (value: number) => new Intl.NumberFormat(undefined, { notation:'compact', maximumFractionDigits:1 }).format(value)
 export const formatDay = (date: string) => new Date(date+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'})
 const labels = {daily:'Daily',cumulative:'Cumulative',weekly:'Weekly',activity:'Activity'}
@@ -26,9 +27,9 @@ export function UsageActivityChart({ daily, view, onViewChange }: { daily: Usage
     },[year,daily])
     const calendarMax = Math.max(1,...calendar.map(day => day.tokens))
     const active = selected || (view === 'activity' ? calendar.find(day => day.date === hovered) : undefined)
-    return <div className="min-w-0 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-medium">Token activity</h2><div className="flex flex-wrap gap-1" role="group" aria-label="Chart view">{(Object.keys(labels) as UsageChartView[]).map(item => <button key={item} type="button" aria-pressed={view===item} onClick={() => {onViewChange(item);setHovered(null)}} className={`rounded-md px-2.5 py-1.5 text-[11px] transition-colors ${view===item?'bg-[var(--settings-nav-active)] text-[var(--settings-text)]':'text-[var(--settings-text-muted)] hover:bg-[var(--settings-row-hover)]'}`}>{labels[item]}</button>)}</div></div>
-        <div className="flex min-h-5 items-center justify-between gap-3 text-[11px] text-[var(--settings-text-muted)]"><span>{active ? `${view==='weekly'?'Week of ':''}${formatDay(active.date)} · ${'inRange' in active && !active.inRange ? 'Outside selected period' : `${active.tokens.toLocaleString()} tokens`}` : view==='cumulative'?'Running total within the selected period':view==='weekly'?'Weeks start Monday; edge weeks may be partial':view==='activity'?'Each square is a day':'Tokens processed each day'}</span>{view==='activity'&&years.length>1&&<select aria-label="Activity year" value={year} onChange={e=>{setChosenYear(e.target.value);setHovered(null)}} className="rounded bg-[var(--settings-surface)] px-2 py-1 text-xs">{years.map(value=><option key={value}>{value}</option>)}</select>}</div>
+    return <div className="usage-trend min-w-0 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-medium">Token activity</h2><UsageChoice label="Chart view" value={view} onChange={value => {onViewChange(value);setHovered(null)}} options={(Object.keys(labels) as UsageChartView[]).map(value => ({ value, label: labels[value] }))} /></div>
+        <div className="flex min-h-5 items-center justify-between gap-3 text-[11px] text-[var(--settings-text-muted)]"><span>{active ? `${view==='weekly'?'Week of ':''}${formatDay(active.date)} · ${'inRange' in active && !active.inRange ? 'Outside selected period' : `${active.tokens.toLocaleString()} tokens`}` : view==='cumulative'?'Running total within the selected period':view==='weekly'?'Weeks start Monday; edge weeks may be partial':view==='activity'?'Each square is a day':'Tokens processed each day'}</span>{view==='activity'&&years.length>1&&<UsageChoice label="Activity year" value={year} onChange={value=>{setChosenYear(value);setHovered(null)}} options={years.map(value => ({ value, label: value }))} />}</div>
         <svg key={view} viewBox={`0 0 ${width} ${view==='activity'?132:height}`} className="usage-chart-view w-full overflow-visible" role="group" aria-label={`${labels[view]} token usage`} onMouseLeave={()=>setHovered(null)}>
             {view==='activity' ? <>
                 {['Mon','Wed','Fri'].map((label,i)=><text key={label} x="0" y={31+i*28} fill="var(--settings-text-muted)" fontSize="9">{label}</text>)}

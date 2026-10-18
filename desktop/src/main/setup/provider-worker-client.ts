@@ -85,13 +85,13 @@ export class ProviderWorkerClient {
     }
 
     readonly account = {
-        buildChatGptAccountStatus: (provider?: string, options?: { includeUsage?: boolean; refreshCredential?: boolean }) => this.request({
+        buildChatGptAccountStatus: (provider?: string, options?: { includeUsage?: boolean; refreshCredential?: boolean; accountId?: string }) => this.request({
             operation: 'buildChatGptAccountStatus',
             provider,
             options
         }),
         resolveChatGptAccountAuth: () => this.request({ operation: 'resolveChatGptAccountAuth' }),
-        fetchCodexResetCredits: () => this.request({ operation: 'fetchCodexResetCredits' })
+        fetchCodexResetCredits: (options?: { accountId?: string }) => this.request({ operation: 'fetchCodexResetCredits', options })
     }
 
     warm(): Promise<void> {

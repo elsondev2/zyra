@@ -1143,11 +1143,12 @@ export class AssistantService {
         return { success: true as const, result }
     }
 
-    async getAccountOverview(forceRefresh = false) {
+    async getAccountOverview(forceRefresh = false, accountId?: string) {
         await this.ensureReady()
         return {
             success: true as const,
-            overview: await this.accountService.getOverview(forceRefresh)
+            overview: await this.accountService.getOverview(forceRefresh, accountId),
+            ...(accountId === undefined ? {} : { resetAccountId: accountId })
         }
     }
 

@@ -24,4 +24,14 @@ assert.deepEqual(groupChatGptUsage([dual], now).map(group => group.label), ['5-h
 const unknown = account('unknown', 0, { usage: null })
 assert.equal(summarizeUsageGroup(groupChatGptUsage([unknown], now)[0], policy, now).averageUsed, null, 'unreported quota is not treated as full capacity')
 assert.equal(summarizeUsageGroup(groupChatGptUsage([unknown], now)[0], policy, now).nextReset, null)
+for (const value of [null, undefined, NaN, Infinity, '', '45']) {
+    const malformed = account('malformed', value as unknown as number)
+    assert.equal(summarizeUsageGroup(groupChatGptUsage([malformed], now)[0], policy, now).averageUsed, null, 'invalid runtime usage never becomes zero or full capacity')
+    const mixed = summarizeUsageGroup(groupChatGptUsage([malformed, accounts[0]], now)[0], policy, now)
+    assert.equal(mixed.averageUsed, 15, 'unreported percentages do not dilute known averages')
+    assert.equal(mixed.count, 1)
+}
+const partialDuplicate = account('duplicate', NaN)
+partialDuplicate.usage!.secondary = { usedPercent: 20, resetAt, windowSeconds: 604800 }
+assert.equal(summarizeUsageGroup(groupChatGptUsage([partialDuplicate], now)[0], policy, now).averageUsed, 20, 'a valid duplicate replaces an invalid percentage')
 console.log('ChatGPT usage groups: period labels, averaging, selection, pause, reset and unknown usage: ok')

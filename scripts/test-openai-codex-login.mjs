@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { connect } from "node:net";
+import { once } from "node:events";
 import { loginZyraAuth as loginDesktopZyraAuth } from "../src/desktop-openai-auth.mjs";
 import { loginOpenAICodexAuth } from "../src/openai-codex-login.mjs";
 import { OPENAI_CODEX_OAUTH_CLIENT_ID } from "../src/openai-codex-oauth.mjs";
@@ -41,13 +43,59 @@ const browserResult = await loginOpenAICodexAuth({
     assert.equal(callback.status, 200);
     const callbackPage = await callback.text();
     assert.match(callbackPage, /ChatGPT/);
-    assert.match(callbackPage, /<h1>You can return to Zyra<\/h1>/);
-    assert.match(callbackPage, /Sign-in received/);
-    assert.match(callbackPage, /data:image\/png;base64/);
+    assert.match(callbackPage, /<h1>Return to Zyra<\/h1>/);
+    assert.match(callbackPage, /ChatGPT sign-in received/);
+    assert.match(callbackPage, /background:#000/);
+    assert.equal((callbackPage.match(/<img /gu) || []).length, 2);
+    assert.match(callbackPage, /data:font\/woff2;base64,/);
     assert.match(callback.headers.get('content-security-policy'), /img-src data:/);
     assert.doesNotMatch(callbackPage, /fixture-auth-code/);
   },
 });
+// Browsers may open a speculative connection without sending an HTTP request.
+// That connection must not hold completed OAuth or cancellation hostage.
+for (const cancel of [false, true]) {
+  const controller = new AbortController();
+  let spareSocket;
+  let deadline;
+  let saved = false;
+  let settleAuth;
+  const authOpened = new Promise(resolve => { settleAuth = resolve; });
+  const pending = loginOpenAICodexAuth({ async loginOAuth() { saved = true; } }, {
+    authBaseUrl: 'https://auth.fixture.invalid', callbackPort: 0, redirectHost: '127.0.0.1',
+    signal: controller.signal,
+    fetchImpl: async () => jsonResponse(tokenResponse),
+    onAuth: async ({ url }) => {
+      const authorization = new URL(url);
+      const redirect = new URL(authorization.searchParams.get('redirect_uri'));
+      spareSocket = connect({ host: '127.0.0.1', port: Number(redirect.port) });
+      await once(spareSocket, 'connect');
+      if (cancel) controller.abort();
+      else {
+        redirect.search = new URLSearchParams({ code: 'fixture-spare-socket', state: authorization.searchParams.get('state') });
+        const response = await fetch(redirect);
+        assert.equal(response.status, 200);
+        assert.match(await response.text(), /ChatGPT sign-in received/);
+      }
+      settleAuth();
+    }
+  });
+  const settled = pending.then(() => true, error => {
+    if (!cancel) throw error;
+    assert.equal(error.code, 'ZYRA_OAUTH_CANCELLED');
+    return true;
+  });
+  try {
+    await authOpened;
+    const completed = await Promise.race([settled, new Promise(resolve => { deadline = setTimeout(() => resolve(false), 750); })]);
+    assert.equal(completed, true, `${cancel ? 'cancellation' : 'successful sign-in'} must settle while a speculative browser connection stays open`);
+    assert.equal(saved, !cancel, 'only completed, uncancelled sign-in may save credentials');
+  } finally {
+    clearTimeout(deadline);
+    spareSocket?.destroy();
+    await settled;
+  }
+}
 assert.equal(browserResult.accountId, "fixture-account-id");
 assert.equal(browserCredential.accountId, "fixture-account-id");
 assert.equal(browserCredential.access, tokenResponse.access_token);

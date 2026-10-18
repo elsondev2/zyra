@@ -130,8 +130,8 @@ export function handleAssistantWorkflowAction(_event: Electron.IpcMainInvokeEven
     return withAssistantResult(() => getAssistantService().runFleetOperation('workflows', input))
 }
 
-export function handleAssistantGetAccountOverview(_event: Electron.IpcMainInvokeEvent, forceRefresh?: boolean) {
-    return withAssistantResult(() => getAssistantService().getAccountOverview(Boolean(forceRefresh)))
+export function handleAssistantGetAccountOverview(_event: Electron.IpcMainInvokeEvent, forceRefresh?: boolean, accountId?: string) {
+    return withAssistantResult(() => getAssistantService().getAccountOverview(Boolean(forceRefresh), accountId))
 }
 
 export function handleAssistantRedeemAccountReset(_event: Electron.IpcMainInvokeEvent, input: AssistantRedeemAccountResetInput) {

@@ -17,7 +17,7 @@ const configurations = new Map<string,{timeZone:string; ownedSessionIds:string[]
 let scanning = false, scannedAt = 0, scanError = false
 const snapshotReady = readFile(snapshotPath,'utf8').then(text => {
     const saved = JSON.parse(text)
-    if (saved.version === 2) for (const [key,value] of saved.entries) snapshots.set(key,value)
+    if (saved.version === 3) for (const [key,value] of saved.entries) snapshots.set(key,value)
 }).catch(()=>{})
 async function refresh() {
     scanning = true; scanError = false
@@ -34,7 +34,7 @@ async function refresh() {
         updateRollups()
         while (snapshots.size > 4) snapshots.delete(snapshots.keys().next().value!)
         await mkdir(dirname(snapshotPath),{recursive:true})
-        await writeFile(snapshotPath+'.tmp',JSON.stringify({version:2,entries:[...snapshots]}),{mode:0o600})
+        await writeFile(snapshotPath+'.tmp',JSON.stringify({version:3,entries:[...snapshots]}),{mode:0o600})
         await rename(snapshotPath+'.tmp',snapshotPath)
     } catch { scanError = true }
     finally { scanning = false; scannedAt = Date.now(); parentPort!.postMessage({type:'indexed'}) }

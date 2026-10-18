@@ -11,7 +11,8 @@ import {
   listCodexUsageWindows,
   normalizeCodexLimitWindow,
 } from "./codex-usage-windows.mjs";
-import { createZyraCredentialAuthStorage } from "./zyra-auth-store.mjs";
+import { createZyraCredentialAuthStorage, ZyraCredentialStore, resolveZyraAuthPath } from "./zyra-auth-store.mjs";
+import { ChatGptAccountPool } from "./chatgpt-account-pool.mjs";
 
 const CHATGPT_ACCOUNT_PROVIDER = "openai-codex";
 const CODEX_ACCOUNT_API_BASE = "https://chatgpt.com/backend-api";
@@ -48,12 +49,15 @@ const CHATGPT_REALTIME_VOICES = new Set([
 ]);
 
 export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVIDER, options = {}) {
-  const authStorage = options.authStorage ?? await createZyraCredentialAuthStorage(options);
-  const status = authStorage.getAuthStatus(provider);
-  let credential = authStorage.get(provider);
+  const selected = options.accountId !== undefined;
+  if (selected && provider !== CHATGPT_ACCOUNT_PROVIDER) throw new Error("The selected ChatGPT account is invalid for this provider.");
+  const selectedCredential = selected ? await resolveSelectedAccountCredential(options) : undefined;
+  const authStorage = selected ? undefined : options.authStorage ?? await createZyraCredentialAuthStorage(options);
+  const status = selected ? { configured: true, source: "stored" } : authStorage.getAuthStatus(provider);
+  let credential = selectedCredential ?? authStorage?.get(provider);
   let claims = extractOpenAiCodexClaims(credential?.access);
 
-  if (provider === CHATGPT_ACCOUNT_PROVIDER && status.configured) {
+  if (!selected && provider === CHATGPT_ACCOUNT_PROVIDER && status.configured) {
     const expiresAt = normalizeResetAt(credential?.expires);
     const credentialNeedsRefresh = !credential?.access
       || !expiresAt
@@ -69,7 +73,11 @@ export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVI
   let usageError;
   if (provider === CHATGPT_ACCOUNT_PROVIDER && status.configured && options.includeUsage !== false) {
     try {
-      usage = await fetchCodexUsageStats();
+      // Reuse the exact selected credential for metadata and usage. Selection
+      // was already validated through the pool, without promoting the account.
+      usage = await fetchCodexUsageStats(selected
+        ? { ...options, accountId: undefined, accountCredential: selectedCredential }
+        : options);
     } catch (error) {
       usageError = error instanceof Error ? error.message : String(error);
     }
@@ -78,6 +86,7 @@ export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVI
   return {
     provider,
     status,
+    ...(selected ? { poolAccountId: options.accountId } : {}),
     email: claims?.email,
     emailVerified: claims?.emailVerified,
     plan: claims?.plan ?? usage?.plan,
@@ -125,9 +134,12 @@ export async function fetchCodexUsageStats(options = {}) {
   return normalizeCodexUsageStats(data, auth.source, auth);
 }
 
-export async function fetchCodexResetCredits() {
-  const { data } = await requestCodexAccountJson("/wham/rate-limit-reset-credits");
-  return normalizeCodexResetCredits(data);
+export async function fetchCodexResetCredits(options = {}) {
+  const { data } = await requestCodexAccountJson("/wham/rate-limit-reset-credits", {}, options);
+  return {
+    ...normalizeCodexResetCredits(data),
+    ...(options.accountId !== undefined ? { poolAccountId: options.accountId } : {}),
+  };
 }
 
 export async function redeemCodexResetCredit(creditId, options = {}) {
@@ -164,9 +176,20 @@ export function formatCodexUsageStats(stats) {
   return lines;
 }
 
+async function resolveSelectedAccountCredential(options) {
+  const id = options.accountId;
+  if (typeof id !== "string" || !id || id !== id.trim() || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id)) {
+    throw new Error("The selected ChatGPT account is invalid.");
+  }
+  const store = options.credentialStore ?? new ZyraCredentialStore({ authPath: options.authPath ?? resolveZyraAuthPath(options) });
+  return new ChatGptAccountPool(store, options).credential(id, { signal: options.signal });
+}
+
 export async function resolveChatGptAccountAuth(options = {}) {
-  if (options.accountCredential) {
-    const credential = options.accountCredential;
+  // An explicit selection always wins over injected credentials and primary auth.
+  const selectedCredential = options.accountId !== undefined ? await resolveSelectedAccountCredential(options) : undefined;
+  if (selectedCredential || options.accountCredential) {
+    const credential = selectedCredential ?? options.accountCredential;
     const claims = extractOpenAiCodexClaims(credential.access);
     return { source: 'Zyra credential store', accessToken: credential.access, accountId: credential.accountId ?? claims?.accountId, email: claims?.email };
   }
@@ -550,7 +573,7 @@ export function normalizeCodexResetCredits(data) {
     : [];
   const reportedCount = firstNumber(data?.available_count);
   return {
-    availableCount: reportedCount ?? credits.filter(isCodexResetCreditAvailable).length,
+    availableCount: reportedCount ?? (Array.isArray(data?.credits) ? credits.filter(isCodexResetCreditAvailable).length : undefined),
     credits,
   };
 }
@@ -692,6 +715,7 @@ function resetDateValue(value, fallback) {
 
 function firstNumber(...values) {
   for (const value of values) {
+    if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) continue;
     const number = Number(value);
     if (Number.isFinite(number)) return number;
   }

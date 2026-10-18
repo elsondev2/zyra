@@ -122,6 +122,7 @@ function isUsableSubscription(status: ChatGptStatusResult): boolean {
 export class OpenAIConnectionService {
     private poolOperation: Promise<ChatGptPoolSnapshot> | null = null
     private operation: Promise<OnboardingAuthStatus> | null = null
+    private statusOperation: Promise<OnboardingAuthStatus> | null = null
     private verifiedCache: { status: OnboardingAuthStatus; expiresAt: number } | null = null
     private disconnectOperation: Promise<OpenAIConnectionsStatus> | null = null
     private readonly loadSdk: () => Promise<ZyraSdkAuthModule>
@@ -151,7 +152,17 @@ export class OpenAIConnectionService {
         if (this.verifiedCache && this.verifiedCache.expiresAt > this.now().getTime()) {
             return Promise.resolve({ ...this.verifiedCache.status, checkedAt: this.now().toISOString() })
         }
-        return this.track(this.verifyConnections())
+        if (this.statusOperation) return this.statusOperation
+        const tracked = this.verifyConnections().then(status => {
+            if (this.statusOperation === tracked && !this.operation) {
+                this.verifiedCache = status.verified ? { status, expiresAt: this.now().getTime() + 60_000 } : null
+            }
+            return status
+        })
+        this.statusOperation = tracked
+        const clear = () => { if (this.statusOperation === tracked) this.statusOperation = null }
+        void tracked.then(clear, clear)
+        return tracked
     }
 
     async getConnectionsStatus(): Promise<OpenAIConnectionsStatus> {
@@ -168,6 +179,7 @@ export class OpenAIConnectionService {
         if (method !== 'chatgpt' && method !== 'api-key') return Promise.reject(new Error('Choose a valid OpenAI connection to disconnect.'))
         if (this.operation || this.disconnectOperation || this.poolOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
 
+        this.statusOperation = null
         const tracked = this.performDisconnect(method)
         this.disconnectOperation = tracked
         const clear = () => {
@@ -214,6 +226,7 @@ export class OpenAIConnectionService {
 
     updateChatGptAccounts(input: ChatGptAccountsUpdate): Promise<ChatGptPoolSnapshot> {
         if (this.operation || this.disconnectOperation || this.poolOperation) return Promise.reject(new Error('Wait for the current account action to finish.'))
+        if (input.action !== 'alias') this.statusOperation = null
         const task = (async () => {
             const sdk = await this.loadSdk()
             if (!sdk.updateChatGptAccounts) throw new Error('ChatGPT account management is unavailable.')
@@ -241,6 +254,8 @@ export class OpenAIConnectionService {
     connectChatGpt(signInMethod: ChatGptSignInMethod = 'browser', accountId?: string): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
         if (this.disconnectOperation || this.poolOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
+        this.statusOperation = null
+        this.verifiedCache = null
         const controller = new AbortController()
         this.chatGptLoginController = controller
         return this.track((async () => {
@@ -271,8 +286,13 @@ export class OpenAIConnectionService {
                     }
                 })
                 this.chatGptLoginController = null
-                await this.dependencies.onCredentialChanged?.('openai-codex')
-                return await this.verifyChatGptConnection()
+                const status = await this.verifyChatGptConnection()
+                // The credentials are already saved and verified. A slow or unavailable
+                // attached chat must not keep the browser sign-in action open.
+                void Promise.resolve().then(() => this.dependencies.onCredentialChanged?.('openai-codex')).catch(() => {
+                    console.warn('[OpenAIConnectionService] Credentials saved, but live chat authentication refresh failed.')
+                })
+                return status
             } finally {
                 if (this.chatGptLoginController === controller) this.chatGptLoginController = null
                 this.chatGptDeviceCode = null
@@ -298,6 +318,7 @@ export class OpenAIConnectionService {
     connectApiKey(apiKey: string): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
         if (this.disconnectOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
+        this.statusOperation = null
         return this.track((async () => {
             const key = typeof apiKey === 'string' ? apiKey.trim() : ''
             if (!key || /\s/.test(key) || key.length > 4_096) throw new Error('Enter a valid OpenAI API key.')

@@ -9,6 +9,7 @@ export function usagePeriodLabel(seconds: number | null, fallback: string) {
     return `${Math.ceil(seconds / 60)}-minute`
 }
 export function currentUsedPercent(window: ChatGptAccountUsageWindow, now = Date.now()) {
+    if (typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
     return window.resetAt && Date.parse(window.resetAt) <= now ? 0 : Math.min(100, Math.max(0, window.usedPercent))
 }
 export function isUsageAccountAllowed(account: ChatGptAccountProfile, policy: ChatGptRoutingPolicy) {
@@ -27,7 +28,9 @@ export function groupChatGptUsage(accounts: ChatGptAccountProfile[], now = Date.
             const duplicate = group.entries.find(entry => entry.account.id === account.id)
             if (duplicate?.window && window) {
                 // If two constraints have the same duration, show the tighter one once.
-                if (currentUsedPercent(window, now) > currentUsedPercent(duplicate.window, now)) duplicate.window = window
+                const next = currentUsedPercent(window, now)
+                const previous = currentUsedPercent(duplicate.window, now)
+                if (next !== null && (previous === null || next > previous)) duplicate.window = window
             } else group.entries.push({ account, window: window || null })
             groups.set(key, group)
         }
@@ -36,9 +39,13 @@ export function groupChatGptUsage(accounts: ChatGptAccountProfile[], now = Date.
 }
 export function summarizeUsageGroup(group: ChatGptUsageGroup, policy: ChatGptRoutingPolicy, now = Date.now()) {
     const allowed = group.entries.filter(entry => isUsageAccountAllowed(entry.account, policy))
-    const known = allowed.filter((entry): entry is typeof entry & { window: ChatGptAccountUsageWindow } => entry.window !== null)
+    const known = allowed.flatMap(entry => {
+        if (!entry.window) return []
+        const used = currentUsedPercent(entry.window, now)
+        return used === null ? [] : [{ used }]
+    })
     // Capacity is not reported, so this is a per-account average, never a pooled quota.
-    const averageUsed = known.length ? known.reduce((sum, entry) => sum + currentUsedPercent(entry.window, now), 0) / known.length : null
-    const resets = known.map(entry => entry.window.resetAt ? Date.parse(entry.window.resetAt) : NaN).filter(reset => Number.isFinite(reset) && reset > now)
+    const averageUsed = known.length ? known.reduce((sum, entry) => sum + entry.used, 0) / known.length : null
+    const resets = allowed.map(entry => entry.window?.resetAt ? Date.parse(entry.window.resetAt) : NaN).filter(reset => Number.isFinite(reset) && reset > now)
     return { averageUsed, count: known.length, allowedCount: allowed.length, nextReset: resets.length ? Math.min(...resets) : null }
 }

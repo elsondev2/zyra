@@ -254,11 +254,25 @@ test('legacy partial preferences preserve valid fields and default newly added s
     })
 })
 
+test('removed Limits metric falls back to cost without discarding other preferences', () => {
+    withStore(JSON.stringify({ metric: 'limits', days: 90, harness: 'pi', breakdown: 'provider', chartView: 'weekly' }), store => {
+        assert.deepEqual(readUsagePreferences(), { metric: 'cost', days: 90, harness: 'pi', breakdown: 'provider', chartView: 'weekly' })
+        assert.deepEqual(store.writes, [], 'reading legacy preferences does not mutate storage')
+    })
+})
+
+test('removed Day breakdown falls back to Model without discarding other preferences', () => {
+    withStore(JSON.stringify({ metric: 'tokens', days: 90, harness: 'codex', breakdown: 'day', chartView: 'cumulative' }), store => {
+        assert.deepEqual(readUsagePreferences(), { metric: 'tokens', days: 90, harness: 'codex', breakdown: 'model', chartView: 'cumulative' })
+        assert.deepEqual(store.writes, [], 'reading old preferences does not mutate storage')
+    })
+})
+
 test('every supported metric, period, tool, breakdown and chart view survives saving and reading', () => {
     const choices: { [K in keyof UsagePagePreferences]: UsagePagePreferences[K][] } = {
-        metric: ['cost', 'tokens', 'limits'], days: [7, 30, 90, 365, 'all'],
+        metric: ['cost', 'tokens'], days: [7, 30, 90, 365, 'all'],
         harness: ['all', ...Object.keys(usageHarnessLabels) as Array<keyof typeof usageHarnessLabels>],
-        breakdown: ['model', 'day', 'harness', 'provider'], chartView: ['daily', 'weekly', 'cumulative', 'activity']
+        breakdown: ['model', 'harness', 'provider'], chartView: ['daily', 'weekly', 'cumulative', 'activity']
     }
     for (const field of Object.keys(choices) as Array<keyof UsagePagePreferences>) for (const choice of choices[field]) {
         const value = { ...defaults, [field]: choice }
@@ -274,12 +288,12 @@ test('every supported metric, period, tool, breakdown and chart view survives sa
 })
 
 test('invalid preference fields default independently without discarding valid settings', () => {
-    const valid: UsagePagePreferences = { metric: 'tokens', days: 90, harness: 'pi', breakdown: 'day', chartView: 'weekly' }
+    const valid: UsagePagePreferences = { metric: 'tokens', days: 90, harness: 'pi', breakdown: 'provider', chartView: 'weekly' }
     const corrupt: Record<keyof UsagePagePreferences, unknown[]> = {
         metric: ['spend', '', 1, null, {}, ['tokens']],
         days: [0, 14, -7, '7', null, {}, [7]],
         harness: ['future-tool', '', 'constructor', '__proto__', 7, null, {}],
-        breakdown: ['tool', '', 1, null, {}, ['day']],
+        breakdown: ['day', 'tool', '', 1, null, {}, ['day']],
         chartView: ['monthly', '', 1, null, {}, ['daily']]
     }
     for (const field of Object.keys(corrupt) as Array<keyof UsagePagePreferences>) for (const invalid of corrupt[field]) {
@@ -313,7 +327,7 @@ test('preference reads return independent objects and cannot mutate future defau
     for (const raw of [null, '{', JSON.stringify({ ...defaults, metric: 'tokens', harness: 'codex' })]) withStore(raw, store => {
         const first = readUsagePreferences()
         const snapshot = { ...first }
-        first.metric = 'limits'
+        first.metric = first.metric === 'tokens' ? 'cost' : 'tokens'
         first.harness = 'pi'
         assert.deepEqual(readUsagePreferences(), snapshot)
         assert.deepEqual(store.writes, [])

@@ -83,8 +83,8 @@ import { AssistantBrowserViewportFrame } from './AssistantBrowserViewportFrame'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
 import { browserTabsToMount } from './assistant-browser-lazy-restore'
 import { useBackgroundBrowserState } from './useBackgroundBrowserState'
+import { useAssistantBrowserOmniboxSuggestions } from './useAssistantBrowserOmniboxSuggestions'
 import {
-    buildAssistantBrowserOmniboxSuggestions,
     filterAssistantBrowserHistory,
     mergeAssistantBrowserHistoryEntry,
     resolveAssistantBrowserOmniboxActiveDescendant,
@@ -304,9 +304,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [browserHistory, setBrowserHistory] = useState<DevScopeBrowserHistoryEntry[]>([])
     const [browserBookmarks, setBrowserBookmarks] = useState<DevScopeBrowserBookmark[]>([])
     const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
-    const [historySearch, setHistorySearch] = useState<{ query: string; entries: DevScopeBrowserHistoryEntry[] }>({ query: '', entries: [] })
-    const [googleSearchSuggestions, setGoogleSearchSuggestions] = useState<{ query: string; suggestions: string[] }>({ query: '', suggestions: [] })
-    const [omniboxLoading, setOmniboxLoading] = useState(false)
     const [historyPanelOpen, setHistoryPanelOpen] = useState(false)
     const [historyImportOpen, setHistoryImportOpen] = useState(false)
     const [historyPanelQuery, setHistoryPanelQuery] = useState('')
@@ -376,19 +373,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const projectServers = useMemo(() => localServers.filter((server) => server.attachedToProject), [localServers])
     const otherLocalServers = useMemo(() => localServers.filter((server) => !server.attachedToProject), [localServers])
     const historyQuery = addressFocused && addressValue !== activeAddress ? addressValue.trim() : ''
-    const historySuggestionEntries = useMemo(() => historyQuery
-        ? historySearch.query === historyQuery
-            ? historySearch.entries
-            : filterAssistantBrowserHistory(browserHistory, historyQuery, 24)
-        : [], [browserHistory, historyQuery, historySearch])
-    const activeGoogleSearchSuggestions = googleSearchSuggestions.query === historyQuery
-        ? googleSearchSuggestions.suggestions
-        : []
-    const omniboxSuggestions = useMemo(() => buildAssistantBrowserOmniboxSuggestions(
-        activeGoogleSearchSuggestions,
-        historySuggestionEntries,
-        8
-    ), [activeGoogleSearchSuggestions, historySuggestionEntries])
+    const { suggestions: omniboxSuggestions, loading: omniboxLoading, clear: clearOmniboxSuggestions } = useAssistantBrowserOmniboxSuggestions(
+        historyQuery, browserHistory, settings.assistantBrowserGoogleSuggestions
+    )
     const historyPanelEntries = historyPanelQuery && historyPanelSearch.query === historyPanelQuery
         ? historyPanelSearch.entries
         : historyPanelQuery
@@ -849,45 +836,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [active, chatIntegration, threadId])
 
     useEffect(() => {
-        if (!historyQuery) {
-            setHistorySearch({ query: '', entries: [] })
-            setGoogleSearchSuggestions({ query: '', suggestions: [] })
-            setOmniboxLoading(false)
-            return
-        }
-        let cancelled = false
-        setOmniboxLoading(true)
-        const timeoutId = window.setTimeout(() => {
-            const requests: Promise<void>[] = []
-            if (typeof window.devscope.getBrowserHistory === 'function') {
-                requests.push(window.devscope.getBrowserHistory({ query: historyQuery, limit: 24 }).then((result) => {
-                    if (!cancelled && result.success) setHistorySearch({ query: historyQuery, entries: result.entries })
-                }).catch(() => {
-                    // Keep filtering the already loaded local history when the deeper lookup is unavailable.
-                }))
-            }
-            if (settings.assistantBrowserGoogleSuggestions && typeof window.devscope.getBrowserSearchSuggestions === 'function') {
-                requests.push(window.devscope.getBrowserSearchSuggestions({ query: historyQuery }).then((result) => {
-                    if (!cancelled) setGoogleSearchSuggestions({ query: historyQuery, suggestions: result.success ? result.suggestions : [] })
-                }).catch(() => {
-                    if (!cancelled) setGoogleSearchSuggestions({ query: historyQuery, suggestions: [] })
-                }))
-            } else {
-                setGoogleSearchSuggestions({ query: historyQuery, suggestions: [] })
-            }
-            void Promise.allSettled(requests).then(() => {
-                if (!cancelled) setOmniboxLoading(false)
-            })
-        }, 120)
-        return () => {
-            cancelled = true
-            window.clearTimeout(timeoutId)
-        }
-    }, [historyQuery, settings.assistantBrowserGoogleSuggestions])
-
-    useEffect(() => {
         setHistoryActiveIndex(-1)
-    }, [addressFocused, googleSearchSuggestions, historyQuery, historySearch])
+    }, [addressFocused, historyQuery, omniboxSuggestions])
 
     useEffect(() => {
         if (!historyPanelOpen || !historyPanelQuery.trim() || typeof window.devscope.getBrowserHistory !== 'function') {
@@ -1837,14 +1787,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 return
             }
             setBrowserHistory([])
-            setHistorySearch({ query: '', entries: [] })
+            clearOmniboxSuggestions()
             setHistoryClearArmed(false)
             setProfileMenuOpen(false)
             onDeveloperToast({ message: 'Zyra Browser history cleared.' })
         } catch (error: unknown) {
             onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not clear Browser history.' })
         }
-    }, [historyClearArmed, onDeveloperToast])
+    }, [historyClearArmed, onDeveloperToast, clearOmniboxSuggestions])
 
     const clearHistoryFromPanel = useCallback(async () => {
         if (!window.confirm('Clear visited addresses and omnibox suggestions from Zyra Browser?')) return
@@ -1852,14 +1802,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             const result = await window.devscope.clearBrowserHistory()
             if (!result.success) throw new Error(result.error || 'Could not clear Browser history.')
             setBrowserHistory([])
-            setHistorySearch({ query: '', entries: [] })
+            clearOmniboxSuggestions()
             setHistoryPanelSearch({ query: '', entries: [] })
             setHistoryPanelQuery('')
             onDeveloperToast({ message: 'Zyra Browser history cleared.' })
         } catch (error: unknown) {
             onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not clear Browser history.' })
         }
-    }, [onDeveloperToast])
+    }, [onDeveloperToast, clearOmniboxSuggestions])
 
     const clearLocalBrowserProfile = useCallback(async () => {
         if (!clearProfileArmed) {
@@ -1885,7 +1835,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             }
             for (const handle of webviewRefs.current.values()) handle.reload()
             setBrowserHistory([])
-            setHistorySearch({ query: '', entries: [] })
+            clearOmniboxSuggestions()
             setClearProfileArmed(false)
             setSiteSignOutArmed(false)
             setHistoryClearArmed(false)
@@ -1900,7 +1850,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         } finally {
             setClearingProfile(false)
         }
-    }, [clearProfileArmed, onDeveloperToast])
+    }, [clearProfileArmed, onDeveloperToast, clearOmniboxSuggestions])
 
     if (!normalizedProjectPath) {
         return (
@@ -2031,7 +1981,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             />
                         </div>
                         {omniboxOpen ? (
-                            <AnchoredNativeOverlay anchorRef={addressContainerRef} autoFocus={false}><div ref={omniboxMenuRef} id={BROWSER_HISTORY_LISTBOX_ID} role="listbox" className="absolute inset-x-0 top-7 max-h-72 overflow-y-auto rounded-b-[13px] border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_96%,var(--color-bg))] p-1 shadow-[0_18px_38px_rgba(0,0,0,0.34)]" aria-label="Address and search suggestions">
+                            <AnchoredNativeOverlay anchorRef={addressContainerRef} autoFocus={false}><div ref={omniboxMenuRef} id={BROWSER_HISTORY_LISTBOX_ID} role="listbox" className="absolute inset-x-0 top-7 max-h-72 overflow-y-auto rounded-b-[13px] border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_96%,var(--color-bg))] p-1 shadow-[0_18px_38px_rgba(0,0,0,0.34)]" aria-label="Address and search suggestions" aria-busy={omniboxLoading}>
                                 {omniboxSuggestions.length > 0 ? omniboxSuggestions.map((suggestion, index) => (
                                     <button
                                         key={suggestion.id}
@@ -2322,6 +2272,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 setHistoryPanelQuery('')
                                 setHistoryPanelOpen(true)
                             }}
+                            searchSuggestionsEnabled={settings.assistantBrowserGoogleSuggestions}
                             getSearchSuggestions={getSearchSuggestions}
                         />
                     </div>
@@ -2343,6 +2294,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             setHistoryPanelQuery('')
                             setHistoryPanelOpen(true)
                         }}
+                        searchSuggestionsEnabled={settings.assistantBrowserGoogleSuggestions}
                         getSearchSuggestions={getSearchSuggestions}
                     />
                 ) : null}

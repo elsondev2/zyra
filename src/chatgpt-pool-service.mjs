@@ -1,7 +1,7 @@
 import { ZyraCredentialStore, resolveZyraAuthPath } from './zyra-auth-store.mjs';
 import { getChatGptAccountPool, updateChatGptAccount } from './chatgpt-account-pool.mjs';
 import { readChatGptRouting, saveChatGptRouting } from './chatgpt-routing-policy.mjs';
-import { fetchCodexUsageStats } from './chatgpt-account.mjs';
+import { fetchCodexUsageStats, fetchCodexResetCredits } from './chatgpt-account.mjs';
 import { getChatGptAccountAliases, saveChatGptAccountAlias } from './chatgpt-account-aliases.mjs';
 
 function poolFor(options) {
@@ -23,7 +23,14 @@ export async function getChatGptAccounts(options = {}) {
             try {
               credential = await pool.credential(account.id);
               const observedAt = pool.now();
-              const usage = await fetchCodexUsageStats({ ...options, accountCredential: credential, signal: AbortSignal.timeout(6_000) });
+              const requestOptions = { ...options, accountCredential: credential, signal: AbortSignal.timeout(6_000) };
+              const usage = await fetchCodexUsageStats(requestOptions);
+              if (usage.availableResetCount === undefined) {
+                // A missing count is not zero. Keep this read account-specific and
+                // inside the same deadline; a reset failure must not discard usage.
+                const resets = await fetchCodexResetCredits(requestOptions).catch(() => null);
+                usage.availableResetCount = resets?.availableCount ?? null;
+              }
               await pool.recordUsage(account.id, { ...usage, observedAt }, credential.access);
             } catch (error) {
               if (error.status === 401 || error.code === 'ZYRA_AUTH_REAUTH_REQUIRED') await pool.markFailure(account.id, '*', { status: 401, expectedAccess: credential?.access });

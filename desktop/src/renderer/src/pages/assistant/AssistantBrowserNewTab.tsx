@@ -69,6 +69,7 @@ export function AssistantBrowserNewTab({
     onNavigate,
     onOpenInNewTab,
     onOpenHistory,
+    searchSuggestionsEnabled = true,
     getSearchSuggestions
 }: {
     projectServers: DevScopeLocalServer[]
@@ -79,12 +80,13 @@ export function AssistantBrowserNewTab({
     onNavigate: (url: string) => void
     onOpenInNewTab: (url: string) => void
     onOpenHistory: () => void
+    searchSuggestionsEnabled?: boolean
     getSearchSuggestions: (query: string) => Promise<string[]>
 }) {
     const [now, setNow] = useState(() => new Date())
     const [query, setQuery] = useState('')
     const [focused, setFocused] = useState(false)
-    const [suggestionState, setSuggestionState] = useState<{ query: string; values: string[] }>({ query: '', values: [] })
+    const [suggestionValues, setSuggestionValues] = useState<string[]>([])
     const [suggestionsLoading, setSuggestionsLoading] = useState(false)
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1)
     const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false)
@@ -94,8 +96,8 @@ export function AssistantBrowserNewTab({
     const surfaceRef = useRef<HTMLDivElement>(null)
     const background = useAssistantBrowserNewTabBackground()
     const normalizedQuery = query.trim()
-    const suggestions = suggestionState.query === normalizedQuery ? suggestionState.values : []
-    const suggestionsOpen = focused && normalizedQuery.length >= 2
+    const suggestions = searchSuggestionsEnabled && normalizedQuery.length >= 2 ? suggestionValues : []
+    const suggestionsOpen = searchSuggestionsEnabled && focused && normalizedQuery.length >= 2
     const totalServers = projectServers.length + otherServers.length
     const serverGroupCount = Number(projectServers.length > 0) + Number(otherServers.length > 0)
     const localServersPanelHeight = serversExpanded
@@ -125,8 +127,8 @@ export function AssistantBrowserNewTab({
 
     useEffect(() => {
         const normalized = query.trim()
-        if (!focused || normalized.length < 2) {
-            setSuggestionState({ query: '', values: [] })
+        if (!searchSuggestionsEnabled || !focused || normalized.length < 2) {
+            setSuggestionValues([])
             setSuggestionsLoading(false)
             setActiveSuggestionIndex(-1)
             return
@@ -136,13 +138,13 @@ export function AssistantBrowserNewTab({
         const timer = window.setTimeout(() => {
             void getSearchSuggestions(normalized).then((next) => {
                 if (!cancelled) {
-                    setSuggestionState({ query: normalized, values: next })
+                    setSuggestionValues(next)
                     setSuggestionsLoading(false)
                     setActiveSuggestionIndex(-1)
                 }
             }).catch(() => {
                 if (!cancelled) {
-                    setSuggestionState({ query: normalized, values: [] })
+                    setSuggestionValues([])
                     setSuggestionsLoading(false)
                 }
             })
@@ -151,13 +153,13 @@ export function AssistantBrowserNewTab({
             cancelled = true
             window.clearTimeout(timer)
         }
-    }, [focused, getSearchSuggestions, query])
+    }, [focused, getSearchSuggestions, query, searchSuggestionsEnabled])
 
     const submit = (value: string) => {
         const normalized = value.trim()
         if (!normalized) return
         setFocused(false)
-        setSuggestionState({ query: '', values: [] })
+        setSuggestionValues([])
         setSuggestionsLoading(false)
         setActiveSuggestionIndex(-1)
         onNavigate(normalized)
@@ -226,14 +228,14 @@ export function AssistantBrowserNewTab({
                                     } else if (event.key === 'Escape') {
                                         event.currentTarget.blur()
                                         setFocused(false)
-                                        setSuggestionState({ query: '', values: [] })
+                                        setSuggestionValues([])
                                         setSuggestionsLoading(false)
                                     }
-                                }} className="min-w-0 flex-1 bg-transparent px-3 text-[12px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted" placeholder="Search Google or enter an address" spellCheck={false} aria-label="New tab search" role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen} aria-controls={suggestionsOpen ? NEW_TAB_SUGGESTIONS_ID : undefined} aria-activedescendant={activeSuggestionIndex >= 0 && suggestions[activeSuggestionIndex] ? `${NEW_TAB_SUGGESTIONS_ID}-option-${activeSuggestionIndex}` : undefined} />
+                                }} className="min-w-0 flex-1 bg-transparent px-3 text-[12px] text-sparkle-text outline-none placeholder:text-sparkle-text-muted" placeholder="Search Google or enter an address" spellCheck={false} aria-label="New tab search" role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen} aria-controls={suggestionsOpen ? NEW_TAB_SUGGESTIONS_ID : undefined} aria-activedescendant={suggestionsOpen && activeSuggestionIndex >= 0 && suggestions[activeSuggestionIndex] ? `${NEW_TAB_SUGGESTIONS_ID}-option-${activeSuggestionIndex}` : undefined} />
                                 <button type="submit" className="inline-flex w-11 self-stretch items-center justify-center text-[var(--accent-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent-primary)]" title="Open"><ArrowRight size={14} /></button>
                             </label>
                             {suggestionsOpen ? (
-                                <div id={NEW_TAB_SUGGESTIONS_ID} role="listbox" aria-label="Google suggestions" className="max-h-72 overflow-y-auto border-t border-[var(--surface-divider)] p-1.5 text-left">
+                                <div id={NEW_TAB_SUGGESTIONS_ID} role="listbox" aria-label="Google suggestions" aria-busy={suggestionsLoading} className="max-h-72 overflow-y-auto border-t border-[var(--surface-divider)] p-1.5 text-left">
                                     {suggestions.length > 0 ? suggestions.map((suggestion, index) => (
                                         <button key={suggestion} id={`${NEW_TAB_SUGGESTIONS_ID}-option-${index}`} type="button" role="option" aria-selected={activeSuggestionIndex === index} onPointerDown={(event) => event.preventDefault()} onClick={() => submit(suggestion)} onPointerEnter={() => setActiveSuggestionIndex(index)} className={cn('flex h-9 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-sparkle-text transition-colors hover:bg-[var(--surface-hover)]', activeSuggestionIndex === index && 'bg-[var(--surface-hover)] text-sparkle-text')}><Search size={11} className="text-sparkle-text-muted" /><span className="truncate text-[11px] font-medium">{suggestion}</span></button>
                                     )) : (

@@ -19,6 +19,7 @@ import { planFleetRecovery } from "./recovery.mjs";
 import { ChildTranscriptStore } from "./transcript-store.mjs";
 import { WorkspaceGuard } from "./workspace-guard.mjs";
 import { WorktreeManager } from "./worktree-manager.mjs";
+import { isSupportingAgentMessage } from '../../threads/message-origin.mjs';
 
 export class AgentFleetController {
   constructor(options = {}) {
@@ -344,6 +345,14 @@ export class AgentFleetController {
   }
 
   async send(agentRunId, message, threadMessage) {
+    if (threadMessage && isSupportingAgentMessage(threadMessage)) {
+      this.assertUsable();
+      this.throwIfCancelled(agentRunId);
+      const host = this.active.get(agentRunId)?.host || this.completedHosts.get(agentRunId);
+      if (!host) throw new Error(`Agent is not available for context delivery: ${agentRunId}.`);
+      await host.send(message, threadMessage);
+      return { agentRunId, delivered: true, mode: 'context-only' };
+    }
     const active = this.active.get(agentRunId);
     if (active?.host) {
       await active.host.send(message, threadMessage);

@@ -48,7 +48,7 @@
     "test:work-timeline-v2": "bun run --cwd desktop test:work-timeline-v2",
     "test:child-session-runtime": "node scripts/test-child-session-runtime.mjs",
     "test:managed-processes": "node scripts/test-managed-bash.mjs && node scripts/test-zyra-root-stop.mjs && node scripts/test-zyra-agent-server.mjs && node scripts/test-child-session-runtime.mjs",
-    "test:subagents-workflows": "node scripts/test-agent-conversation-kind.mjs && node scripts/test-zyra-subagents.mjs && node scripts/test-child-session-runtime.mjs && node scripts/test-thread-collaboration.mjs && npm run test:agent-fleet:cancellation && node scripts/test-zyra-workflows.mjs && node scripts/test-zyra-fleet-ui.mjs && bun run --cwd desktop test:assistant-fleet && bun run --cwd desktop test:assistant-thread-collaboration",
+    "test:subagents-workflows": "node scripts/test-subagent-message-routing.mjs && node scripts/test-agent-conversation-kind.mjs && node scripts/test-zyra-subagents.mjs && node scripts/test-child-session-runtime.mjs && node scripts/test-thread-collaboration.mjs && npm run test:agent-fleet:cancellation && node scripts/test-zyra-workflows.mjs && node scripts/test-zyra-fleet-ui.mjs && bun run --cwd desktop test:assistant-fleet && bun run --cwd desktop test:assistant-thread-collaboration",
     "test:control-bridge-deadline": "node scripts/test-control-bridge-deadline.mjs",
     "test:computer-tool-errors": "node scripts/test-computer-tool-errors.mjs",
     "test:computer-window-feedback": "node scripts/test-computer-window-feedback.mjs",
@@ -120,7 +120,8 @@
     "test:owned-runtime-session": "node scripts/test-owned-runtime-session.mjs",
     "test:owned-runtime-clipboard": "node scripts/test-owned-runtime-clipboard.mjs",
     "test:owned-codex-transport": "node scripts/test-owned-codex-transport.mjs",
-    "runtime:typecheck": "tsc --noEmit -p src/runtime/tsconfig.json"
+    "runtime:typecheck": "tsc --noEmit -p src/runtime/tsconfig.json",
+    "test:subagent-messages": "node scripts/test-subagent-message-routing.mjs && node scripts/test-thread-collaboration.mjs"
   },
   "bin": {
     "zyra": "bin/zyra.mjs",

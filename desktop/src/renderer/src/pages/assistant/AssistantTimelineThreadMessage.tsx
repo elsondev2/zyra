@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Bot, ArrowUpRight, ChevronRight } from 'lucide-react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
+import { isSupportingAgentMessage } from '@shared/assistant/thread-message'
 import { openAssistantThreadLink } from './assistant-thread-navigation'
 import type { AssistantChatDisplayMode } from '@/lib/settings'
 import { cn } from '@/lib/utils'
@@ -13,6 +14,7 @@ export function AssistantTimelineThreadMessage({ activity, displayMode = 'minima
     const [error, setError] = useState<string | null>(null)
     const payload = activity.payload || {}
     const received = activity.kind === 'thread-message'
+    if (received && isSupportingAgentMessage(payload)) return null
     const sentReply = readAssistantPeerReply(activity)
     const sender = String(payload.senderLabel || 'Zyra')
     const target = String(received ? payload.senderCanonicalThreadId || payload.senderThreadId || '' : payload.targetThreadId || sentReply?.targetThreadId || '')

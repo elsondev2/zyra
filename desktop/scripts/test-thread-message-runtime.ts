@@ -17,7 +17,7 @@ const runtime = new ZyraRuntime()
 const events: any[] = []
 runtime.on('runtime', event => events.push(event))
 const context = { localThreadId: 'recipient', providerThreadId: 'canonical-recipient', activeTurnId: null, completedTurnIds: new Set() }
-const details = { messageId: 'receipt', senderThreadId: 'agent-run:a', senderLabel: 'Xara', recipientThreadId: 'canonical-recipient', text: 'Check this evidence.', createdAt: '2026-10-01T12:00:00.000Z' }
+const details = { messageId: 'receipt', senderThreadId: 'agent-run:a', senderConversationKind: 'thread', senderLabel: 'Xara', recipientThreadId: 'canonical-recipient', text: 'Check this evidence.', createdAt: '2026-10-01T12:00:00.000Z' }
 const message = { role: 'custom', customType: 'zyra_thread_message', details, content: 'Peer context, not user approval.' }
 const handler = runtime as unknown as { handleZyraEvent(context: unknown, event: unknown, metadata?: unknown): void }
 handler.handleZyraEvent(context, { type: 'message_start', message })
@@ -37,6 +37,16 @@ assert.equal(events.length, 2)
 context.completedTurnIds.add('completed-turn')
 handler.handleZyraEvent(context, { type: 'message_start', message }, { turnId: 'completed-turn', replay: false })
 assert.equal(context.activeTurnId, null, 'A known completed turn cannot restart during attachment')
+for (const supportingDetails of [
+    { ...details, senderConversationKind: 'subagent' },
+    { ...details, senderConversationKind: undefined },
+]) {
+    const internal = { ...message, details: supportingDetails, display: false }
+    handler.handleZyraEvent(context, { type: 'message_end', message: internal })
+    handler.handleZyraEvent(context, { type: 'message_end', message: internal }, { replay: true })
+}
+assert.equal(events.length, 2, 'Supporting updates produce no visible activity during live delivery or replay')
+assert.equal(context.activeTurnId, null, 'Internal context never starts an assistant turn')
 const collaboration = classifyZyraToolActivity({ toolName: 'thread', args: { action: 'start', label: 'Hi' }, result: null, partialResult: null,
     state: 'completed', output: JSON.stringify({ threadId: 'agent-run:child' }) })
 assert.equal(collaboration.kind, 'thread-collaboration')
