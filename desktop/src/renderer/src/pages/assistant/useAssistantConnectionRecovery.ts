@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
 import {
     getAssistantRecoveryIssue,
@@ -19,9 +19,10 @@ type AssistantConnectionRecoveryState = {
 
 const RECOVERY_BANNER_VISIBLE_AFTER_ATTEMPT = 0
 
-export function getPausedAssistantRuntimeRecovery(activities: AssistantActivity[]): { attempt: number; maxAttempts: number } | null {
-    const activity = activities.find((entry) => entry.payload?.['category'] === 'connection-recovery')
+export function getPausedAssistantRuntimeRecovery(activities: AssistantActivity[], turnId?: string | null, completedAt?: string | null): { attempt: number; maxAttempts: number } | null {
+    const activity = activities.find((entry) => entry.payload?.['category'] === 'connection-recovery' && (!turnId || !entry.turnId || entry.turnId === turnId))
     if (!activity || activity.payload?.['status'] !== 'paused') return null
+    if (completedAt && Date.parse(activity.createdAt) <= Date.parse(completedAt)) return null
     const attempt = Math.max(1, Math.floor(Number(activity.payload?.['attempt']) || 1))
     const maxAttempts = Math.max(attempt, Math.floor(Number(activity.payload?.['maxAttempts']) || MAX_ASSISTANT_RECONNECT_ATTEMPTS))
     return { attempt, maxAttempts }
@@ -41,6 +42,9 @@ export function useAssistantConnectionRecovery(input: {
     selectedSessionId: string | null
     activeThreadId: string | null
     threadState?: string | null
+    threadWorking?: boolean
+    latestTurnId?: string | null
+    latestTurnCompletedAt?: string | null
     loading: boolean
     connected: boolean
     commandPending: boolean
@@ -55,6 +59,9 @@ export function useAssistantConnectionRecovery(input: {
         selectedSessionId,
         activeThreadId,
         threadState,
+        threadWorking = false,
+        latestTurnId,
+        latestTurnCompletedAt,
         loading,
         connected,
         commandPending,
@@ -82,13 +89,20 @@ export function useAssistantConnectionRecovery(input: {
         })
     ), [activities, commandError, threadLastError])
     const pausedRuntimeRecovery = useMemo(
-        () => getPausedAssistantRuntimeRecovery(activities),
-        [activities]
+        () => getPausedAssistantRuntimeRecovery(activities, latestTurnId, latestTurnCompletedAt),
+        [activities, latestTurnId, latestTurnCompletedAt]
     )
+    // Canonical turn progress can precede the attachment's connected update.
+    // Historical failure UI must never reconnect over work that has resumed.
+    const runtimeActive = connected || threadWorking
 
     const reconnectSessionKey = selectedSessionId
         ? `${selectedSessionId}:${activeThreadId || 'pending-thread'}`
         : null
+    const recoveryContextRef = useRef({ sessionKey: reconnectSessionKey, runtimeActive })
+    useLayoutEffect(() => {
+        recoveryContextRef.current = { sessionKey: reconnectSessionKey, runtimeActive }
+    }, [reconnectSessionKey, runtimeActive])
     const shouldAutoReconnect = shouldAutoReconnectAssistantThread({
         threadState,
         hasRecoverableIssue: recoveryIssue?.recoverable === true
@@ -99,8 +113,12 @@ export function useAssistantConnectionRecovery(input: {
     }, [])
 
     const runReconnectCycle = useCallback(async (sessionId: string, sessionKey: string) => {
+        if (recoveryContextRef.current.runtimeActive || recoveryContextRef.current.sessionKey !== sessionKey) return
         const runId = activeRunIdRef.current + 1
         activeRunIdRef.current = runId
+        const isCurrentRun = () => activeRunIdRef.current === runId
+            && recoveryContextRef.current.sessionKey === sessionKey
+            && !recoveryContextRef.current.runtimeActive
         setState({
             phase: 'retrying',
             attempt: 0,
@@ -109,7 +127,7 @@ export function useAssistantConnectionRecovery(input: {
         })
 
         for (let attempt = 1; attempt <= MAX_ASSISTANT_RECONNECT_ATTEMPTS; attempt += 1) {
-            if (activeRunIdRef.current !== runId) return
+            if (!isCurrentRun()) return
 
             setState({
                 phase: 'retrying',
@@ -124,8 +142,9 @@ export function useAssistantConnectionRecovery(input: {
                 // best-effort disconnect before reconnecting
             }
 
+            if (!isCurrentRun()) return
             const result = await connectResult(sessionId)
-            if (activeRunIdRef.current !== runId) return
+            if (!isCurrentRun()) return
 
             if (result.success) {
                 exhaustedSessionKeysRef.current.delete(sessionKey)
@@ -161,10 +180,10 @@ export function useAssistantConnectionRecovery(input: {
     }, [selectedSessionId, reconnectSessionKey, runReconnectCycle])
 
     useEffect(() => {
-        if (connected && reconnectSessionKey) {
+        if ((runtimeActive || latestTurnCompletedAt) && reconnectSessionKey) {
             exhaustedSessionKeysRef.current.delete(reconnectSessionKey)
         }
-        if (connected || !selectedSessionId) {
+        if (runtimeActive || latestTurnCompletedAt || !selectedSessionId) {
             cancelReconnectRun()
             setState((current) => (
                 current.phase === 'idle'
@@ -177,7 +196,7 @@ export function useAssistantConnectionRecovery(input: {
                     }
             ))
         }
-    }, [cancelReconnectRun, connected, selectedSessionId, reconnectSessionKey])
+    }, [cancelReconnectRun, runtimeActive, selectedSessionId, reconnectSessionKey, latestTurnCompletedAt])
 
     useEffect(() => {
         return () => {
@@ -187,7 +206,7 @@ export function useAssistantConnectionRecovery(input: {
 
     useEffect(() => {
         if (!selectedSessionId || !reconnectSessionKey || deferUntilFirstPrompt) return
-        if (loading || commandPending || connected) return
+        if (loading || commandPending || runtimeActive) return
         if (threadState === 'interrupted') return
         if (!shouldAutoReconnect) return
         if (state.phase === 'retrying' && state.sessionKey === reconnectSessionKey) return
@@ -196,7 +215,7 @@ export function useAssistantConnectionRecovery(input: {
         void runReconnectCycle(selectedSessionId, reconnectSessionKey)
     }, [
         commandPending,
-        connected,
+        runtimeActive,
         deferUntilFirstPrompt,
         loading,
         pausedRuntimeRecovery,
@@ -224,7 +243,8 @@ export function useAssistantConnectionRecovery(input: {
 
     const showBanner = Boolean(
         selectedSessionId
-        && recoveryIssue
+        && !runtimeActive
+        && recoveryIssue?.recoverable
         && (showRepeatedRetryBanner || showExhaustedRetryBanner || showRuntimePausedBanner)
     )
 
@@ -232,7 +252,7 @@ export function useAssistantConnectionRecovery(input: {
         issue: recoveryIssue,
         showBanner,
         reconnect,
-        reconnectPending: state.phase === 'retrying',
+        reconnectPending: !runtimeActive && reconnectIsForSelectedThread && state.phase === 'retrying',
         reconnectAttempt: state.phase === 'idle' ? runtimeAttempt : state.attempt,
         reconnectMaxAttempts: state.phase === 'idle' ? runtimeMaxAttempts : state.maxAttempts,
         reconnectExhausted: state.phase === 'exhausted' || showRuntimePausedBanner

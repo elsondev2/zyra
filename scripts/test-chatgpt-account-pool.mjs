@@ -184,7 +184,7 @@ try {
   await policy({ strategy: 'fill-first', preferredAccountId: idA });
   const request = createChatGptRequestCredentials(store);
   const requests = [];
-  let partial = false, failAll = false;
+  let partial = false, failAll = false, networkFailure = false;
   const message = content => ({ role: 'assistant', provider: 'openai-codex', model: 'model', content, stopReason: 'stop' });
   const runtime = {
     getAuth: async () => ({ auth: { apiKey: (await request.credentials.read('openai-codex')).access } }),
@@ -193,10 +193,10 @@ try {
       (async () => {
         const token = (await runtime.getAuth(model)).auth.apiKey;
         requests.push(token);
-        await options.onResponse({ status: token === jwt('a', 3) || failAll ? 429 : 200, headers: new Headers({ 'retry-after': '30' }) }, model);
+        if (!networkFailure) await options.onResponse({ status: token === jwt('a', 3) || failAll ? 429 : 200, headers: new Headers({ 'retry-after': '30' }) }, model);
         source.push({ type: 'start', partial: message([]) });
         if (partial) source.push({ type: 'text_delta', delta: 'Already visible', partial: message([{ type: 'text', text: 'Already visible' }]) });
-        if (token === jwt('a', 3) || failAll) source.push({ type: 'error', reason: 'error', error: { ...message([]), errorMessage: 'Usage limit reached' } });
+        if (networkFailure || token === jwt('a', 3) || failAll) source.push({ type: 'error', reason: 'error', error: { ...message([]), errorMessage: networkFailure ? 'WebSocket closed 1006' : 'Usage limit reached' } });
         else source.push({ type: 'done', reason: 'stop', message: message([{ type: 'text', text: 'Done' }]) });
       })().catch(error => source.push({ type: 'error', reason: 'error', error: { ...message([]), errorMessage: error.message } }));
       return source;
@@ -221,6 +221,11 @@ try {
   const controller = new AbortController(); controller.abort(); requests.length = 0;
   const aborted = await runtime.stream(model, {}, { signal: controller.signal }).result();
   assert.equal(aborted.stopReason, 'aborted'); assert.equal(requests.length, 0);
+  now += 31000; networkFailure = true; partial = true; requests.length = 0;
+  const socketFailure = await runtime.stream(model, {}, {}).result();
+  assert.equal(socketFailure.errorMessage, 'WebSocket closed 1006');
+  assert.equal(requests.length, 1, 'A mid-response WebSocket failure never replays already-visible work on another account.');
+  assert.ok((await pool.list()).every(account => account.state === 'ready'), 'A mid-response socket failure cannot persist a cooldown that stops other threads.');
   const limits = readChatGptResponseLimits(new Headers({ 'x-codex-primary-used-percent': '100', 'x-codex-primary-reset-at': String((now + 10000) / 1000), 'x-codex-primary-window-minutes': '300' }), now);
   assert.equal(Date.parse(limits.primary.resetAt), now + 10000);
   assert.equal(limits.primary.windowSeconds, 18000);

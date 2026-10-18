@@ -5,6 +5,7 @@ import { AssistantTimelineActionShell } from '../../src/renderer/src/pages/assis
 import { AssistantTimelineActionBatch } from '../../src/renderer/src/pages/assistant/AssistantTimelineActionBatch'
 import { TimelineContextCompactionMarker } from '../../src/renderer/src/pages/assistant/AssistantTimelineCompaction'
 import type { AssistantActivity } from '../../src/shared/assistant/contracts'
+import { assertLeftAlignedActionRow } from './assistant-action-row-assertions'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 const nativeMatchMedia = window.matchMedia.bind(window)
@@ -76,11 +77,11 @@ async function run() {
             assertCentered(host.querySelector<HTMLElement>('[data-assistant-compaction]')!, `${status} compaction at ${width}px`)
         }
         await act(async () => root.render(<Action index={0} />))
-        assertCentered(host.querySelector<HTMLButtonElement>('button')!, `Single tool at ${width}px`)
+        assertLeftAlignedActionRow(host.querySelector<HTMLButtonElement>('button')!, `Single tool at ${width}px`)
     }
     host.style.width = '760px'
     await render(160)
-    assertCentered(trigger(), 'Collapsed tool batch')
+    assertLeftAlignedActionRow(trigger(), 'Collapsed tool batch')
     assert(trigger().getAttribute('aria-expanded') === 'false', 'batch starts collapsed')
     assert(trigger().querySelector('[data-diff-additions="34"][data-diff-deletions="12"]'), 'collapsed heading exposes colored edit totals')
     assert(!viewport() && renderedLists === 0, 'collapsed batch never builds or mounts its tool list')
@@ -119,7 +120,7 @@ async function run() {
     await act(async () => { detailTrigger.click() })
     await act(async () => { await wait(300) })
     assert(mountedDetails === 0, 'closing details releases them after the exit animation')
-    assertCentered(trigger(), 'Expanded batch heading')
+    assertLeftAlignedActionRow(trigger(), 'Expanded batch heading')
     const rowElements = Array.from(document.querySelectorAll<HTMLElement>('[data-action-row]'))
     const referenceIcon = rowElements[0]!.querySelector('[data-assistant-action-icon]')!.getBoundingClientRect()
     const referenceTitle = rowElements[0]!.querySelector('[data-assistant-action-title]')!.getBoundingClientRect()
@@ -153,7 +154,7 @@ async function run() {
     const stats = trigger().querySelector('[data-assistant-action-diff-stats]')!.getBoundingClientRect()
     const heading = trigger().getBoundingClientRect()
     assert(stats.right <= heading.right && stats.left >= heading.left, 'change totals stay inside narrow headers')
-    assertCentered(trigger(), 'Narrow tool batch')
+    assertLeftAlignedActionRow(trigger(), 'Narrow tool batch')
     assertCentered(host.querySelector<HTMLElement>('[data-assistant-compaction]')!, 'Narrow live compaction')
     await render(2)
     assert(viewport().clientHeight < cap, 'short lists retain natural height')

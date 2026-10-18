@@ -51,15 +51,21 @@ export class ZyraCredentialStore {
       const current = clone(values[provider]);
       const next = await update(current);
       throwIfAborted(options.signal);
-      if (next === undefined) delete values[provider];
-      else values[provider] = normalizeCredential(next);
+      // The runtime CredentialStore contract uses undefined for a no-op,
+      // including the second caller observing an already-refreshed token.
+      if (next === undefined) return clone(values[provider]);
+      values[provider] = normalizeCredential(next);
       await writeProviderJson(this.authPath, values);
       return clone(values[provider]);
     }, { waitMs: options.waitMs });
   }
 
   async delete(provider, options = {}) {
-    return this.modify(provider, async () => undefined, options);
+    assertProvider(provider);
+    await this.modifyAll(values => {
+      delete values[provider];
+      return values;
+    }, options);
   }
 
   async modifyAll(update, options = {}) {

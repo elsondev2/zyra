@@ -6,6 +6,7 @@ import { TimelineToolCallList } from '../../src/renderer/src/pages/assistant/Ass
 import { AssistantTimeline } from '../../src/renderer/src/pages/assistant/AssistantTimeline'
 import { TimelineContextCompactionMarker } from '../../src/renderer/src/pages/assistant/AssistantTimelineCompaction'
 import { getTimelineActivityDomId } from '../../src/renderer/src/pages/assistant/assistant-timeline-helpers'
+import { assertLeftAlignedActionRow } from './assistant-action-row-assertions'
 
 const root = createRoot(document.getElementById('root')!)
 const at = '2026-10-01T10:00:00.000Z'
@@ -69,14 +70,14 @@ async function run() {
         const plugin: AssistantActivity = { id: 'plugin-layout', kind: 'plugin-mcp', tone: 'tool', createdAt: at, summary: 'Listing tools', payload: { status: 'completed', action: 'tools', pluginName: 'Fixture' } }
         for (const activity of [activities[0]!, activities.at(-1)!, plugin]) {
             flushSync(() => root.render(<div style={{ width }}><TimelineToolCallList activities={[activity]} /></div>))
-            checkCenteredSummary(document.querySelector<HTMLElement>('[data-assistant-action-row]')!, `Single ${activity.kind} at ${width}px`)
+            assertLeftAlignedActionRow(document.querySelector<HTMLElement>('[data-assistant-action-row]')!, `Single ${activity.kind} at ${width}px`)
         }
     }
     flushSync(() => root.render(<div style={{ width: 760 }}><TimelineToolCallList activities={activities} /></div>))
     await wait()
     const outer = document.querySelector<HTMLButtonElement>('[data-assistant-action-batch-trigger]')!
     check(outer.textContent?.includes('Running tests'), 'Top-level saved preview stays visible')
-    checkCenteredSummary(outer, 'Collapsed tool batch')
+    assertLeftAlignedActionRow(outer, 'Collapsed tool batch')
     check(!document.querySelector('[data-assistant-tool-call], [data-assistant-typed-action]'), 'Closed group mounts no tool rows')
     check(hydrationRequests.length === 0, 'Opening the chat fetches no saved tool bodies')
     await click(outer)
@@ -84,8 +85,8 @@ async function run() {
     check(!document.querySelector('[data-assistant-typed-action^="browser-"]'), 'Nested control group stays unmounted')
     check(!document.querySelector('[data-assistant-web-results]'), 'Web results remain unmounted beneath their action preview')
     check(hydrationRequests.length === 0, 'Opening the list does not hydrate deeper outputs')
-    checkCenteredSummary(document.querySelector<HTMLElement>('[data-assistant-tool-call] button')!, 'Command tool preview')
-    checkCenteredSummary(document.querySelector<HTMLElement>('[data-assistant-typed-action="web-search"] button')!, 'Typed tool preview')
+    assertLeftAlignedActionRow(document.querySelector<HTMLElement>('[data-assistant-tool-call] button')!, 'Command tool preview')
+    assertLeftAlignedActionRow(document.querySelector<HTMLElement>('[data-assistant-typed-action="web-search"] button')!, 'Typed tool preview')
     const inner = document.querySelector<HTMLButtonElement>('[data-assistant-control-run] [data-assistant-action-batch-trigger]')!
     await click(inner)
     check(document.querySelectorAll('[data-assistant-typed-action^="browser-"]').length === 2, 'Nested expansion mounts its own browser actions')

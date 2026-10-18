@@ -100,7 +100,9 @@ export function installChatGptAccountRouting(runtime, pool, context) {
                   const failureStatus = status >= 400 ? status : /usage limit|rate.?limit|quota exceeded|\b429\b/i.test(detail) ? 429 : /\b401\b|unauthorized/i.test(detail) ? 401 : 0;
                   const unsupportedModel = [403, 404].includes(failureStatus) && /model|permission|access.*denied/i.test(detail);
                   const eligibleFailure = unsupportedModel || [401, 429, 502, 503, 504].includes(failureStatus) || (!status && /fetch failed|network|connection|socket|ECONN/i.test(detail));
-                  if (eligibleFailure && !options.signal?.aborted) {
+                  // Infrastructure failures belong to this request's recovery, not
+                  // a persisted account ban that also stops unrelated threads.
+                  if ((unsupportedModel || failureStatus === 401 || failureStatus === 429) && !options.signal?.aborted) {
                     const resets = [limits.resetAt, ...[limits.primary, limits.secondary].filter(w => w?.usedPercent >= 100).map(w => Date.parse(w.resetAt))].filter(t => t > pool.now());
                     await pool.markFailure(lease.id, failureStatus === 429 || failureStatus === 401 ? '*' : model.id, { status: failureStatus, resetAt: resets.length ? Math.max(...resets) : unsupportedModel ? pool.now() + 900_000 : 0, expectedAccess: lease.credential.access });
                   }
