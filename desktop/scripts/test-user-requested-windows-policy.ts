@@ -200,6 +200,53 @@ class PaintDriver extends FakeControlDriver {
     } finally { gate.resolve(); await broker.dispose() }
 }
 
+// Root cleanup must abort delegated input and side-effect approval, not just revoke its grant.
+for (const awaitingApproval of [false, true]) {
+    const started = deferred()
+    const gate = deferred()
+    let inputSignal: AbortSignal | undefined
+    let effects = 0
+    class DelegatedDriver extends PaintDriver {
+        override async act(target: any, action: any, context: any) {
+            inputSignal = context.signal
+            started.resolve()
+            await gate.promise
+            if (context.signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Delegated input cancelled.')
+            effects++
+            return super.act(target, action, context)
+        }
+    }
+    const broker = new AgentControlBroker({ drivers: [new DelegatedDriver()] })
+    const pending: Promise<unknown>[] = []
+    try {
+        broker.authorizeUserWindowsTurn(root)
+        broker.authorizeUserWindowsTurn(other)
+        const acquired = await broker.handleToolOperation(root, app, undefined, options) as any
+        const parent = acquired.grant
+        const lease = broker.delegate({ parentGrantId: parent.grantId, parentPrincipal: root, childPrincipal: child,
+            targetId: parent.targetId, capabilities: ['observe.structure', 'pointer.click'], maxActions: 2,
+            expiresAt: new Date(Date.now() + 10_000).toISOString(), allowedExecutableIdentities: parent.allowedExecutableIdentities })
+        let cancelled = false
+        pending.push(broker.handleToolOperation(child, { operation: 'act', version: 1, requestId: 'request:delegated-input',
+            grantId: lease.grantId, targetId: lease.targetId, observationRevision: acquired.observation.revision,
+            action: { type: 'click', x: 50, y: 50, ...(awaitingApproval ? { sideEffect: 'purchase' } : {}) }
+        }, undefined, { permissionMode: 'approval-required' }).catch(error => { assert.equal(error.code, 'CONTROL_CANCELLED'); cancelled = true }))
+        await tick()
+        if (awaitingApproval) assert.equal(broker.state().pendingActionApprovals.length, 1)
+        else await started.promise
+        let progressed = false
+        pending.push(broker.handleToolOperation(other, { operation: 'list_windows', query: 'Paint' }, undefined, options).then(() => { progressed = true }))
+        broker.revokePrincipal(root)
+        if (!awaitingApproval) assert.equal(inputSignal?.aborted, true, 'root cleanup reaches the delegated native driver')
+        gate.resolve()
+        await tick()
+        assert.equal(cancelled, true, 'delegated input/approval settles on root cleanup')
+        assert.equal(broker.state().pendingActionApprovals.length, 0, 'root cleanup removes child side-effect approval')
+        assert.equal(progressed, true, 'unrelated root can acquire the native lane')
+        assert.equal(effects, 0, 'no delegated input occurs after root cleanup')
+    } finally { gate.resolve(); await broker.dispose(); await Promise.allSettled(pending) }
+}
+
 // Stop cancels both a running native request and another root waiting for focus.
 {
     const gate = deferred()

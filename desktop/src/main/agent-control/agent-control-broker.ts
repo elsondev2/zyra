@@ -998,7 +998,10 @@ export class AgentControlBroker extends EventEmitter {
     }
 
     revokePrincipal(principal: ControlPrincipal, reason = 'Principal control cancelled.'): void {
-        for (const [controller, owner] of this.windowsRequests) if (sameControlPrincipal(owner, principal)) controller.abort()
+        for (const [controller, owner] of this.windowsRequests) {
+            const child = principal.type === 'root' && owner.type === 'agent' && owner.parentThreadId === principal.threadId
+            if (child || sameControlPrincipal(owner, principal)) controller.abort()
+        }
         this.userWindowsTurn(principal)?.abort()
         if (principal.type === 'root') this.userWindowsTurns.delete(JSON.stringify([principal.threadId, principal.turnId]))
         const revoked = this.grants.revokeByPrincipal(principal)
