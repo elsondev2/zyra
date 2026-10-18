@@ -99,6 +99,13 @@ export class HarnessIndex {
             cached.offset = info.size
         } else if (compressed || info.size > cached.offset) {
             let parts: Buffer[] = [], length = 0, discard = false, prefix = ''
+            const parseLine = () => {
+                if (discard || !length) return
+                const line = Buffer.concat(parts,length).toString('utf8')
+                if (/"(?:usage|tokens|session_meta|turn_context|token_count|session)"/.test(line)) {
+                    putUsageRecord(cached.records,parseHarnessRecord(harness,JSON.parse(line),cached.state))
+                }
+            }
             const input = createReadStream(path, compressed ? { highWaterMark:256*1024 } : { start:cached.offset,end:info.size-1,highWaterMark:256*1024 })
             // Compressed byte positions are not JSONL offsets. Reparse changed archives
             // from the beginning and stream through the same bounded metadata scanner.
@@ -121,16 +128,14 @@ export class HarnessIndex {
                     if (!discard) parts.push(part)
                     if (end < 0) break
                     cached.offset += length+1
-                    if (!discard) {
-                        const line = Buffer.concat(parts,length).toString('utf8')
-                        if (/"(?:usage|tokens|session_meta|turn_context|token_count|session)"/.test(line)) {
-                            putUsageRecord(cached.records,parseHarnessRecord(harness,JSON.parse(line),cached.state))
-                        }
-                    }
+                    parseLine()
                     parts = []; length = 0; discard = false; prefix = ''; start = end+1
                 }
                 if (!discard && length > 32*1024*1024) throw new Error('Oversized usage record')
             }
+            // A successfully decoded archive is complete even without a final newline.
+            // Live plain logs still leave that line pending for their next append.
+            if (compressed) parseLine()
         }
         if (compressed) cached.offset = info.size
         cached.size = info.size; cached.mtime = info.mtimeMs; cached.tail = compressed ? '' : await tailHash(path,cached.offset)
