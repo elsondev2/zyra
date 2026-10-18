@@ -4,7 +4,7 @@ import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { useSettings } from '@/lib/settings'
 import { getTimelineActivityDomId } from './assistant-timeline-helpers'
-import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS } from './assistant-action-row-layout'
+import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS, ASSISTANT_ACTION_SUMMARY_CLASS } from './assistant-action-row-layout'
 
 export function formatAssistantActionTime(value: string): string {
     const date = new Date(value)
@@ -49,6 +49,7 @@ export function AssistantTimelineActionShell(props: {
                     actionable ? 'hover:bg-[var(--surface-hover)]' : 'cursor-default'
                 )}
             >
+                <span data-assistant-action-summary="true" className={ASSISTANT_ACTION_SUMMARY_CLASS}>
                 <span data-assistant-action-icon="true" className={cn(
                     ASSISTANT_ACTION_ICON_CLASS,
                     props.status === 'running' ? 'text-[color-mix(in_srgb,var(--status-warning)_72%,var(--color-text))]'
@@ -73,6 +74,7 @@ export function AssistantTimelineActionShell(props: {
                 {canToggle ? (
                     <ChevronDown size={11} className={cn('shrink-0 text-sparkle-text-muted transition-transform duration-200', props.expanded && 'rotate-180')} />
                 ) : <span className="w-[11px] shrink-0" />}
+                </span>
             </button>
             <AnimatedHeight isOpen={Boolean(props.expanded && canToggle)} duration={220} unmountOnExit>
                 <div className="pb-2 pl-6 pr-1 pt-1">

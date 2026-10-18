@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { FileText, SquareTerminal } from 'lucide-react'
 import { AssistantTimelineActionShell } from '../../src/renderer/src/pages/assistant/AssistantTimelineActionShell'
 import { AssistantTimelineActionBatch } from '../../src/renderer/src/pages/assistant/AssistantTimelineActionBatch'
+import { TimelineContextCompactionMarker } from '../../src/renderer/src/pages/assistant/AssistantTimelineCompaction'
 import type { AssistantActivity } from '../../src/shared/assistant/contracts'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -43,11 +44,13 @@ Element.prototype.animate = function (frames, options) {
     return nativeAnimate.call(this, frames, options)
 }
 const render = async (count: number) => {
-    await act(async () => { root.render(<AssistantTimelineActionBatch activities={activities}>
+    await act(async () => { root.render(<><TimelineContextCompactionMarker activity={{
+        id: 'visible-compaction', kind: 'context.compaction', tone: 'info', summary: 'Compacting context', createdAt: '2026-09-29T12:00:00Z', payload: { status: 'running' }
+    }} /><AssistantTimelineActionBatch activities={activities}>
         {() => { renderedLists++; return Array.from({ length: count }, (_, index) => <div key={index} data-action-row={index}>
             <Action index={index} />
         </div>) }}
-    </AssistantTimelineActionBatch>) })
+    </AssistantTimelineActionBatch></>) })
     await act(async () => { await wait() })
 }
 const viewport = () => document.querySelector<HTMLDivElement>('[data-assistant-action-batch-scroll]')!
@@ -55,8 +58,29 @@ const trigger = () => document.querySelector<HTMLButtonElement>('[data-assistant
 const scroll = async (top: number) => {
     await act(async () => { viewport().scrollTop = top; viewport().dispatchEvent(new Event('scroll', { bubbles: true })); await wait() })
 }
+function assertCentered(row: HTMLElement, label: string) {
+    const summary = row.querySelector<HTMLElement>('[data-assistant-action-summary]')
+    assert(summary, `${label}: summary has a centered wrapper`)
+    const bounds = row.getBoundingClientRect()
+    const content = summary!.getBoundingClientRect()
+    assert(Math.abs((content.left + content.right) / 2 - (bounds.left + bounds.right) / 2) < 1, `${label}: summary is horizontally centered`)
+    assert(content.left >= bounds.left && content.right <= bounds.right, `${label}: summary fits the row`)
+}
 async function run() {
+    for (const width of [760, 320]) {
+        host.style.width = `${width}px`
+        for (const status of ['running', 'completed', 'failed', 'cancelled']) {
+            await act(async () => root.render(<TimelineContextCompactionMarker activity={{
+                id: 'compaction-layout', kind: 'context.compaction', tone: 'info', summary: 'Context compaction', createdAt: '2026-09-29T12:00:00Z', payload: { status }
+            }} />))
+            assertCentered(host.querySelector<HTMLElement>('[data-assistant-compaction]')!, `${status} compaction at ${width}px`)
+        }
+        await act(async () => root.render(<Action index={0} />))
+        assertCentered(host.querySelector<HTMLButtonElement>('button')!, `Single tool at ${width}px`)
+    }
+    host.style.width = '760px'
     await render(160)
+    assertCentered(trigger(), 'Collapsed tool batch')
     assert(trigger().getAttribute('aria-expanded') === 'false', 'batch starts collapsed')
     assert(trigger().querySelector('[data-diff-additions="34"][data-diff-deletions="12"]'), 'collapsed heading exposes colored edit totals')
     assert(!viewport() && renderedLists === 0, 'collapsed batch never builds or mounts its tool list')
@@ -95,6 +119,7 @@ async function run() {
     await act(async () => { detailTrigger.click() })
     await act(async () => { await wait(300) })
     assert(mountedDetails === 0, 'closing details releases them after the exit animation')
+    assertCentered(trigger(), 'Expanded batch heading')
     const rowElements = Array.from(document.querySelectorAll<HTMLElement>('[data-action-row]'))
     const referenceIcon = rowElements[0]!.querySelector('[data-assistant-action-icon]')!.getBoundingClientRect()
     const referenceTitle = rowElements[0]!.querySelector('[data-assistant-action-title]')!.getBoundingClientRect()
@@ -128,6 +153,8 @@ async function run() {
     const stats = trigger().querySelector('[data-assistant-action-diff-stats]')!.getBoundingClientRect()
     const heading = trigger().getBoundingClientRect()
     assert(stats.right <= heading.right && stats.left >= heading.left, 'change totals stay inside narrow headers')
+    assertCentered(trigger(), 'Narrow tool batch')
+    assertCentered(host.querySelector<HTMLElement>('[data-assistant-compaction]')!, 'Narrow live compaction')
     await render(2)
     assert(viewport().clientHeight < cap, 'short lists retain natural height')
     assert(viewport().dataset.scrollFadeTop === 'false' && viewport().dataset.scrollFadeBottom === 'false', 'non-overflowing lists have no fades')

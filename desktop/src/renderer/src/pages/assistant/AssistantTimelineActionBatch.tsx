@@ -11,7 +11,7 @@ import { formatAssistantActionTime } from './AssistantTimelineActionShell'
 import { getActivityDiffStats, getActivityElapsed, getActivityStatus, isAssistantConnectionRecoveryActivity } from './assistant-timeline-helpers'
 import { InlineDiffStats } from './AssistantInlineDiffStats'
 import { AssistantActionBatchScroll } from './AssistantActionBatchScroll'
-import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS } from './assistant-action-row-layout'
+import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS, ASSISTANT_ACTION_SUMMARY_CLASS } from './assistant-action-row-layout'
 import { requestAssistantTimelineDisclosureAnchor, type AssistantActivityRevealRequest } from './assistant-timeline-scroll-events'
 
 const ACTION_BATCH_MOTION_MS = 220
@@ -100,6 +100,7 @@ export function AssistantTimelineActionBatch(props: {
                 className={cn(ASSISTANT_ACTION_ROW_CLASS, 'group/action-batch transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color-mix(in_srgb,var(--color-text)_25%,transparent)]')}
                 title={expanded ? 'Hide actions' : 'Show actions'}
             >
+                <span data-assistant-action-summary="true" className={ASSISTANT_ACTION_SUMMARY_CLASS}>
                 <span data-assistant-action-icon="true" className={cn(
                     ASSISTANT_ACTION_ICON_CLASS,
                     connecting ? 'text-[var(--status-success)]' : running ? 'text-[color-mix(in_srgb,var(--status-warning)_72%,var(--color-text))]' : failed ? 'text-[color-mix(in_srgb,var(--status-danger)_72%,var(--color-text))]' : 'text-sparkle-text-muted'
@@ -120,6 +121,7 @@ export function AssistantTimelineActionBatch(props: {
                     className={cn('shrink-0 text-sparkle-text-muted transition-transform duration-200', expanded && 'rotate-90')}
                     aria-hidden="true"
                 />
+                </span>
             </button>
             <AnimatedHeight isOpen={expanded} duration={ACTION_BATCH_MOTION_MS} crispContent unmountOnExit>
                 <AssistantActionBatchScroll expanded={expanded}>

@@ -16,7 +16,7 @@ import { extractFilePatch, scanPatchFileSummaries } from '@/lib/diffRendering'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import { AssistantInlineDiffPreview } from './AssistantInlineDiffPreview'
 import { InlineDiffStats } from './AssistantInlineDiffStats'
-import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS } from './assistant-action-row-layout'
+import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS, ASSISTANT_ACTION_SUMMARY_CLASS } from './assistant-action-row-layout'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 import {
     AssistantFileChangeStatusPill,
@@ -632,6 +632,7 @@ export const TimelineToolCallCard = memo(({
                     canExpandBody || opensRelatedCommand ? 'hover:bg-[var(--surface-hover)]' : 'cursor-default'
                 )}
             >
+                <div data-assistant-action-summary="true" className={ASSISTANT_ACTION_SUMMARY_CLASS}>
                 <span data-assistant-action-icon="true" className={cn(
                     ASSISTANT_ACTION_ICON_CLASS, 'relative', getMinimalStatusIconClassName(status)
                 )}>
@@ -749,6 +750,7 @@ export const TimelineToolCallCard = memo(({
                         <ChevronDown size={11} className={cn('relative text-sparkle-text-muted transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-transform', expanded && 'rotate-180')} />
                     ) : null}
                 </span>
+                </div>
             </button>
             <AnimatedHeight
                 unmountOnExit

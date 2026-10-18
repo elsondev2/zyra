@@ -26,6 +26,7 @@ try {
         join(desktop, 'src/renderer/src/pages/assistant/AssistantTimelineActionBatch.tsx'),
         join(desktop, 'src/renderer/src/pages/assistant/assistant-action-row-layout.ts'),
         join(desktop, 'src/renderer/src/pages/assistant/AssistantTimelineActionShell.tsx'),
+        join(desktop, 'src/renderer/src/pages/assistant/AssistantTimelineCompaction.tsx'),
         join(desktop, 'src/renderer/src/pages/assistant/AssistantActionBatchScroll.tsx'),
         join(desktop, 'src/renderer/src/pages/assistant/AssistantInlineDiffStats.tsx'),
         join(desktop, 'src/renderer/src/components/ui/AnimatedHeight.tsx')

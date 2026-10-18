@@ -18,8 +18,11 @@ export function TimelineContextCompactionMarker({ activity }: { activity: Assist
                 status === 'failed' && 'text-[var(--status-danger)]',
                 status === 'cancelled' && 'text-[var(--status-warning)]'
             )}>
-                <Icon size={12} className="shrink-0 opacity-60" aria-hidden="true" />
-                <span className={cn('min-w-0 font-medium', running && 'assistant-title-shimmer assistant-compaction-shimmer')}>{label}</span>
+                <span className="h-px min-w-4 flex-1 bg-[var(--surface-divider)]" aria-hidden="true" />
+                <span data-assistant-action-summary="true" className="flex min-w-0 items-center gap-2">
+                    <Icon size={12} className="shrink-0 opacity-60" aria-hidden="true" />
+                    <span className={cn('min-w-0 text-center font-medium', running && 'assistant-title-shimmer assistant-compaction-shimmer')}>{label}</span>
+                </span>
                 <span className="h-px min-w-4 flex-1 bg-[var(--surface-divider)]" aria-hidden="true" />
             </div>
         </div>

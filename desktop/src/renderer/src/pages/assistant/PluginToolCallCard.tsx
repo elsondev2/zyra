@@ -5,7 +5,7 @@ import { describePluginActivity, readPluginResult } from '@shared/assistant/plug
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { bundledPluginLogo } from '../plugins/bundled-plugin-logos'
 import { getActivityOutput, getTimelineActivityDomId } from './assistant-timeline-helpers'
-import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS } from './assistant-action-row-layout'
+import { ASSISTANT_ACTION_ICON_CLASS, ASSISTANT_ACTION_ROW_CLASS, ASSISTANT_ACTION_SUMMARY_CLASS } from './assistant-action-row-layout'
 import { formatAssistantActionTime } from './AssistantTimelineActionShell'
 import { requestAssistantTimelineDisclosureAnchor } from './assistant-timeline-scroll-events'
 import { pluginAppViewFromActivity, pluginAppViewIdentity } from './plugin-app-view-state'
@@ -37,12 +37,14 @@ export function PluginToolCallCard({activity:source,onOpenUrl}: {activity:Assist
     const pretty=useMemo(()=>{try{return JSON.stringify(JSON.parse(raw),null,2)}catch{return raw}},[raw])
     return <div className="assistant-plugin-call py-0" id={getTimelineActivityDomId(activity.id)} data-assistant-plugin-call="true">
         <button ref={trigger} type="button" aria-expanded={expanded} className={`${ASSISTANT_ACTION_ROW_CLASS} group hover:bg-[var(--surface-hover)]`} data-assistant-action-row="true" onClick={()=>{requestAssistantTimelineDisclosureAnchor(trigger.current,220,!expanded);if(!expanded)setDetailsSeen(true);setExpanded(!expanded)}}>
+            <span data-assistant-action-summary="true" className={ASSISTANT_ACTION_SUMMARY_CLASS}>
             <span className={ASSISTANT_ACTION_ICON_CLASS}>{logo?<img src={logo} alt="" className="size-4 object-contain"/>:<Puzzle size={14}/>}</span>
             <span className={`min-w-0 flex-1 truncate text-left text-xs text-sparkle-text-secondary ${presentation.running?'assistant-title-shimmer':''}`} data-assistant-action-title="true">{presentation.title}</span>
             <span className="shrink-0 text-[10px] text-sparkle-text-muted">{presentation.plugin}</span>
             {presentation.failed?<span className="text-[10px] text-[var(--status-danger)]">Failed</span>:null}
             <span className="hidden text-[10px] tabular-nums text-sparkle-text-muted sm:inline">{formatAssistantActionTime(activity.createdAt)}</span>
             <ChevronRight size={12} className={`shrink-0 text-sparkle-text-muted transition-transform duration-200 motion-reduce:transition-none ${expanded?'rotate-90':''}`}/>
+            </span>
         </button>
         <AnimatedHeight isOpen={expanded} duration={220} crispContent>{detailsSeen && <div className="ml-6 mb-2 space-y-3 border-l border-[var(--surface-divider)] py-2 pl-3 text-xs">
             {presentation.target ? <p className="break-all text-[10px] text-sparkle-text-muted" title={presentation.server}>{presentation.target}</p> : null}
