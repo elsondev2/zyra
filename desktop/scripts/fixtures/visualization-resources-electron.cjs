@@ -4,6 +4,13 @@ const path = require('node:path')
 const { writeFile } = require('node:fs/promises')
 const directory = process.env.ZYRA_RESOURCE_FIXTURE
 app.setPath('userData', path.join(directory, 'profile'))
+// Hosted Linux has no GPU. Keep real WebGL/canvas assertions using Chromium's
+// software backend, scoped to this disposable, sandboxed fixture process.
+if ((process.platform === 'linux' && process.env.CI) || process.env.ZYRA_TEST_SOFTWARE_RENDERING === '1') {
+    app.commandLine.appendSwitch('use-angle', 'swiftshader')
+    app.commandLine.appendSwitch('enable-unsafe-swiftshader')
+    app.commandLine.appendSwitch('ignore-gpu-blocklist')
+}
 const timer = setTimeout(() => { console.error('Visualization resource fixture timeout'); app.exit(1) }, 45000)
 app.whenReady().then(async () => {
     const window = new BrowserWindow({ show: false, width: 1100, height: 780, webPreferences: { offscreen: true, backgroundThrottling: false, sandbox: true, contextIsolation: true, nodeIntegration: false } })
