@@ -29,8 +29,8 @@ const snapshot={agents:{'agent-1':{agentRunId:'agent-1',createdAt:'2026-01-01',w
 const initialCapsule={version:1,workspace:'agents',section:'workflows',workflowPage:2,selectedWorkflowRunId:'workflow-1'};
 let controls,commits=[],capsules=[];
 const view=()=>document.querySelector('[data-view]')?.getAttribute('data-view');
-function Host(){
- const[agent,setAgent]=useState(null),[workflow,setWorkflow]=useState('workflow-1'),[capsule,setCapsule]=useState(initialCapsule);
+function Host({initial=initialCapsule}){
+ const[agent,setAgent]=useState(initial.selectedAgentRunId??null),[workflow,setWorkflow]=useState(initial.selectedWorkflowRunId??null),[capsule,setCapsule]=useState(initial);
  controls={setAgent,setWorkflow,setCapsule};
  const persist=useCallback(c=>capsules.push(c),[]);
  return <AssistantFleetWorkspace threadId="test-thread" snapshot={snapshot} selectedAgentRunId={agent} selectedWorkflowRunId={workflow} onSelectAgent={setAgent} onSelectWorkflow={setWorkflow} stateCapsule={capsule} onStateCapsuleChange={persist}/>;
@@ -55,6 +55,16 @@ window.runRegression=async()=>{
  await click('[data-search]');
  await click('[data-open-workflow]');await click('[data-open-agent]');await click('[data-back]');await click('[data-back]');
  const list=document.querySelector('[data-view]');check(list.dataset.page==='2'&&list.dataset.query==='notification'&&list.dataset.filter==='attention','workflow directory position and filters survive the round trip');
+ const saved=capsules.at(-1);
+ check(saved?.workflowQuery==='notification'&&saved?.workflowFilter==='attention'&&saved?.workflowPage===2,'workflow capsule must persist the query/filter that owns its page');
+ reset();await act(async()=>root.render(<Profiler id="fleet" onRender={()=>commits.push(view())}><Host key="restored" initial={saved}/></Profiler>));
+ const restored=document.querySelector('[data-view]');
+ check(view()==='workflow-list'&&restored.dataset.page==='2'&&restored.dataset.query==='notification'&&restored.dataset.filter==='attention','a remounted workflow directory restores its complete saved search state');
+ check(capsules.length>0&&capsules.every(c=>c.workflowQuery==='notification'&&c.workflowFilter==='attention'),'remount persistence cannot overwrite a saved search with empty defaults');
+ reset();await act(async()=>controls.setCapsule({version:1,workspace:'agents',section:'workflows',workflowPage:1,workflowQuery:'auth',workflowFilter:'finished'}));
+ const hydrated=document.querySelector('[data-view]');
+ check(hydrated.dataset.page==='1'&&hydrated.dataset.query==='auth'&&hydrated.dataset.filter==='finished','incoming transferred capsule hydrates workflow page, query and filter together');
+ check(capsules.length>0&&capsules.every(c=>c.workflowQuery==='auth'&&c.workflowFilter==='finished'&&c.workflowPage===1),'hydration cannot emit stale search state over the incoming capsule');
  reset();await act(async()=>{controls.setWorkflow(null);controls.setAgent('agent-1')});only('agent-detail');
  reset();await click('[data-back]');only('agent-list');
  await click('[aria-label="Delegated work view"]');await click('[role="menuitemradio"][aria-checked="false"]');check(view()==='workflow-list','directory view chooser still works without a selected detail');

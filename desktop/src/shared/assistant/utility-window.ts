@@ -97,6 +97,8 @@ export type AssistantUtilityAgentsStateCapsule = {
     agentQuery?: string
     agentFilter?: 'all' | 'active' | 'attention' | 'finished'
     workflowPage?: number
+    workflowQuery?: string
+    workflowFilter?: 'all' | 'active' | 'attention' | 'finished'
     selectedAgentRunId?: string
     selectedWorkflowRunId?: string
     scrollAnchor?: AssistantUtilityScrollAnchor
@@ -375,6 +377,9 @@ export function sanitizeAssistantUtilityStateCapsule(
             agentFilter: ['all', 'active', 'attention', 'finished'].includes(String(input['agentFilter']))
                 ? input['agentFilter'] as AssistantUtilityAgentsStateCapsule['agentFilter'] : undefined,
             workflowPage: boundedInteger(input['workflowPage'], 10_000),
+            workflowQuery: boundedString(input['workflowQuery'], CAPSULE_QUERY_LIMIT),
+            workflowFilter: ['all', 'active', 'attention', 'finished'].includes(String(input['workflowFilter']))
+                ? input['workflowFilter'] as AssistantUtilityAgentsStateCapsule['workflowFilter'] : undefined,
             selectedAgentRunId: boundedString(input['selectedAgentRunId'], CAPSULE_ID_LIMIT),
             selectedWorkflowRunId: boundedString(input['selectedWorkflowRunId'], CAPSULE_ID_LIMIT),
             scrollAnchor

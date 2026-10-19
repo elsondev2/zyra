@@ -33,8 +33,8 @@ export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
     const [agentQuery, setAgentQuery] = useState(props.stateCapsule?.agentQuery || '')
     const [agentFilter, setAgentFilter] = useState<AssistantAgentDirectoryFilter>(props.stateCapsule?.agentFilter || 'all')
     const [workflowPage, setWorkflowPage] = useState(props.stateCapsule?.workflowPage || 0)
-    const [workflowQuery, setWorkflowQuery] = useState('')
-    const [workflowFilter, setWorkflowFilter] = useState<AssistantWorkflowDirectoryFilter>('all')
+    const [workflowQuery, setWorkflowQuery] = useState(props.stateCapsule?.workflowQuery || '')
+    const [workflowFilter, setWorkflowFilter] = useState<AssistantWorkflowDirectoryFilter>(props.stateCapsule?.workflowFilter || 'all')
     const pendingHydrationRef = useRef(props.stateCapsule)
     const agents = useMemo(() => Object.values(props.snapshot?.agents ?? {}).sort(newestFirst), [props.snapshot])
     const workflows = useMemo(() => Object.values(props.snapshot?.workflows ?? {}).sort(newestFirst), [props.snapshot])
@@ -57,6 +57,8 @@ export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
         setAgentQuery(props.stateCapsule.agentQuery || '')
         setAgentFilter(props.stateCapsule.agentFilter || 'all')
         setWorkflowPage(props.stateCapsule.workflowPage || 0)
+        setWorkflowQuery(props.stateCapsule.workflowQuery || '')
+        setWorkflowFilter(props.stateCapsule.workflowFilter || 'all')
     }, [props.stateCapsule])
 
     useEffect(() => {
@@ -72,6 +74,8 @@ export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
                 && agentQuery === (pendingHydration.agentQuery || '')
                 && agentFilter === (pendingHydration.agentFilter || 'all')
                 && workflowPage === (pendingHydration.workflowPage || 0)
+                && workflowQuery === (pendingHydration.workflowQuery || '')
+                && workflowFilter === (pendingHydration.workflowFilter || 'all')
                 && props.selectedAgentRunId === (pendingHydration.selectedAgentRunId || null)
                 && props.selectedWorkflowRunId === (pendingHydration.selectedWorkflowRunId || null)
             if (!hydrated) return
@@ -85,11 +89,13 @@ export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
             agentQuery,
             agentFilter,
             workflowPage,
+            workflowQuery,
+            workflowFilter,
             selectedAgentRunId: props.selectedAgentRunId || undefined,
             selectedWorkflowRunId: props.selectedWorkflowRunId || undefined,
             scrollAnchor: props.stateCapsule?.scrollAnchor
         })
-    }, [agentPage, agentQuery, agentFilter, props.onStateCapsuleChange, props.selectedAgentRunId, props.selectedWorkflowRunId, props.stateCapsule?.scrollAnchor, section, tab, workflowPage])
+    }, [agentPage, agentQuery, agentFilter, props.onStateCapsuleChange, props.selectedAgentRunId, props.selectedWorkflowRunId, props.stateCapsule?.scrollAnchor, section, tab, workflowPage, workflowQuery, workflowFilter])
 
     return (
         <section className="flex min-h-0 flex-1 flex-col bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]" data-testid="assistant-fleet-workspace">
