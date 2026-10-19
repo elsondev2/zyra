@@ -217,7 +217,7 @@ const agent = activity({
     }
 })
 const agentMarkup = renderToStaticMarkup(createElement(TimelineToolCallList, { activities: [agent] }))
-assert.match(agentMarkup, /data-dicebear-style="bottts"/, 'agent actions use the assigned internal identity avatar')
+assert.match(agentMarkup, /data-dicebear-style="bottts-neutral"/, 'agent actions use the assigned internal neutral identity avatar')
 assert.doesNotMatch(agentMarkup, />code-reviewer</, 'generic definition labels are not the visible agent identity')
 assert.match(agentMarkup, /Starting audit/, 'agent Actions use the short running intent')
 assert.doesNotMatch(agentMarkup, /Audit replay identity/, 'the full agent goal stays in the inspector instead of becoming a long Action title')

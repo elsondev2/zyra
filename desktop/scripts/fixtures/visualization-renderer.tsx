@@ -182,15 +182,15 @@ const showcaseHtml = `<style>
 @media(max-width:360px){.snack{gap:6px;grid-template-columns:78px minmax(0,1fr) 24px}.snack-axis{margin-left:84px;margin-right:30px}.heat-grid{grid-template-columns:54px repeat(7,minmax(0,1fr));gap:3px}.heat-legend{margin-left:54px}}
 </style>
 <section class="snacks" aria-label="Robot snack demand, fictional units">
-<h3>Robot snack demand · fictional units</h3>
+<h3>Robot snack demand</h3>
 ${snacks.map(([name, value], index) => `<div class="snack"><span class="snack-label">${name}</span><div class="snack-track"><div id="snack-${index}" class="snack-fill" style="width:${value}%;background:var(--viz-series-${index + 1})" aria-label="${name}: ${value} fictional units"></div></div><span class="snack-value">${value}</span></div>`).join('')}
 <div class="snack-axis"><span>0</span><span>50</span><span>100 units</span></div>
 </section>
 <section class="heatmap" aria-label="Chaos intensity, fictional scores, 0–100">
-<h3>Chaos intensity · fictional scores, 0–100</h3>
+<h3>Chaos intensity</h3>
 <div class="heat-grid"><span></span>${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => `<span class="heat-day">${day}</span>`).join('')}
 ${heatRows.map(([name, values], row) => `<span class="heat-label">${name}</span>${values.map((value, col) => `<span id="heat-${row}-${col}" class="heat-cell" style="--level:${value}%" aria-label="${name}, ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][col]}: ${value}">${value}</span>`).join('')}`).join('')}</div>
-<div class="heat-legend"><span>0</span><span class="heat-scale" aria-hidden="true"></span><span>100 · same scale for every row</span></div>
+<div class="heat-legend"><span>0</span><span class="heat-scale" aria-hidden="true"></span><span>100</span></div>
 </section>`
 
 ;(window as any).visualizationShowcase = async (mode: 'dark' | 'light', width?: number) => {

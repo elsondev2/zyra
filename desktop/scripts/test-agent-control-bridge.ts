@@ -63,7 +63,7 @@ await assert.rejects(() => broker.handleToolOperation({
     operation: 'request_grant',
     windowToken: unselectedWindows.windows[0].windowToken,
     capabilities: ['observe.structure']
-}), /Child agents cannot select Windows targets/)
+}), { code: 'CONTROL_CAPABILITY_DENIED', message: 'Only the root agent may acquire Windows applications or targets.' }, 'child-agent target acquisition is rejected by the root-only policy')
 const windowRequestPromise = broker.handleToolOperation(principal, {
     operation: 'request_grant',
     windowToken: unselectedWindows.windows[0].windowToken,

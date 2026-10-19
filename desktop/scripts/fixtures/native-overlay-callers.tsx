@@ -48,6 +48,9 @@ const host = document.createElement('div')
 host.style.cssText = 'position:relative;width:840px;height:640px'
 document.body.append(host)
 const ownerInput = document.createElement('input')
+// Match an address bar that stays in view. Placing this after the full-height
+// host scrolls the owner document on focus and legitimately closes child menus.
+ownerInput.style.cssText = 'position:fixed;left:8px;top:8px'
 ownerInput.setAttribute('aria-label', 'Owner address input')
 document.body.append(ownerInput)
 const root = createRoot(host)
@@ -113,6 +116,7 @@ Object.assign(window, { nativeOverlayCallerCheck: (async () => {
     const panel = () => childDocument.querySelector('[aria-label="Browser downloads"]')
     await renderDownloads()
     ownerInput.focus()
+    check(window.scrollY === 0, 'address-like owner input stays in view without scrolling the document')
     await click(trigger())
     check(!panel(), 'cold native document remains unmounted until ready')
     await click(trigger())
