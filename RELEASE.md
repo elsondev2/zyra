@@ -216,6 +216,12 @@ node desktop/scripts/test-release-candidate-policy.mjs
 
 Use a read-capable `GH_TOKEN`/`GITHUB_TOKEN` when necessary; never put credentials in command arguments or manifests. Preflight emits `head`, `approved_source_sha` and `preview_run_url` only after all gates pass. This policy does not grant permission to push tags, start builds, change repository variables, create drafts or publish releases.
 
+## Approved exception for 0.7.1
+
+The maintainer selected Windows Dev preview build 24 as the application-code baseline and requested a lockstep patch release at 0.7.1. A fresh exception permits unsigned Windows, unsigned/unnotarized macOS, and the existing disclosed browser security patch gap for this version only. See [0.7.1 candidate scope and remaining gates](docs/releases/0.7.1.md).
+
+Use the existing unsigned native rehearsal path without weakening normal tagged signing gates. The final versioned candidate still requires fresh exact-source preview evidence, the complete native matrix, release/privacy checks, checksum and updater validation, and independent draft-asset readback. Preview bytes must not be renamed as stable installers. Publication approval does not waive failed gates or authorize exceptions for later versions.
+
 ## Approved exception for 0.6.2
 
 The maintainer explicitly approved a patch bump to 0.6.2 and a one-release continuation of 0.6.1's unsigned, unnotarized distribution, including its disclosed browser security patch gap. See [0.6.2 candidate notes](docs/releases/0.6.2.md). This does not authorize fake signing evidence or a general bypass of the tagged release workflow.

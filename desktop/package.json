@@ -1,6 +1,6 @@
 {
     "name": "zyra-desktop",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "private": true,
     "description": "Zyra desktop UI for project work, Zyra agent chat, memory, and settings.",
     "main": "./out/main/index.js",
