@@ -6,7 +6,7 @@ on:
       version:
         description: Lockstep Zyra version to rehearse from master or an approved commit on master
         required: true
-        default: "0.7.0"
+        default: "0.7.1"
         type: string
       approved_source_sha:
         description: Optional frozen 40-character SHA; requires reviewed preview_manifest

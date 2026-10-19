@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import { redeemCodexResetCredit } from '../../src/chatgpt-account.mjs';
 
 const accountServiceSource = readFileSync(new URL('../src/main/assistant/zyra-account-service.ts', import.meta.url), 'utf8');
-assert.match(accountServiceSource, /redeemCodexResetCredit\(creditId, \{ stateDirectory \}\)/,
-  'reset redemption must use the same Desktop account as the availability check');
+assert.match(accountServiceSource, /redeemCodexResetCredit\(creditId, \{ stateDirectory, accountId: options\?\.accountId \}\)/,
+  'reset redemption must retain the Desktop namespace and selected account used by the availability check');
 
 const originalFetch = globalThis.fetch;
 let requested = false;

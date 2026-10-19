@@ -1,4 +1,5 @@
-import { app, type IpcMain } from 'electron'
+import { app } from 'electron'
+import type { ipcMain as TrustedIpcMain } from '../trusted-ipc'
 import { join } from 'node:path'
 import { DeveloperTasks } from '../../services/developer-tasks'
 import { previewRecordedUndo, applyRecordedUndo } from '../../services/developer-undo'
@@ -10,7 +11,7 @@ export async function disposeDeveloperWorkflowTasks(): Promise<void> {
     await developerTasks?.dispose()
 }
 
-export function registerDeveloperWorkflowHandlers(ipcMain: Pick<IpcMain, 'handle'>) {
+export function registerDeveloperWorkflowHandlers(ipcMain: Pick<typeof TrustedIpcMain, 'handle'>) {
     const tasks = developerTasks = new DeveloperTasks(join(app.getPath('userData'), 'developer-tasks.json'), getAugmentedEnv())
     const undoOwners = new Map<string, { senderId: number; expiresAt: number }>()
     const handle = (channel: string, execute: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => Promise<object>) => ipcMain.handle(channel, async (event, ...args) => {

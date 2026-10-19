@@ -248,7 +248,7 @@ function listenForOAuthCallback(expectedState, options) {
         // Browsers can preconnect without sending a request. Graceful HTTP close
         // alone waits on those sockets indefinitely. Flush any return-page bytes
         // before closing every connection owned by this one-shot listener.
-        for (const socket of sockets) socket.destroySoon();
+        for (const socket of sockets) socket.end(() => socket.destroy());
       }),
     };
   })();

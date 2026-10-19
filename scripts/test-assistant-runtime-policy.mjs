@@ -156,7 +156,7 @@ assert.ok(
 )
 assert.match(bridgeSource, /sdk\.setZyraReasoningSummary\(runtime, payload\.reasoningSummary\)/, 'the bridge applies the latest main-owned summary preference on every prompt')
 assert.match(bridgeSource, /contextCompactionThresholdTokens: payload\.contextCompactionThresholdTokens/, 'the bridge passes the selected context limit into real prompt execution')
-assert.match(bridgeSource, /runtime\?\.session\?\.abortCompaction\?\.\(\)/, 'Stop cancels an automatic compaction instead of waiting for its provider request')
+assert.match(bridgeSource, /async function handleAbort\(\) \{\s*const currentRuntime = runtime;[\s\S]{0,650}currentRuntime\?\.session\?\.abortCompaction\?\.\(\)/, 'Stop captures the requesting runtime and cancels its automatic compaction instead of waiting for its provider request')
 assert.match(runtimeSource, /reasoningSummary: options\?\.reasoningSummary/, 'Desktop sends summary mode through the canonical agent server')
 assert.match(runtimeSource, /contextCompactionThresholdTokens: options\?\.contextCompactionThresholdTokens/, 'Desktop sends the compaction limit through the canonical agent server')
 assert.doesNotMatch(runtimeSource, /\bspawnSync\b/, 'assistant runtime availability checks must never block the Electron main loop')
