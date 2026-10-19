@@ -210,6 +210,7 @@ function AssistantTimelineImpl({
                 cacheKey: `${message.id}:${message.updatedAt}:${content.length}`,
                 filePath: assistantMessageFilePath || undefined,
                 prewarmCodeBlocks: false,
+                deferCodeHighlighting: true,
                 mediaMode: 'images-and-videos'
             })
             break

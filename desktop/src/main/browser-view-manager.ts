@@ -671,7 +671,13 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             }
             event.preventDefault()
             const payload: DevScopeBrowserShortcutEvent = { sourceGuestWebContentsId: page.id, action }
-            if (!record.ownerWindow.isDestroyed()) record.ownerWindow.webContents.send(BROWSER_PREVIEW_SHORTCUT_CHANNEL, payload)
+            if (!record.ownerWindow.isDestroyed()) {
+                const owner = record.ownerWindow.webContents
+                if (owner.isDestroyed()) return
+                // DOM focus cannot transfer native keyboard ownership out of a guest.
+                if (action.type === 'new-tab' || action.type === 'focus-address') owner.focus()
+                owner.send(BROWSER_PREVIEW_SHORTCUT_CHANNEL, payload)
+            }
         })
         page.on('will-navigate', (event, url) => this.guardPageNavigation(record, event, url))
         page.on('will-redirect', (event, url) => this.guardPageNavigation(record, event, url, true))

@@ -16,6 +16,7 @@ export interface AssistantAgentTranscriptMessage {
     role: 'user' | 'assistant'
     text: string
     timestamp: string | null
+    phase?: 'commentary' | 'final_answer'
 }
 
 export interface AssistantAgentTranscriptActivity {
@@ -159,7 +160,8 @@ export function projectAssistantAgentTranscriptMessages(
             index: entry.index,
             role,
             text,
-            timestamp: normalizeTranscriptTimestamp(entry['timestamp'] ?? message['timestamp'])
+            timestamp: normalizeTranscriptTimestamp(entry['timestamp'] ?? message['timestamp']),
+            ...(message['phase'] === 'commentary' || message['phase'] === 'final_answer' ? { phase: message['phase'] } : {})
         }
         return [projected]
     }).sort((left, right) => left.index - right.index)
@@ -307,6 +309,7 @@ export function mergeAssistantAgentTranscriptPages(
     return {
         entries,
         nextBefore: older.nextBefore,
+        nextAfter: current.nextAfter,
         totalEntries: Math.max(current.totalEntries, older.totalEntries),
         bytes: Math.max(current.bytes, older.bytes),
         truncatedEntries: Math.max(current.truncatedEntries, older.truncatedEntries),
@@ -323,11 +326,14 @@ export function mergeAssistantAgentTranscriptRefresh(
     const entries = [...entriesByIndex.values()].sort((left, right) => left.index - right.index)
     return {
         entries,
-        nextBefore: current.nextBefore === null
+        nextBefore: current.nextBefore === null || (latest.nextBefore === null
+            && (latest.entries[0]?.index ?? Infinity) <= (current.entries[0]?.index ?? Infinity))
             ? null
-            : latest.nextBefore === null
-                ? current.nextBefore
-                : Math.min(current.nextBefore, latest.nextBefore),
+            : latest.nextBefore === null ? current.nextBefore : Math.min(current.nextBefore, latest.nextBefore),
+        nextAfter: latest.nextAfter !== undefined
+            && (latest.entries.at(-1)?.index ?? -1) >= (current.entries.at(-1)?.index ?? -1)
+            && latest.totalEntries >= current.totalEntries
+            ? latest.nextAfter : current.nextAfter,
         totalEntries: Math.max(current.totalEntries, latest.totalEntries),
         bytes: Math.max(current.bytes, latest.bytes),
         truncatedEntries: Math.max(current.truncatedEntries, latest.truncatedEntries),

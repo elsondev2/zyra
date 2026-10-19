@@ -45,7 +45,7 @@ function scheduleDeferredHighlight(): void {
         deferredHighlightIdle = window.requestIdleCallback((deadline) => runNext(deadline.timeRemaining() >= 6 && !isMarkdownScrollBusy()))
         return
     }
-    deferredHighlightTimer = window.setTimeout(() => runNext(true), 32)
+    deferredHighlightTimer = window.setTimeout(() => runNext(!isMarkdownScrollBusy()), 32)
 }
 
 function enqueueDeferredHighlight(key: string, run: () => void): () => void {
@@ -205,8 +205,11 @@ function DeferredCodeHighlight({
     if (!defer) return prepareCodeHighlight(language, source, showLineNumbers, theme)
     if (activeNode) return activeNode
     return (
-        <pre className="m-0 overflow-x-auto bg-sparkle-card p-4">
-            <code className="whitespace-pre text-sm font-mono leading-6 text-sparkle-text-dark">{source}</code>
+        <pre className="m-0 overflow-x-auto bg-sparkle-card p-4" style={SYNTAX_CUSTOM_STYLE}>
+            <code
+                className="whitespace-pre font-mono text-sparkle-text-dark"
+                style={{ ...FLAT_CODE_THEMES[theme]['code[class*="language-"]'], display: 'block', fontSize: 'inherit' }}
+            >{source}</code>
         </pre>
     )
 }

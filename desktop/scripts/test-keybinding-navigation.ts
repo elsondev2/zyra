@@ -104,7 +104,8 @@ try {
     assert.match(inspectorSidebar, /flex-wrap justify-center[\s\S]*flexBasis: 'calc\(\(100% - 1\.5rem\) \/ 3\)'/, 'empty-state actions form a centered three-column grid')
     assert.match(inspectorSidebar, /shortcutLabel\(commandId\)\.split\(' \/ '\)\[0\]/, 'each empty-state action shows its configured keyboard shortcut')
     assert.match(inspectorSidebar, /rounded-\[4px\][\s\S]*?<kbd className="[^"]*rounded-\[3px\][\s\S]*?\{shortcut \|\| 'No shortcut'\}[\s\S]*?<\/kbd>[\s\S]*?<\/button>/, 'sharp-cornered tiles contain their shortcut keycaps')
-    assert.match(source('renderer/src/pages/assistant/AssistantComposerView.tsx'), /subscribeAssistantComposerFocus[\s\S]*textarea\.focus\(\)/)
+    assert.match(source('renderer/src/pages/assistant/AssistantComposerView.tsx'), /useAssistantComposerFocus\([\s\S]*sessionId: controller\.loadedSessionId/)
+    assert.match(source('renderer/src/pages/assistant/useAssistantComposerFocus.ts'), /subscribeAssistantComposerFocus[\s\S]*textarea\.focus\(\)/)
     assert.match(source('main/native-overlay-manager.ts'), /prepareAppShortcutInput\(contents, input, owner\.contents\)/)
     console.log('Navigation dispatch, deferred workspace/composer intent and capture wiring: ok')
 } finally {

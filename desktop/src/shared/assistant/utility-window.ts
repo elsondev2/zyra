@@ -94,6 +94,8 @@ export type AssistantUtilityAgentsStateCapsule = {
     workspace: 'agents'
     section?: 'agents' | 'workflows'
     agentPage?: number
+    agentQuery?: string
+    agentFilter?: 'all' | 'active' | 'attention' | 'finished'
     workflowPage?: number
     selectedAgentRunId?: string
     selectedWorkflowRunId?: string
@@ -369,6 +371,9 @@ export function sanitizeAssistantUtilityStateCapsule(
             workspace,
             section: input['section'] === 'workflows' ? 'workflows' : input['section'] === 'agents' ? 'agents' : undefined,
             agentPage: boundedInteger(input['agentPage'], 10_000),
+            agentQuery: boundedString(input['agentQuery'], CAPSULE_QUERY_LIMIT),
+            agentFilter: ['all', 'active', 'attention', 'finished'].includes(String(input['agentFilter']))
+                ? input['agentFilter'] as AssistantUtilityAgentsStateCapsule['agentFilter'] : undefined,
             workflowPage: boundedInteger(input['workflowPage'], 10_000),
             selectedAgentRunId: boundedString(input['selectedAgentRunId'], CAPSULE_ID_LIMIT),
             selectedWorkflowRunId: boundedString(input['selectedWorkflowRunId'], CAPSULE_ID_LIMIT),

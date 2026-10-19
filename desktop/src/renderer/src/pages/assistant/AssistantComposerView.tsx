@@ -2,7 +2,8 @@
 import { useComposerDrawerMotion } from './useComposerDrawerMotion'
 import { ComposerTextInput } from './ComposerTextInput'
 import { NewChatGitDrawer } from './NewChatGitDrawer'
-import { ASSISTANT_COMPOSER_FOCUS_CLASS_NAME, subscribeAssistantComposerFocus } from './assistant-composer-focus'
+import { ASSISTANT_COMPOSER_FOCUS_CLASS_NAME } from './assistant-composer-focus'
+import { useAssistantComposerFocus } from './useAssistantComposerFocus'
 import { useNonPassiveWheel } from '@/lib/useNonPassiveWheel'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -182,16 +183,13 @@ export function AssistantComposerView({
         && settings.assistantTranscriptionEngine === 'codex'
         && (controller.voiceInput.isRecording || controller.voiceInput.isTranscribing)
     const recorderInputRef = useRef<HTMLDivElement | null>(null)
-    useEffect(() => subscribeAssistantComposerFocus(() => {
-        if (showCodexRecorder && !controller.voiceInput.isTranscribing && !capabilities.voiceDisabled) {
-            recorderInputRef.current?.focus({ preventScroll: true })
-            return document.activeElement === recorderInputRef.current
-        }
-        const textarea = controller.textareaRef.current
-        if (!textarea || capabilities.inputDisabled || (voiceBusy && settings.assistantTranscriptionEngine !== 'browser') || showCodexRecorder || !textarea.getClientRects().length) return false
-        textarea.focus()
-        return textarea.ownerDocument.activeElement === textarea
-    }), [controller.textareaRef, controller.voiceInput.isTranscribing, capabilities.voiceDisabled, capabilities.inputDisabled, voiceBusy, showCodexRecorder, settings.assistantTranscriptionEngine])
+    useAssistantComposerFocus({
+        sessionId: controller.loadedSessionId,
+        inputRef: controller.textareaRef,
+        inputDisabled: Boolean(capabilities.inputDisabled || (voiceBusy && settings.assistantTranscriptionEngine !== 'browser') || showCodexRecorder),
+        recorderRef: recorderInputRef,
+        recorderActive: showCodexRecorder && !controller.voiceInput.isTranscribing && !capabilities.voiceDisabled
+    })
     const speechError = controller.voiceInput.speechError?.trim() || ''
     const speechErrorNeedsReconnect = settings.assistantTranscriptionEngine === 'codex'
         && /ChatGPT.*(?:login|account)|Reconnect ChatGPT/i.test(speechError)

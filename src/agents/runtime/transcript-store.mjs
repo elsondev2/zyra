@@ -11,6 +11,7 @@ export class ChildTranscriptStore {
   async page(sessionFile, options = {}) {
     const limit = Math.max(1, Math.min(this.maxPageEntries, Number(options.limit) || this.maxPageEntries));
     const before = Number.isSafeInteger(options.before) ? options.before : Number.MAX_SAFE_INTEGER;
+    const after = Number.isSafeInteger(options.after) ? options.after : null;
     const entries = [];
     let index = 0;
     let truncatedEntries = 0;
@@ -19,7 +20,7 @@ export class ChildTranscriptStore {
     for await (const line of lines) {
       if (!line.trim()) continue;
       const current = index++;
-      if (current >= before) continue;
+      if (current >= before || (after !== null && (current <= after || entries.length >= limit))) continue;
       try {
         const bytes = Buffer.byteLength(line, "utf8");
         if (bytes > this.maxEntryBytes) {
@@ -35,9 +36,11 @@ export class ChildTranscriptStore {
     }
     const file = await stat(sessionFile);
     const first = entries[0]?.index;
+    const last = entries.at(-1)?.index;
     return {
       entries,
       nextBefore: Number.isSafeInteger(first) && first > 0 ? first : null,
+      nextAfter: Number.isSafeInteger(last) && last < index - 1 ? last : null,
       totalEntries: index,
       bytes: file.size,
       truncatedEntries,

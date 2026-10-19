@@ -960,8 +960,10 @@ export class AssistantStore {
             if (!represented) {
                 // The command acknowledgement is authoritative even if an IPC
                 // notification was missed. Recover once, without resending.
+                // The bootstrap is a newest-page refresh, not deliberate history
+                // navigation. Keep the older range already loaded in this chat.
                 await this.refreshSessionShellSnapshot(result.sessionId, true, false)
-                await this.requestSessionHydration(result.sessionId, result.threadId, 0, true, true)
+                await this.requestSessionHydration(result.sessionId, result.threadId, 0, true)
             }
         }
         try {

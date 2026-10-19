@@ -4,17 +4,20 @@ import { addOverlayEventListener, isOverlayEventInside } from './native-overlay-
 import { useAnchoredMenuBounds } from './useAnchoredMenuBounds'
 
 /** A floating chooser with scoped native input, including when its trigger is in another popup. */
-export function AnchoredMenuPopover({ anchorRef, contentRef, children, label, onClose, autoFocus = false }: {
+export function AnchoredMenuPopover({ anchorRef, contentRef, children, label, onClose, autoFocus = false, width = 320, browserZIndex, role = 'menu' }: {
     anchorRef: RefObject<HTMLElement | null>
     contentRef?: RefObject<HTMLDivElement | null>
     children: ReactNode
     label: string
     onClose: () => void
     autoFocus?: boolean
+    width?: number
+    browserZIndex?: number
+    role?: 'menu' | 'dialog'
 }) {
     const localRef = useRef<HTMLDivElement>(null)
     const menu = contentRef ?? localRef
-    const bounds = useAnchoredMenuBounds(anchorRef, true, 320)
+    const bounds = useAnchoredMenuBounds(anchorRef, true, width)
     useEffect(() => {
         const pointer = addOverlayEventListener('pointerdown', event => {
             if (!isOverlayEventInside(event, anchorRef.current, menu.current)) onClose()
@@ -27,7 +30,7 @@ export function AnchoredMenuPopover({ anchorRef, contentRef, children, label, on
         }, true)
         return () => { pointer(); keyboard() }
     }, [anchorRef, menu, onClose])
-    return <AnchoredNativeOverlay anchorRef={anchorRef} inputRegionRef={menu} autoFocus={false} onReady={root => {
+    return <AnchoredNativeOverlay anchorRef={anchorRef} inputRegionRef={menu} browserZIndex={browserZIndex} autoFocus={false} onReady={root => {
         if (autoFocus) root.querySelector<HTMLElement>('input,button')?.focus({ preventScroll: true })
-    }}><div ref={menu} data-anchored-menu-popover role="menu" aria-label={label} style={bounds} className="absolute z-[170] overflow-auto rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-sparkle-text shadow-xl">{children}</div></AnchoredNativeOverlay>
+    }}><div ref={menu} data-anchored-menu-popover role={role} aria-label={label} style={bounds} className="absolute z-[170] overflow-auto rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-sparkle-text shadow-xl">{children}</div></AnchoredNativeOverlay>
 }

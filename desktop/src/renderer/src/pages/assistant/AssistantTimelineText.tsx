@@ -121,7 +121,7 @@ const CompletedAssistantMarkdownText = memo(function CompletedAssistantMarkdownT
         let cancelled = false
         setRenderReady(false)
         const prepare = () => {
-            prepareMarkdownRender({ content, filePath, cacheKey, mediaMode })
+            prepareMarkdownRender({ content, filePath, cacheKey, mediaMode, deferCodeHighlighting: true })
             if (!cancelled) setRenderReady(true)
         }
         if (typeof window.requestIdleCallback === 'function') {
@@ -157,6 +157,7 @@ const CompletedAssistantMarkdownText = memo(function CompletedAssistantMarkdownT
             content={content}
             filePath={filePath}
             cacheKey={cacheKey}
+            deferCodeHighlighting
             onInternalLinkClick={onInternalLinkClick}
             onLinkNotice={onLinkNotice}
             className={className}

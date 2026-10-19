@@ -1,5 +1,6 @@
 import type { AssistantCreateSessionInput } from '@shared/assistant/contracts'
 import { buildAssistantChatRoute } from './assistant-chat-route'
+import { requestAssistantComposerFocus } from './assistant-composer-focus'
 
 type CreateAssistantSessionResult =
     | { success: true; sessionId: string; snapshot?: { sessions?: Array<{ id: string; activeThreadId?: string | null }> } }
@@ -19,5 +20,6 @@ export async function createAssistantChatAndNavigate(
 
     const session = result.snapshot?.sessions?.find((entry) => entry.id === result.sessionId) || null
     navigate(buildAssistantChatRoute(result.sessionId, session?.activeThreadId || null))
+    requestAssistantComposerFocus(result.sessionId)
     return result
 }

@@ -8,6 +8,7 @@ import {
     useRendererVisibilitySnapshot
 } from '@/lib/renderer-visibility'
 import type { TimelineDisplayRow } from './assistant-timeline-helpers'
+import { markMarkdownScrollActivity } from '@/components/ui/markdown/markdownScrollActivity'
 import {
     ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT,
     ASSISTANT_TIMELINE_FOLLOW_END_EVENT,
@@ -608,6 +609,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
                 return
             }
             stopFollowingForUserNavigation()
+            markMarkdownScrollActivity()
             const wheelDistance = normalizeAssistantHistoryWheelDelta(
                 event.deltaY,
                 event.deltaMode,
@@ -855,6 +857,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             ListHeaderComponent={header}
             estimatedHeaderSize={44}
             onScroll={() => {
+                markMarkdownScrollActivity()
                 const element = props.scrollContainerRef?.current || scrollElement
                 if (!element) return
                 if (!completionFollowActiveRef.current) {

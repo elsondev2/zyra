@@ -86,4 +86,53 @@ const sending = slowStatus.sendPrompt(user.text)
 for (let tick = 0; tick < 20 && !releaseStatus; tick++) await new Promise(resolve => setTimeout(resolve, 0))
 assert.equal(slowStatus.getState().snapshot.sessions[0]?.threads[0]?.latestTurn?.id, user.turnId, 'the visible acknowledged turn recovers before a slow status request settles')
 releaseStatus(status); await sending; slowStatus.release()
-console.log('Prompt UI state: stale snapshot, pending frame, missed event and acknowledgement recovery: ok')
+// A recovery bootstrap is only the newest page, not a replacement for the
+// older turns already visible in this chat. Exercise the actual send path.
+for (const sendsEvents of ['all', 'user-only', 'none'] as const) {
+    const previousMessages = Array.from({ length: 6 }, (_, index) => ({
+        ...user,
+        id: `retained-message-${index}`,
+        turnId: `retained-turn-${Math.floor(index / 2)}`,
+        role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+        text: `Saved conversation ${index}`,
+        timelineSequence: index + 1,
+        createdAt: new Date(Date.parse(at) - (6 - index) * 60_000).toISOString(),
+        updatedAt: new Date(Date.parse(at) - (6 - index) * 60_000).toISOString()
+    }))
+    const savedThread = { ...thread, messages: previousMessages, messageCount: previousMessages.length }
+    const savedSnapshot = { ...initial, sessions: [{ ...session, threads: [savedThread] }] }
+    const recovered = applyAssistantDomainEvents(savedSnapshot, events)
+    let sent = false
+    Object.assign(window.devscope.assistant, {
+        bootstrap: async () => ({ snapshot: savedSnapshot, status }),
+        getStatus: async () => status,
+        getSnapshot: async () => recovered,
+        getThreadDetailBootstrap: async () => ({ success: true, detail: {
+            ...detail(),
+            history: {
+                ...detail().history,
+                messages: sent ? [user] : previousMessages,
+                fullyLoaded: !sent,
+                pageInfo: { oldestCursor: sent ? 'newest-turn' : 'saved-start', newestCursor: null, hasOlder: sent, hasNewer: false, turnCount: sent ? 1 : 3 }
+            }
+        } }),
+        sendPrompt: async () => {
+            sent = true
+            if (sendsEvents !== 'none') listener?.({ events: sendsEvents === 'all' ? events : events.slice(0, 1) })
+            return { success: true, sessionId: session.id, threadId: thread.id, turnId: user.turnId }
+        }
+    })
+    const retained = new AssistantStore()
+    retained.retain(); await retained.hydrate()
+    for (let tick = 0; tick < 20 && !retained.getState().historyByThreadId[thread.id]; tick++) await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(retained.getState().snapshot.sessions[0]?.threads[0]?.messages.length, 6)
+    await retained.sendPrompt(user.text)
+    assert.deepEqual(
+        retained.getState().snapshot.sessions[0]?.threads[0]?.messages.map(message => message.id),
+        [...previousMessages.map(message => message.id), user.id],
+        `${sendsEvents} notification delivery must preserve the loaded conversation when recovering a send`
+    )
+    assert.equal(retained.getState().historyByThreadId[thread.id]?.pageInfo.oldestCursor, 'saved-start', 'recovery retains the earlier paging boundary')
+    retained.release()
+}
+console.log('Prompt UI state: stale snapshot, pending frame, missed event and retained-history acknowledgement recovery: ok')

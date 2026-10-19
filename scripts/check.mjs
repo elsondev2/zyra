@@ -383,6 +383,7 @@ const desktopTasks = [
   { label: "desktop:test:assistant-user-input", bunArgs: ["run", "--cwd", "desktop", "test:assistant-user-input"] },
   { label: "desktop:test:assistant-tool-approval", bunArgs: ["run", "--cwd", "desktop", "test:assistant-tool-approval"] },
   { label: "desktop:test:markdown-renderer", bunArgs: ["run", "--cwd", "desktop", "test:markdown-renderer"] },
+  { label: "desktop:test:assistant-markdown-scroll", bunArgs: ["run", "--cwd", "desktop", "test:assistant-markdown-scroll"] },
   { label: "desktop:test:compaction-replay", bunArgs: ["run", "--cwd", "desktop", "test:compaction-replay"] },
   { label: "desktop:test:assistant-response-media", bunArgs: ["run", "--cwd", "desktop", "test:assistant-response-media"] },
   { label: "desktop:test:assistant-message-phase-persistence", bunArgs: ["run", "--cwd", "desktop", "test:assistant-message-phase-persistence"] },

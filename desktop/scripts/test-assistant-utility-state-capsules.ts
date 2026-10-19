@@ -62,6 +62,19 @@ assert.equal(sanitizeAssistantUtilityStateCapsule(resources, 'agents'), undefine
 assert.equal(sanitizeAssistantUtilityStateCapsule({ version: 1, workspace: 'browser', url: 'https://example.com' }), undefined, 'Browser state is outside this capsule layer')
 assert.equal(sanitizeAssistantUtilityStateCapsule({ version: 1, workspace: 'terminal', buffer: 'secret' }), undefined, 'Terminal state is outside this capsule layer')
 
+const agents = sanitizeAssistantUtilityStateCapsule({ version: 1, workspace: 'agents', section: 'agents',
+    agentPage: 2, agentQuery: 'renderer\u0000', agentFilter: 'attention', selectedAgentRunId: 'agent-2' }, 'agents')
+assert.equal(agents?.workspace, 'agents')
+if (agents?.workspace !== 'agents') throw new Error('Expected an Agents capsule.')
+assert.equal(agents.agentQuery, 'renderer')
+assert.equal(agents.agentFilter, 'attention')
+assert.equal(agents.agentPage, 2)
+assert.equal(agents.selectedAgentRunId, 'agent-2')
+const invalidAgents = sanitizeAssistantUtilityStateCapsule({ ...agents, agentQuery: 'x'.repeat(1000), agentFilter: 'unknown' }, 'agents')
+if (invalidAgents?.workspace !== 'agents') throw new Error('Expected an Agents capsule.')
+assert.equal(invalidAgents.agentQuery?.length, 256)
+assert.equal(invalidAgents.agentFilter, undefined)
+
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 const manager = read('../src/main/assistant/assistant-utility-window-manager.ts')
 const panel = read('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx')

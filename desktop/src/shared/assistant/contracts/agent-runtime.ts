@@ -1,4 +1,5 @@
 import type { AssistantReasoningEffort, AssistantTurnUsage } from './runtime'
+import type { AssistantInterruption } from '../interruption'
 
 export type AgentRunStatus = 'queued' | 'starting' | 'running' | 'waiting' | 'blocked' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'recovering'
 export type AgentIsolationMode = 'shared' | 'shared-read' | 'serialized-write' | 'worktree'
@@ -66,7 +67,7 @@ export interface AgentRunState {
     worktree: { directory: string; branch: string | null; status?: string; retained?: boolean } | null
     usage: AssistantTurnUsage & { requests?: number; cost?: number }
     result: { text: string; warnings?: string[]; truncated?: boolean; source?: { agentRunId: string; attemptId: string; label: string }; untrusted?: boolean; transcriptRef?: Record<string, unknown> } | null
-    error: { code?: string; name?: string; message: string; retryable?: boolean; details?: Record<string, unknown> } | null
+    error: { code?: string; name?: string; message: string; retryable?: boolean; details?: Record<string, unknown>; interruption?: AssistantInterruption } | null
     createdAt: string
     queuedAt: string
     startedAt: string | null
@@ -93,6 +94,8 @@ export interface AgentDefinitionSummary {
 export interface AgentTranscriptPage {
     entries: Array<Record<string, unknown> & { index: number }>
     nextBefore: number | null
+    /** Present on forward-paging runtimes. Undefined retains legacy tail-only compatibility. */
+    nextAfter?: number | null
     totalEntries: number
     bytes: number
     truncatedEntries: number

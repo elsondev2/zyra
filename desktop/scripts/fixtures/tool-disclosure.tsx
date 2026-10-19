@@ -7,6 +7,9 @@ import { AssistantTimeline } from '../../src/renderer/src/pages/assistant/Assist
 import { TimelineContextCompactionMarker } from '../../src/renderer/src/pages/assistant/AssistantTimelineCompaction'
 import { getTimelineActivityDomId } from '../../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 import { assertLeftAlignedActionRow } from './assistant-action-row-assertions'
+import { AssistantAgentDetailPage } from '../../src/renderer/src/pages/assistant/AssistantAgentDetailPage'
+import { createWorkflowReviewSeed } from '../../src/renderer/src/reviews/agents-review-workflow-fixture'
+import type { AgentTranscriptPage } from '../../src/shared/assistant/contracts'
 
 const root = createRoot(document.getElementById('root')!)
 const at = '2026-10-01T10:00:00.000Z'
@@ -124,7 +127,37 @@ async function run() {
     check(original.closest('[data-assistant-action-batch]')?.querySelector('button')?.getAttribute('aria-expanded') === 'true', 'The matching inner action group opens for the jump')
     check(document.activeElement === original.querySelector('button'), 'The jump focuses the original command preview')
     check(hydrationRequests.length === requestsBeforeJump, 'Navigating to a tool preview does not fetch its output')
+    const demoAgent = Object.values(createWorkflowReviewSeed().snapshot.agents)[0]!
+    const childEntries: AgentTranscriptPage['entries'] = [
+        { index: 0, type: 'message', timestamp: timestamp(0), message: { role: 'user', content: [{ type: 'text', text: 'Inspect the synthetic auth module' }] } },
+        { index: 1, type: 'message', timestamp: timestamp(1), message: { role: 'assistant', content: [{ type: 'toolCall', id: 'read-auth', name: 'read', arguments: { path: 'demo/auth.ts' } }] } },
+        { index: 2, type: 'message', timestamp: timestamp(2), message: { role: 'toolResult', toolCallId: 'read-auth', content: [{ type: 'text', text: 'Synthetic captured source' }] } },
+        { index: 3, type: 'message', timestamp: timestamp(3), message: { role: 'assistant', content: [{ type: 'toolCall', id: 'search-auth', name: 'rg', arguments: { pattern: 'authorize', path: 'demo/' } }] } },
+        { index: 4, type: 'message', timestamp: timestamp(4), message: { role: 'toolResult', toolCallId: 'search-auth', content: [{ type: 'text', text: 'demo/auth.ts:12' }] } },
+        { index: 5, type: 'message', timestamp: timestamp(5), message: { role: 'assistant', phase: 'final_answer', content: [{ type: 'text', text: 'Synthetic review complete' }] } }
+    ]
+    flushSync(() => root.render(<AssistantAgentDetailPage
+        run={{ ...demoAgent, status: 'completed', createdAt: timestamp(0), startedAt: timestamp(0), completedAt: timestamp(5), result: null }}
+        transcript={{ agentRunId: demoAgent.agentRunId, entries: childEntries, nextBefore: null, nextAfter: null, totalEntries: childEntries.length, truncatedEntries: 0, hydrated: childEntries.length }}
+        loading={false} error={null} onBack={() => {}} onLoadOlder={() => {}} onRetry={() => {}} />))
+    await wait()
+    check(!document.querySelector('[data-assistant-typed-action]'), 'Saved child Work initially leaves its tools unmounted')
+    const childWork = document.querySelector<HTMLButtonElement>('[data-assistant-work-summary-shell] button[aria-controls]')
+    check(childWork, 'Actual child conversation renders the shared Work disclosure')
+    await click(childWork)
+    const childBatch = document.querySelector<HTMLButtonElement>('[data-assistant-action-batch-trigger]')
+    check(childBatch && childBatch.getAttribute('aria-expanded') === 'false', 'Opening child Work keeps its inner Action batch collapsed')
+    check(!document.querySelector('[data-assistant-typed-action]'), 'Opening child Work does not eagerly render nested tools')
+    await click(childBatch)
+    check(document.querySelectorAll('[data-assistant-typed-action]').length === 2, 'Expanding the actual child batch mounts both saved tools')
+    check(document.querySelector('[data-assistant-typed-action="agent-tool:read-auth"]'), 'Child batch retains the saved read identity')
+    check(document.querySelector('[data-assistant-typed-action="agent-tool:search-auth"]'), 'Child batch retains the saved search identity')
+    check(document.body.textContent?.includes('Synthetic review complete'), 'The final child response remains outside the tool disclosure')
+    await click(childBatch)
+    check(!document.querySelector('[data-assistant-typed-action]'), 'Closing the actual child batch releases its tool rows')
+    await click(childBatch)
+    check(document.querySelectorAll('[data-assistant-typed-action]').length === 2, 'Reopening the actual child batch retains both saved tools')
     root.unmount()
-    return ['Real tool groups defer lists, nested runs and exact output hydration independently; command jumps open lazy work and focus their target']
+    return ['Real tool groups defer lists, nested runs and exact output hydration independently; command jumps open lazy work and focus their target; actual saved child conversation expands, releases and restores both tools']
 }
 ;(window as any).sidebarContinuityCheck = run()

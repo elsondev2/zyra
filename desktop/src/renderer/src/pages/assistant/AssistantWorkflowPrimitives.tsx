@@ -27,7 +27,7 @@ export function AssistantWorkflowAvatar({
         seed: identity.seed,
         size,
         borderRadius: 14,
-        scale: 9.4
+        scale: 1
     }).toDataUri(), [identity.seed, size, style])
     return (
         <span
@@ -83,7 +83,7 @@ export function AssistantWorkflowActionButtons({
     if (run.status === 'running' || run.status === 'paused') actions.push({ action: 'stop', label: 'Stop', icon: <Square size={9} /> })
     if (run.status === 'failed' || run.status === 'partial' || run.status === 'cancelled') actions.push({ action: 'restart', label: 'Restart', icon: <RotateCcw size={9} /> })
     if (run.status === 'completed') actions.push({ action: 'save', label: 'Save', icon: <Save size={9} /> })
-    if (!actions.length) return null
+    if (!onAction || !actions.length) return null
 
     return (
         <nav className={cn('flex flex-wrap items-center gap-1.5', className)} aria-label={`Actions for ${run.definitionName}`}>

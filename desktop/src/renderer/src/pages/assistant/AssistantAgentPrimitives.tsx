@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
 import { Avatar, Style } from '@dicebear/core'
-import botttsDefinition from '@dicebear/styles/bottts.json'
+import botttsNeutralDefinition from '@dicebear/styles/bottts-neutral.json'
 import { GitBranch, RotateCcw, Square } from 'lucide-react'
 import type { AgentRunState, AgentRunStatus } from '@shared/assistant/contracts'
 import { cn } from '@/lib/utils'
@@ -8,7 +8,7 @@ import { resolveAssistantAgentIdentity, type AgentIdentitySource } from './assis
 
 export type AssistantAgentAction = 'stop' | 'retry' | 'resume'
 
-const BOTTS_STYLE = new Style(botttsDefinition)
+const AGENT_AVATAR_STYLE = new Style(botttsNeutralDefinition)
 
 export function AssistantAgentAvatar({
     run,
@@ -20,11 +20,11 @@ export function AssistantAgentAvatar({
     className?: string
 }) {
     const identity = resolveAssistantAgentIdentity(run)
-    const avatarUri = useMemo(() => new Avatar(BOTTS_STYLE, {
+    const avatarUri = useMemo(() => new Avatar(AGENT_AVATAR_STYLE, {
         seed: identity.seed,
         size,
         borderRadius: 12,
-        scale: 9.2
+        scale: 1
     }).toDataUri(), [identity.seed, size])
     return (
         <span
@@ -32,7 +32,7 @@ export function AssistantAgentAvatar({
             aria-label={`${identity.name}, ${identity.roleTitle}`}
             className={cn('inline-flex shrink-0 overflow-hidden rounded-md bg-transparent', className)}
             style={{ width: size, height: size }}
-            data-dicebear-style="bottts"
+            data-dicebear-style="bottts-neutral"
         >
             <img src={avatarUri} alt="" width={size} height={size} draggable={false} className="size-full select-none object-cover" />
         </span>
@@ -74,7 +74,7 @@ export function AssistantAgentActionButtons({
     const canStop = ['running', 'waiting', 'blocked', 'starting'].includes(run.status)
     const canRetry = ['failed', 'cancelled', 'interrupted'].includes(run.status)
     const canResume = run.status === 'interrupted'
-    if (!canStop && !canRetry && !canResume) return null
+    if (!onAction || (!canStop && !canRetry && !canResume)) return null
 
     return (
         <nav className={cn('flex flex-wrap items-center gap-1.5', className)} aria-label={`Actions for ${run.label}`}>

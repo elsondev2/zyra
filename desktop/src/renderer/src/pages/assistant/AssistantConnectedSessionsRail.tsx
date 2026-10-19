@@ -16,6 +16,7 @@ import type {
 import { isAssistantDraftSession } from './assistant-sessions-rail-utils'
 import { buildAssistantChatRoute } from './assistant-chat-route'
 import { createAssistantChatAndNavigate } from './create-assistant-chat-and-navigate'
+import { requestAssistantComposerFocus } from './assistant-composer-focus'
 import { useAgentControlState } from './useAgentControlState'
 import { useAssistantProjectCatalog } from './useAssistantProjectCatalog'
 
@@ -78,6 +79,7 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
         const activeSession = railController.snapshot.sessions.find((session) => session.id === railController.activeSessionId) || null
         if (activeSession && isAssistantDraftSession(activeSession)) {
             navigate(buildAssistantChatRoute(activeSession.id, activeSession.activeThreadId || null))
+            requestAssistantComposerFocus(activeSession.id)
             return
         }
 

@@ -13,10 +13,12 @@ import { initializeAssistantPersistenceSchema } from '../src/main/assistant/pers
 import { projectFleetSnapshot, readFleetSnapshot } from '../src/main/assistant/fleet-persistence'
 import { FleetProjection } from '../src/main/assistant/fleet-projection'
 import { AssistantAgentDetailPage } from '../src/renderer/src/pages/assistant/AssistantAgentDetailPage'
+import { AssistantModelProviderIcon } from '../src/renderer/src/pages/assistant/AssistantModelProviderIcon'
 import { ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE } from '../src/renderer/src/pages/assistant/AssistantAgentDirectory'
 import { AssistantFleetWorkspace } from '../src/renderer/src/pages/assistant/AssistantFleetWorkspace'
 import { AssistantWorkflowDetailPage } from '../src/renderer/src/pages/assistant/AssistantWorkflowDetailPage'
 import { AssistantWorkflowDirectory } from '../src/renderer/src/pages/assistant/AssistantWorkflowDirectory'
+import { createWorkflowReviewSeed } from '../src/renderer/src/reviews/agents-review-workflow-fixture'
 import { resolveAssistantWorkflowIdentity } from '../src/renderer/src/pages/assistant/assistant-workflow-presentation'
 import {
     mergeAssistantAgentTranscriptPages,
@@ -33,6 +35,11 @@ assert.ok(fleetOperationSource.indexOf('await this.runtime.connect') < fleetOper
 const fleetRefreshSource = serviceSource.split('async getFleetSnapshot')[1]?.split('async runFleetOperation')[0] || ''
 assert.match(fleetRefreshSource, /shouldApplyAssistantFleetSnapshot\(persisted, live\)/, 'explicit fleet refresh cannot place an equal-sequence empty snapshot into the main read model')
 
+// Static markup checks need text metrics now that agent chat reuses the real
+// collapsible prompt. This deterministic canvas is not a geometry assertion.
+Object.defineProperty(globalThis, 'OffscreenCanvas', { configurable: true, value: class {
+    getContext() { return { font: '', measureText(text: string) { return { width: text.length * 7 } } } }
+} })
 const now = new Date().toISOString()
 const fleet: FleetSnapshot = {
     version: 1,
@@ -128,22 +135,48 @@ assert.doesNotMatch(directoryMarkup, /Agent directory/)
 assert.match(directoryMarkup, /Delegated work/)
 assert.match(directoryMarkup, new RegExp(identity.name))
 assert.match(directoryMarkup, /Code Reviewer/)
-assert.match(directoryMarkup, /data-dicebear-style="bottts"/)
-assert.match(directoryMarkup, /data-testid="assistant-agent-card-grid"/)
-assert.match(directoryMarkup, /data-max-columns="3"/)
-assert.match(directoryMarkup, /data-card-width="16\.5rem"/)
-assert.match(directoryMarkup, /data-card-height="12\.5rem"/)
+assert.match(directoryMarkup, /data-dicebear-style="bottts-neutral"/)
+assert.match(directoryMarkup, /aria-label="openai-codex model provider"/, 'each directory model shows its provider mark')
+assert.match(directoryMarkup, /title="Reasoning effort">high/, 'effort remains next to the model')
+for (const [model, provider] of [['openai-codex/gpt-test', 'openai-codex'], ['anthropic/claude-test', 'anthropic'], ['google/gemini-test', 'google']]) {
+    assert.match(renderToStaticMarkup(<AssistantModelProviderIcon model={model!} />), new RegExp(`aria-label="${provider} model provider"`))
+}
+assert.equal(renderStatic(<AssistantModelProviderIcon model="unqualified-model" />), '', 'unknown providers are not guessed from a model nickname')
+assert.match(directoryMarkup, /data-testid="assistant-agent-row"/)
+assert.match(directoryMarkup, /aria-label="Search agents"/)
+assert.match(directoryMarkup, /Needs attention/)
+assert.match(directoryMarkup, /aria-haspopup="menu"/, 'the title opens the Agents/Workflows chooser')
+assert.doesNotMatch(directoryMarkup, /<h2|Attention first, then active/, 'the toolbar does not stack a redundant heading above the list')
+assert.doesNotMatch(directoryMarkup, /data-card-width|data-card-height/, 'agents use compact fluid rows, not fixed-size cards')
 assert.match(directoryMarkup, /data-testid="assistant-agent-directory-footer"/)
-assert.equal((directoryMarkup.match(/max-w-\[56rem\]/g) || []).length, 2, 'Agents must use the same content and footer width as Workflows')
 assert.doesNotMatch(directoryMarkup, /Run details/, 'the directory does not dump selected agent details below its cards')
 
+for (const snapshot of [fleet, { ...fleet, workflows: {} }]) {
+    const workflowWorkspaceMarkup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={snapshot}
+        selectedAgentRunId={null} selectedWorkflowRunId={null} onSelectAgent={() => {}} onSelectWorkflow={() => {}}
+        stateCapsule={{ version: 1, workspace: 'agents', section: 'workflows' }} />)
+    const toolbars = workflowWorkspaceMarkup.match(/<header\b[^>]*>[\s\S]*?<\/header>/g) || []
+    assert.equal(toolbars.length, 1, 'Workflows has one toolbar, including when empty, not a workspace heading above a second directory heading')
+    assert.match(toolbars[0]!, /aria-label="Delegated work view"/, 'section picker belongs in the directory toolbar')
+    assert.match(toolbars[0]!, /aria-label="Search workflows"/, 'search shares the section picker row')
+    assert.match(toolbars[0]!, /aria-label="Filter workflows"/, 'filter shares the section picker row')
+    const searchTrigger = toolbars[0]!.match(/<button\b[^>]*aria-label="Search workflows"[^>]*>/)
+    assert.ok(searchTrigger, 'workflow search exposes its expanding trigger')
+    assert.doesNotMatch(searchTrigger[0], /\bdisabled/, 'workspace wires the actual search trigger; its collapsed input is intentionally inactive')
+    assert.doesNotMatch(toolbars[0]!, /aria-label="Filter workflows"[^>]*disabled/, 'workspace wires the actual filter control')
+}
+
 const markup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={fleet} selectedAgentRunId="agent-1" selectedWorkflowRunId={null} onSelectAgent={() => {}} onSelectWorkflow={() => {}} />)
-assert.match(markup, /Agents/)
-assert.match(markup, new RegExp(identity.name))
 assert.match(markup, /Back to agent directory/)
-assert.match(markup, /Open run details for/)
+assert.match(markup, /lucide-chevron-left/)
+assert.match(markup, /Open run details/)
 assert.match(markup, /Run details/)
-assert.match(markup, /openai-codex\/gpt-5\.6-terra/)
+assert.match(markup, /data-dicebear-style="bottts-neutral"/, 'the compact header keeps the neutral agent avatar visible')
+assert.match(markup, /lucide-sliders-horizontal/)
+assert.doesNotMatch(markup, /scale(?:\(|%28)9\.2(?:\)|%29)/, 'agent avatars must not be zoomed into cropped color blocks')
+assert.doesNotMatch(markup, /Conversation usage/, 'agent chat has no repeated token receipt')
+assert.doesNotMatch(markup, /openai-codex\/gpt-5\.6-terra/, 'model metadata belongs in run details, not the chat header')
+assert.match(markup, /Sent by main agent/)
 assert.doesNotMatch(markup, /<details\b/, 'run details are not an inline disclosure')
 assert.doesNotMatch(markup, /data-testid="assistant-agent-directory"/, 'agent details replace the directory as a dedicated page')
 
@@ -151,8 +184,8 @@ const workflowTargetMarkup = renderToStaticMarkup(<AssistantFleetWorkspace threa
 assert.match(workflowTargetMarkup, /data-testid="assistant-workflow-detail-page"/, 'an explicit workflow target selects its detail section on the first render, including after agent-section restoration')
 assert.match(workflowTargetMarkup, /data-workflow-run-id="workflow-1"/, 'the requested workflow remains the exact selected target')
 
-assert.equal(ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE, 9)
-const manyAgents = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
+assert.equal(ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE, 30)
+const manyAgents = Object.fromEntries(Array.from({ length: 68 }, (_, index) => {
     const agentRunId = `agent-${index + 1}`
     return [agentRunId, {
         ...agentRun,
@@ -162,9 +195,9 @@ const manyAgents = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
     }]
 }))
 const manyAgentsMarkup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={{ ...fleet, agents: manyAgents }} selectedAgentRunId={null} selectedWorkflowRunId={null} onSelectAgent={() => {}} onSelectWorkflow={() => {}} />)
-assert.equal((manyAgentsMarkup.match(/data-testid="assistant-agent-card"/g) || []).length, 9, 'the directory bounds a page to a 3 by 3 set of cards')
-assert.match(manyAgentsMarkup, /1–9 of 10 agents/)
-assert.match(manyAgentsMarkup, /Page 1 of 2/)
+assert.equal((manyAgentsMarkup.match(/data-testid="assistant-agent-row"/g) || []).length, 30, 'large directories mount only one bounded page of compact rows')
+assert.match(manyAgentsMarkup, /1–30 of 68/)
+assert.match(manyAgentsMarkup, /1 \/ 3/)
 
 const workflowRun = fleet.workflows['workflow-1']
 assert.ok(workflowRun)
@@ -182,12 +215,13 @@ const workflowDirectoryMarkup = renderToStaticMarkup(
     />
 )
 assert.match(workflowDirectoryMarkup, /Workflow runs/)
-assert.match(workflowDirectoryMarkup, /data-testid="assistant-workflow-card-grid"/)
+assert.equal((workflowDirectoryMarkup.match(/data-testid="assistant-workflow-row"/g) || []).length, 2, 'workflow directory renders compact selectable rows')
+assert.doesNotMatch(workflowDirectoryMarkup, /data-card-width|data-card-height/, 'workflow rows are fluid, not fixed-size cards')
 assert.match(workflowDirectoryMarkup, /data-dicebear-style="loops"/)
 assert.match(workflowDirectoryMarkup, /data-dicebear-style="waves"/)
 assert.match(workflowDirectoryMarkup, /Phase progress|phases/)
-assert.match(workflowDirectoryMarkup, /Pause/)
-assert.match(workflowDirectoryMarkup, /Stop/)
+assert.doesNotMatch(workflowDirectoryMarkup, />Pause<|>Stop</, 'a read-only workflow preview cannot expose disconnected controls')
+assert.doesNotMatch(workflowDirectoryMarkup, /scale(?:\(|%28)9\.4(?:\)|%29)/, 'workflow avatars use normal framing too')
 
 const workflowDetailMarkup = renderToStaticMarkup(
     <AssistantWorkflowDetailPage
@@ -198,12 +232,37 @@ const workflowDetailMarkup = renderToStaticMarkup(
     />
 )
 assert.match(workflowDetailMarkup, /Back to workflow directory/)
-assert.match(workflowDetailMarkup, /Phase progress/)
-assert.match(workflowDetailMarkup, /Agent calls/)
-assert.match(workflowDetailMarkup, /Usage &amp; budget/)
+assert.match(workflowDetailMarkup, /aria-label="Workflow execution"/)
+assert.match(workflowDetailMarkup, /workflow-execution--timeline/, 'execution uses an ordered timeline rather than a node canvas')
+assert.match(workflowDetailMarkup, /class="workflow-execution__calls"/, 'agent steps remain grouped under their owning stage')
+assert.doesNotMatch(workflowDetailMarkup, /data-follows-previous|--workflow-stage-count/, 'the timeline has no inter-stage arrow layout')
+assert.match(workflowDetailMarkup, /aria-label="Open [^"]+agent transcript"/, 'recorded workflow agents link to their conversation')
+assert.match(workflowDetailMarkup, /aria-haspopup="dialog"[^>]*>[^<]*<svg[\s\S]*Details/, 'secondary metadata has a real Details control')
+assert.doesNotMatch(workflowDetailMarkup, /Usage &amp; budget|Concurrency|Cost limit|phases complete/, 'telemetry stays in Details')
+assert.match(workflowDetailMarkup, /aria-label="openai-codex model provider"/, 'each step shows its model provider')
+assert.match(workflowDetailMarkup, /gpt-5\.6-terra/, 'the actual model name is visible, not just a provider logo')
 assert.match(workflowDetailMarkup, new RegExp(identity.name))
 assert.match(workflowDetailMarkup, /Reading auth/)
 assert.doesNotMatch(workflowDetailMarkup, /definitionHash|workflowCallId|stableKey/)
+const executionSeed = createWorkflowReviewSeed()
+const failedExecution = Object.values(executionSeed.snapshot.workflows).find(run => run.status === 'failed' && run.agentRunIds.length === 5)!
+const executionMarkup = renderToStaticMarkup(<AssistantWorkflowDetailPage run={failedExecution} agents={executionSeed.snapshot.agents} onBack={() => {}} onOpenAgent={() => {}} />)
+assert.equal((executionMarkup.match(/data-call-id=/g) || []).length, 5, 'every linked call is a real selectable execution row')
+assert.match(executionMarkup, /agents in parallel/, 'overlapping investigations appear together instead of being flattened into sequential rows')
+assert.equal(executionMarkup.split(`>${failedExecution.error!.message}</`).length - 1, 1, 'visible failure belongs at its node, not repeated in the phase and workflow footer; its full-text title is not another visible error')
+assert.doesNotMatch(executionMarkup, /tokens|Usage &amp; budget|Concurrency|Phase progress/, 'model identity is visible without bringing back budget clutter')
+for (const provider of ['openai-codex', 'anthropic', 'google']) assert.match(executionMarkup, new RegExp(`aria-label="${provider} model provider"`))
+assert.match(executionMarkup, />Planned</, 'unstarted steps do not pretend their model has already been used')
+const routedModelMarkup = renderToStaticMarkup(<AssistantWorkflowDetailPage run={{ ...workflowRun, calls: { 'call-1': { ...workflowRun.calls['call-1']!, selectedModel: 'anthropic/claude-route-test' } } }} agents={fleet.agents} onBack={() => {}} onOpenAgent={() => {}} />)
+assert.match(routedModelMarkup, /claude-route-test/)
+assert.match(routedModelMarkup, /aria-label="anthropic model provider"/, 'the call-selected model takes precedence over the linked agent fallback')
+assert.doesNotMatch(routedModelMarkup, /openai-codex model provider|gpt-5\.6-terra/)
+const unknownModelMarkup = renderToStaticMarkup(<AssistantWorkflowDetailPage run={workflowRun} agents={{}} onBack={() => {}} onOpenAgent={() => {}} />)
+assert.match(unknownModelMarkup, /Model not recorded/)
+assert.doesNotMatch(unknownModelMarkup, /model provider/, 'missing model records cannot invent a provider')
+const requestedModelMarkup = renderToStaticMarkup(<AssistantWorkflowDetailPage run={{ ...workflowRun, calls: { 'call-1': { ...workflowRun.calls['call-1']!, requestedModel: 'google/gemini-requested', selectedModel: null } } }} agents={{}} onBack={() => {}} onOpenAgent={() => {}} />)
+assert.match(requestedModelMarkup, /gemini-requested/)
+assert.match(requestedModelMarkup, />Requested</, 'a requested-only model cannot be presented as the model actually used')
 
 const transcriptPage: AgentTranscriptPage = {
     entries: [
@@ -258,6 +317,9 @@ const transcriptMarkup = renderToStaticMarkup(
     />
 )
 assert.match(transcriptMarkup, /data-agent-transcript-role="user"/)
+assert.match(transcriptMarkup, /data-assistant-message-surface="minimal"/, 'child chat reuses the root chat message surface and display preference')
+assert.match(transcriptMarkup, /Sent by main agent/)
+assert.equal((transcriptMarkup.match(/data-dicebear-style/g) || []).length, 1, 'only the header has an avatar; child replies reuse undecorated main chat messages')
 assert.match(transcriptMarkup, /Root instruction for the child/)
 assert.match(transcriptMarkup, /data-agent-transcript-role="assistant"/)
 assert.match(transcriptMarkup, /Agent <strong[^>]*>answer<\/strong>/)
@@ -271,6 +333,11 @@ assert.doesNotMatch(transcriptMarkup, /No final response was written/)
 assert.doesNotMatch(transcriptMarkup, /<(?:input|textarea)\b/, 'the agent transcript page remains read-only without a composer')
 assert.doesNotMatch(transcriptMarkup, /Delegated task/, 'the summary task block stays hidden when the root transcript already shows the delegated request')
 
+const headPageMarkup = renderToStaticMarkup(<AssistantAgentDetailPage run={{ ...agentRun, status: 'completed', result: { text: 'Future final response.' } }}
+    transcript={{ ...transcriptPage, entries: transcriptPage.entries.slice(0, 1), nextAfter: 0, totalEntries: 90 }} loading={false} error={null}
+    onBack={() => {}} onLoadOlder={() => {}} onLoadNewer={() => {}} onRetry={() => {}} />)
+assert.match(headPageMarkup, /Load next messages/)
+assert.doesNotMatch(headPageMarkup, /Load older messages|No final response was written|Future final response/, 'opening at the actual beginning neither resurrects older history nor jumps across unloaded messages')
 const taskFallbackMarkup = renderToStaticMarkup(
     <AssistantAgentDetailPage
         run={{ ...agentRun, sessionFile: null }}
@@ -302,10 +369,9 @@ const multiBatchMarkup = renderToStaticMarkup(
     />
 )
 assert.doesNotMatch(multiBatchMarkup, />Tool Calls(?: \(\d+\))?</, 'separate child Action batches stay label-free')
-assert.equal((multiBatchMarkup.match(/data-assistant-typed-action=/g) || []).length, 2, 'separate child Action batches retain both typed rows')
-assert.match(multiBatchMarkup, /data-assistant-typed-action="agent-tool:read-auth"/)
-assert.match(multiBatchMarkup, /data-assistant-typed-action="agent-tool:search-auth"/)
-assert.match(multiBatchMarkup, /2 activities/)
+assert.equal((multiBatchMarkup.match(/data-assistant-action-batch="true"/g) || []).length, 1, 'child tools share the real collapsed Action batch')
+assert.equal((multiBatchMarkup.match(/data-assistant-typed-action=/g) || []).length, 0, 'collapsed child batches defer their tool rows; the real renderer verifies both rows after expansion')
+assert.doesNotMatch(multiBatchMarkup, /Conversation usage| tokens/, 'chat does not add a token footer')
 
 const missingFinalMarkup = renderToStaticMarkup(
     <AssistantAgentDetailPage
@@ -379,16 +445,22 @@ for (const operation of ['agents.list', 'agents.spawn', 'agents.transcript', 'wo
 assert(adapter.includes('ASSISTANT_IPC.agentAction'))
 assert(adapter.includes('ASSISTANT_IPC.workflowAction'))
 assert(inspector.includes('AssistantFleetWorkspace'))
-assert(runDetailsModal.includes('createPortal'))
-assert(runDetailsModal.includes('fixed inset-0 z-[2147482000]'))
-assert(runDetailsModal.includes('max-h-[90vh] w-full max-w-5xl'))
-assert.equal(runDetailsModal.includes('h-screen w-screen'), false, 'run details remain a bounded modal rather than a full-screen page')
-for (const section of ['Execution', 'Access', 'Tools', 'Timeline', 'Outcome']) assert(runDetailsModal.includes(`title=\"${section}\"`))
+assert(runDetailsModal.includes('AnchoredMenuPopover'), 'run details use the same anchored overlay as contextual workspace tools')
+assert(runDetailsModal.includes('width={280}'))
+assert(runDetailsModal.includes('role="dialog"'))
+assert.equal(runDetailsModal.includes('fixed inset-0'), false, 'run details do not cover the conversation with a modal backdrop')
+assert.equal(runDetailsModal.includes('label="Runtime"'), false, 'runtime is intentionally absent from the compact inspector')
+assert(runDetailsModal.includes('AssistantModelProviderIcon'))
+for (const label of ['Status', 'Model', 'Usage']) assert(runDetailsModal.includes(`label="${label}"`))
+assert.equal(runDetailsModal.includes('run.goal'), false, 'the inspector does not repeat the delegated prompt')
+assert.equal(runDetailsModal.includes('run.result'), false, 'the inspector does not repeat the answer')
+assert.equal(runDetailsModal.includes('OverviewMetric'), false, 'run facts are compact key/value rows, not cards')
 assert.equal(runDetailsModal.includes('<pre'), false, 'run details do not expose a raw data surface')
 assert.equal(runDetailsModal.includes('JSON.stringify'), false, 'run details do not dump internal objects')
 assert.equal(fleetWorkspaceSource.includes('WorkflowRows'), false, 'workflows no longer use the old inline row dump')
 assert.equal(fleetWorkspaceSource.includes('WorkflowDetail'), true, 'workflow selection opens the dedicated detail page')
-assert.equal(agentDirectorySource.includes("repeat(auto-fit, minmax(0, 16.5rem))"), true, 'agent cards use packed fixed-width tracks without stretched column gaps')
+assert.match(agentDirectorySource, /projectAssistantAgentDirectory/, 'the directory uses shared search, status and attention-order policy')
+assert.match(agentDirectorySource, /rows\.slice\(pageStart, pageStart \+ ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE\)/, 'large directories do not mount every agent')
 assert.match(agentTranscriptHookSource, /window\.setInterval[\s\S]{0,180}refreshLatest/, 'an open running agent refreshes its saved transcript continuously')
 assert.match(agentTranscriptHookSource, /TERMINAL_TRANSCRIPT_REFRESH_DELAYS_MS/, 'terminal agents retry transcript hydration while the final JSONL record settles')
 assert.equal(desktopPackageSource.includes('"@dicebear/styles"'), true, 'official DiceBear style definitions back Bottts, Loops, and Waves locally')

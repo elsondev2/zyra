@@ -322,7 +322,10 @@ function sendMainRendererCommand(channel: 'window:app-menu-command' | typeof KEY
     if (!target.isVisible()) target.show()
     target.focus()
     const deliver = () => {
-        if (!target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send(channel, command)
+        if (!target.isDestroyed() && !target.webContents.isDestroyed()) {
+            if (command === 'new-chat' || command === 'app.composer') target.webContents.focus()
+            target.webContents.send(channel, command)
+        }
     }
     if (openingWindow || target.webContents.isLoadingMainFrame()) target.webContents.once('did-finish-load', deliver)
     else deliver()

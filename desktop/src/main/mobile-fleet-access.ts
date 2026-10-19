@@ -30,7 +30,8 @@ export class MobileFleetAccess {
             // File comes exclusively from this chat's persisted run, never a phone path.
             return live || new ChildTranscriptStore().page(run.sessionFile, {
                 limit: Math.min(50, Math.max(1, Number(payload.limit) || 40)),
-                before: Number.isSafeInteger(payload.before) ? Number(payload.before) : undefined
+                before: Number.isSafeInteger(payload.before) ? Number(payload.before) : undefined,
+                after: Number.isSafeInteger(payload.after) ? Number(payload.after) : undefined
             })
         }
         return live
