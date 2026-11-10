@@ -40,6 +40,8 @@ jobs:
           npm --prefix desktop ci --no-audit --no-fund
       - name: Verify scroll with actual player CSS
         run: node desktop/scripts/benchmark-visualization-scroll.mjs --verify media-scroll.json
+      - name: Verify native process and mobile startup ownership
+        run: npm --prefix desktop run test:mobile-startup
       - name: Check complete Desktop types
         run: npm --prefix desktop run typecheck
       - uses: actions/upload-artifact@v4
