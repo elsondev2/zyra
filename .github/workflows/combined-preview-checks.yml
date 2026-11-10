@@ -6,9 +6,6 @@ on:
       source_sha:
         type: string
         required: true
-      compare_unstyled:
-        type: boolean
-        default: false
 permissions:
   contents: read
 jobs:
@@ -41,15 +38,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm --prefix desktop ci --no-audit --no-fund
-      - name: Diagnose previous unstyled fixture
-        if: inputs.compare_unstyled
-        continue-on-error: true
-        env:
-          ZYRA_QA_PLAYER_CSS: '0'
-        run: node desktop/scripts/benchmark-visualization-scroll.mjs --verify
       - name: Verify scroll with actual player CSS
-        env:
-          ZYRA_QA_PLAYER_CSS: '1'
         run: node desktop/scripts/benchmark-visualization-scroll.mjs --verify media-scroll.json
       - name: Check complete Desktop types
         run: npm --prefix desktop run typecheck
